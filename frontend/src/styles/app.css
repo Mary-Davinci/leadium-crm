@@ -1,0 +1,122 @@
+:root {
+  --bg: #f2f5f9;
+  --panel: #ffffff;
+  --line: #d5deea;
+  --text: #1b2a40;
+  --primary: #225fb6;
+  --sidebar: #132036;
+  --status-new-bg: #e6f0ff;
+  --status-new-border: #bed4fb;
+  --status-new-text: #2f5fa8;
+  --status-contact-bg: #fff1d8;
+  --status-contact-border: #f0d39a;
+  --status-contact-text: #87652b;
+  --status-negotiation-bg: #e4f2e0;
+  --status-negotiation-border: #bfddb7;
+  --status-negotiation-text: #2f6a3f;
+  --status-converted-bg: #e0f2ea;
+  --status-converted-border: #b8ddcc;
+  --status-converted-text: #246250;
+  --status-lost-bg: #f3e6df;
+  --status-lost-border: #e8c9bb;
+  --status-lost-text: #8a5338;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: #e9edf3;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 5px 12px rgba(21, 36, 58, 0.07);
+}
+
+.panel h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  color: #263a58;
+}
+
+.content input,
+.content select,
+.content textarea,
+.content button {
+  font-family: inherit;
+}
+
+.content input,
+.content select,
+.content textarea {
+  border: 1px solid #cfd8e7;
+  background: #fff;
+  color: #233a5b;
+  border-radius: 8px;
+  min-height: 36px;
+  padding: 7px 10px;
+}
+
+.content textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.content button {
+  border: 1px solid #2e66b7;
+  background: linear-gradient(180deg, #3d79cf, #2e66b7);
+  color: #fff;
+  border-radius: 8px;
+  min-height: 36px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.content button:hover {
+  filter: brightness(1.03);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid #d8e1ee;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.table th,
+.table td {
+  border-bottom: 1px solid #dbe3f0;
+  padding: 8px;
+  text-align: left;
+  font-size: 13px;
+}
+
+.table th {
+  background: #f4f8ff;
+  color: #304764;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.muted {
+  color: #5f7595;
+  font-size: 12px;
+}
+
+
+
+

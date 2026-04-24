@@ -1,0 +1,29 @@
+import "../../loadEnv";
+import path from "path";
+
+const ROOT = path.join(__dirname, "..");
+
+const services = [
+  { name: "workflow-service", entry: path.join(ROOT, "workflow-service", "server.ts") },
+  { name: "lead-service", entry: path.join(ROOT, "lead-service", "server.ts") },
+  { name: "call-service", entry: path.join(ROOT, "call-service", "server.ts") },
+  { name: "analytics-service", entry: path.join(ROOT, "analytics-service", "server.ts") },
+  { name: "ingest-service", entry: path.join(ROOT, "ingest-service", "server.ts") },
+  { name: "whatsapp-service", entry: path.join(ROOT, "whatsapp-service", "server.ts") },
+  { name: "api-gateway", entry: path.join(ROOT, "api-gateway", "server.ts") }
+];
+
+for (const service of services) {
+  try {
+    // Ogni modulo avvia il proprio server su porta dedicata.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require(service.entry);
+    process.stdout.write(`[${service.name}] started\n`);
+  } catch (error: any) {
+    process.stderr.write(`[${service.name}] failed: ${error.message}\n`);
+    process.exit(1);
+  }
+}
+
+process.on("SIGINT", () => process.exit(0));
+process.on("SIGTERM", () => process.exit(0));

@@ -1,0 +1,12 @@
+{
+  "name": "crm-crocieriamo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Workspace CRM Crocieriamo",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "npm --prefix backend start",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "crm-crocieriamo-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Frontend React + TypeScript con routing centralizzato",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5179 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 5179 --strictPort",
+    "start": "vite --host 0.0.0.0 --port 5179 --strictPort"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react-swc": "^4.1.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.0"
+  }
+}
