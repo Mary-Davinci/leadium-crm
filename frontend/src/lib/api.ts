@@ -1,11 +1,12 @@
 import { clearSession, getAuthToken } from "./auth";
+import { apiUrl } from "./api-url";
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getAuthToken();
   const baseHeaders: Record<string, string> = { "Content-Type": "application/json" };
   if (token) baseHeaders.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     headers: { ...baseHeaders, ...(options.headers as Record<string, string> | undefined) },
     ...options
   });

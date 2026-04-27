@@ -1,3 +1,5 @@
+import { apiUrl } from "./api-url";
+
 type AuthUser = {
   id: string;
   username: string;
@@ -51,7 +53,7 @@ export function clearSession() {
 }
 
 export async function login(email: string, password: string) {
-  const response = await fetch("/api/auth/login", {
+  const response = await fetch(apiUrl("/api/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password })
@@ -67,7 +69,7 @@ export async function login(email: string, password: string) {
 export async function logout() {
   const token = getAuthToken();
   try {
-    await fetch("/api/auth/logout", {
+    await fetch(apiUrl("/api/auth/logout"), {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : undefined
     });
@@ -79,7 +81,7 @@ export async function logout() {
 export async function fetchMe() {
   const token = getAuthToken();
   if (!token) return null;
-  const response = await fetch("/api/auth/me", {
+  const response = await fetch(apiUrl("/api/auth/me"), {
     headers: { Authorization: `Bearer ${token}` }
   });
   if (!response.ok) {

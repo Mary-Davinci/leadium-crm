@@ -23,10 +23,24 @@ const WHATSAPP_URL = process.env.WHATSAPP_SERVICE_URL || "http://localhost:4306"
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5179";
 const SLA_FIRST_CONTACT_MINUTES = Number(process.env.SLA_FIRST_CONTACT_MINUTES || 5);
 const AUTH_SESSION_TTL_HOURS = Number(process.env.AUTH_SESSION_TTL_HOURS || 12);
+const ALLOWED_ORIGINS = new Set(
+  [FRONTEND_URL, ...(process.env.CORS_ORIGINS || "").split(",")]
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean)
+);
 
 function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+function applyCors(req: http.IncomingMessage, res: http.ServerResponse) {
+  const origin = String(req.headers.origin || "").replace(/\/+$/, "");
+  if (!origin || !ALLOWED_ORIGINS.has(origin)) return;
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Auth-Token");
 }
 
 function sanitizeApiError(message: unknown) {
@@ -321,7 +335,13 @@ function mapApiRoute(pathname: string) {
 
 const server = http.createServer(async (req, res) => {
   try {
+    applyCors(req, res);
     const method = req.method || "GET";
+    if (method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const pathname = decodeURIComponent(url.pathname);
     if (method === "GET" && pathname === "/api/health") {
