@@ -5,10 +5,19 @@ backend/node_modules/
 frontend/dist/
 backend/dist/
 
+# Local environment files
 .env
+.env.*
 *.env
+*.env.*
+frontend/.env
+frontend/.env.*
+backend/.env
+backend/.env.*
 !.env.example
 !*.env.example
+!frontend/.env.example
+!backend/.env.example
 
 *.log
 npm-debug.log*
