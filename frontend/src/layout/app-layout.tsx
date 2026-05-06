@@ -128,7 +128,7 @@ export function AppLayout() {
             </div>
           </div>
         </header>
-        <section className="content">
+        <section className={`content ${pathname.startsWith("/chat") ? "chat-content" : ""}`}>
           <Outlet />
         </section>
       </main>

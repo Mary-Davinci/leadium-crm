@@ -118,6 +118,7 @@ export async function findRecentManualDuplicate(input: {
   dueAt?: string | null;
   assignedTo?: string;
   windowMs?: number;
+  exactDueAt?: boolean;
 }) {
   const windowMs = input.windowMs ?? 10 * 60 * 1000;
   const now = Date.now();
@@ -137,8 +138,10 @@ export async function findRecentManualDuplicate(input: {
       if (String(task.kind || "").toLocaleLowerCase("it") !== String(input.kind || "").toLocaleLowerCase("it")) return false;
       if (String(task.title || "").trim().toLocaleLowerCase("it") !== normalizedTitle) return false;
       if (String(task.assignedTo || "").trim().toLocaleLowerCase("it") !== normalizedAssignedTo) return false;
-      const taskDueAt = task.dueAt ? new Date(task.dueAt).toISOString() : "";
-      if (taskDueAt !== normalizedDueAt) return false;
+      if (input.exactDueAt !== false) {
+        const taskDueAt = task.dueAt ? new Date(task.dueAt).toISOString() : "";
+        if (taskDueAt !== normalizedDueAt) return false;
+      }
       return true;
     }) || null
   );

@@ -58,6 +58,7 @@ export function PracticeCard({
   const nextMeta = getNextActionMeta(lead.nextActionAt);
   const suggestedAction = getSuggestedAction(lead);
   const linkedTaskDueText = linkedTask?.dueAt ? new Date(linkedTask.dueAt).toLocaleString("it-IT") : "Da pianificare";
+  const hasHighPriorityTask = Boolean(linkedTask && linkedTask.status !== "done" && linkedTask.priority >= 80);
   const linkedTaskKindText = linkedTask
     ? linkedTask.kind.includes("payment") || linkedTask.kind.includes("saldo")
       ? "Pagamento"
@@ -87,7 +88,7 @@ export function PracticeCard({
 
   return (
     <article
-      className={`pr-row-card ${isSelected ? "active" : ""}`}
+      className={`pr-row-card ${isSelected ? "active" : ""} ${hasHighPriorityTask ? "priority-glow" : ""}`}
       onClick={() => onSelect(lead.id)}
       onMouseEnter={() => onPrefetchDetail?.(lead.id)}
     >
@@ -284,7 +285,7 @@ export function PracticeCard({
       </div>
 
       {linkedTask ? (
-        <div className="pr-next-action pr-task-action">
+        <div className={`pr-next-action pr-task-action ${hasHighPriorityTask ? "priority-glow-soft" : ""}`}>
           <strong>{linkedTaskKindText}: {linkedTask.title}</strong>
           <span>Scadenza task: {linkedTaskDueText}</span>
         </div>

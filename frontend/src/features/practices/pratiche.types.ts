@@ -20,6 +20,8 @@ export type Lead = {
   nextActionAt?: string;
   latestCallOutcome?: CallOutcome | null;
   latestCallAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type PracticeDocumentKey =

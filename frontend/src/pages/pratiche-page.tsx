@@ -24,7 +24,8 @@ import {
   setLeadDetailCacheEntry,
   setPracticeListCache,
   setTaskBoardCache,
-  setWorkflowCache as setGlobalWorkflowCache
+  setWorkflowCache as setGlobalWorkflowCache,
+  upsertTaskInBoard
 } from "../store/crm-store";
 import "../styles/pratiche-page.css";
 
@@ -33,6 +34,15 @@ const PRACTICE_WORKFLOW_CACHE_TTL_MS = 10 * 60 * 1000;
 const PRACTICE_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 let workflowCache: Workflow | null = null;
 const practiceDetailCache = new Map<string, LeadDetail>();
+
+function dedupeTasksById(tasks: CrmTask[]) {
+  const byId = new Map<string, CrmTask>();
+  tasks.forEach((task) => {
+    if (!task?.id) return;
+    byId.set(String(task.id), task);
+  });
+  return Array.from(byId.values());
+}
 
 function isValidWorkflow(value: unknown): value is Workflow {
   if (!value || typeof value !== "object") return false;
@@ -469,7 +479,7 @@ export function PratichePage() {
   async function handleCreateTask(lead: Lead) {
     const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     try {
-      await api("/api/tasks", {
+      const task = await api<CrmTask>("/api/tasks", {
         method: "POST",
         body: JSON.stringify({
           leadId: lead.id,
@@ -481,6 +491,8 @@ export function PratichePage() {
           dueAt
         })
       });
+      setTaskBoardTasks((prev) => dedupeTasksById([task, ...prev]));
+      upsertTaskInBoard(task);
       patchLeadState(lead.id, { nextActionAt: dueAt });
       prependTimelineItem(lead.id, {
         type: "task",
@@ -571,13 +583,13 @@ export function PratichePage() {
   useEffect(() => {
     const boardCache = getTaskBoardCache();
     if (boardCache?.data?.tasks?.length) {
-      setTaskBoardTasks(boardCache.data.tasks);
+      setTaskBoardTasks(dedupeTasksById(boardCache.data.tasks));
     }
     if (isTaskBoardCacheFresh()) return;
 
     api<{ tasks: CrmTask[]; leads: Lead[] }>("/api/tasks/board")
       .then((payload) => {
-        const nextTasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
+        const nextTasks = dedupeTasksById(Array.isArray(payload?.tasks) ? payload.tasks : []);
         const nextLeads = Array.isArray(payload?.leads) ? payload.leads : [];
         setTaskBoardCache(nextTasks, nextLeads);
         setTaskBoardTasks(nextTasks);

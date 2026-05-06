@@ -182,6 +182,21 @@
   box-shadow: 0 0 0 3px rgba(31, 139, 255, 0.28), 0 12px 20px rgba(14, 84, 165, 0.2);
 }
 
+.pr-row-card.priority-glow:not(.active) {
+  border-color: #e19c41;
+  animation: prPriorityGlow 2.5s ease-in-out infinite;
+}
+
+@keyframes prPriorityGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(225, 156, 65, 0.1), 0 4px 12px rgba(32, 55, 94, 0.06);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(225, 156, 65, 0.22), 0 14px 24px rgba(151, 83, 26, 0.14);
+  }
+}
+
 .pr-row-head {
   display: flex;
   justify-content: space-between;
@@ -352,6 +367,11 @@
 
 .pr-next-empty span {
   color: #5579a8;
+}
+
+.pr-task-action.priority-glow-soft {
+  border-left-color: #e19c41;
+  background: #fff8ec;
 }
 
 .pr-row-note {

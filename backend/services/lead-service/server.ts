@@ -11,6 +11,8 @@ import {
   getTimelineByLeadId,
   listLeads,
   newId,
+  normalizeEmail,
+  normalizePhone,
   saveLead
 } from "../common/leadStore";
 import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listCallLogsByLeadId } from "../common/callStore";
@@ -374,6 +376,42 @@ export async function dismissDuplicateTasks(tasks: TaskRecord[], kind: Automatic
   }
 }
 
+function sortTasksByPriorityAndDate(a: TaskRecord, b: TaskRecord) {
+  const statusWeight = (task: TaskRecord) => (task.status === "open" ? 0 : task.status === "done" ? 1 : 2);
+  const statusDiff = statusWeight(a) - statusWeight(b);
+  if (statusDiff !== 0) return statusDiff;
+  if ((b.priority || 0) !== (a.priority || 0)) return (b.priority || 0) - (a.priority || 0);
+  const aTime = new Date(a.dueAt || a.updatedAt || a.createdAt).getTime();
+  const bTime = new Date(b.dueAt || b.updatedAt || b.createdAt).getTime();
+  return aTime - bTime;
+}
+
+function getBoardTaskKey(task: TaskRecord) {
+  const source = String(task.source || "").toLocaleLowerCase("it");
+  const isAutomatic = source === "automation" || source === "scheduler" || AUTOMATIC_TASK_KINDS.includes(task.kind as AutomaticTaskKind);
+  if (isAutomatic && task.leadId) return `automatic::${task.status}::${task.leadId}::${task.kind}`;
+
+  const title = String(task.title || "").trim().toLocaleLowerCase("it");
+  const assignedTo = String(task.assignedTo || "").trim().toLocaleLowerCase("it");
+  if (task.status === "open" && task.leadId && title) return `open::${task.leadId}::${task.kind}::${title}::${assignedTo}`;
+  return `id::${task.id}`;
+}
+
+function getCompactBoardTasks(tasks: TaskRecord[]) {
+  const groups = new Map<string, TaskRecord[]>();
+  tasks.forEach((task) => {
+    const key = getBoardTaskKey(task);
+    const bucket = groups.get(key) || [];
+    bucket.push(task);
+    groups.set(key, bucket);
+  });
+
+  return Array.from(groups.values())
+    .map((items) => [...items].sort(sortTasksByPriorityAndDate)[0])
+    .filter(Boolean)
+    .sort(sortTasksByPriorityAndDate);
+}
+
 function getBoardLeadSummary(lead: any) {
   return {
     id: String(lead.id || ""),
@@ -390,6 +428,47 @@ function getBoardLeadSummary(lead: any) {
     updatedAt: String(lead.updatedAt || ""),
     createdAt: String(lead.createdAt || "")
   };
+}
+
+function getLeadContactKey(lead: any) {
+  const phone = normalizePhone(String(lead?.phone || ""));
+  if (phone) return `phone::${phone}`;
+  const email = normalizeEmail(String(lead?.email || ""));
+  if (email) return `email::${email}`;
+  return `id::${String(lead?.id || "")}`;
+}
+
+function getLeadRank(lead: any) {
+  let score = 0;
+  if (lead?.status && !String(lead.status).toLowerCase().includes("pers")) score += 20;
+  if (lead?.nextActionAt) score += 8;
+  if (lead?.assignedTo) score += 4;
+  if (String(lead?.notes || "").trim()) score += 2;
+  const missingDocs = getMissingDocuments(lead).length;
+  const pendingPayments = getPendingPayments(lead).length;
+  score += missingDocs + pendingPayments;
+  return score;
+}
+
+function compactLeadsByContact(leads: any[]) {
+  const groups = new Map<string, any[]>();
+  leads.forEach((lead) => {
+    const key = getLeadContactKey(lead);
+    const bucket = groups.get(key) || [];
+    bucket.push(lead);
+    groups.set(key, bucket);
+  });
+
+  return Array.from(groups.values())
+    .map((items) =>
+      [...items].sort((a, b) => {
+        const rankDiff = getLeadRank(b) - getLeadRank(a);
+        if (rankDiff !== 0) return rankDiff;
+        return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
+      })[0]
+    )
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
 }
 
 function getStatusFromCallDisposition(disposition: string) {
@@ -745,7 +824,7 @@ export const server = http.createServer(async (req, res) => {
 
     if (method === "GET" && pathname === "/health") return sendJson(res, 200, { ok: true, service: "lead-service" });
       if (method === "GET" && pathname === "/leads") {
-        const rows = await listLeads(query);
+        const rows = compactLeadsByContact(await listLeads(query));
         const callMap = await getLatestCallMapByLeadIds(rows.map((lead: any) => String(lead.id || "")));
         return sendJson(
           res,
@@ -762,8 +841,8 @@ export const server = http.createServer(async (req, res) => {
     if (method === "GET" && pathname === "/tasks/board") {
       const [tasksRows, leadsRows] = await Promise.all([listTasks({ status: query.status, leadId: query.leadId }), listLeads()]);
       return sendJson(res, 200, {
-        tasks: tasksRows,
-        leads: leadsRows.map(getBoardLeadSummary)
+        tasks: getCompactBoardTasks(tasksRows),
+        leads: compactLeadsByContact(leadsRows).map(getBoardLeadSummary)
       });
     }
 
@@ -926,9 +1005,28 @@ export const server = http.createServer(async (req, res) => {
           kind: taskInput.kind,
           title: taskInput.title,
           dueAt: taskInput.dueAt,
-          assignedTo: taskInput.assignedTo
+          assignedTo: taskInput.assignedTo,
+          windowMs: 30 * 24 * 60 * 60 * 1000,
+          exactDueAt: false
         });
         if (duplicate) {
+          let changed = false;
+          if ((taskInput.priority || 0) > (duplicate.priority || 0)) {
+            duplicate.priority = taskInput.priority;
+            changed = true;
+          }
+          if (!duplicate.dueAt && taskInput.dueAt) {
+            duplicate.dueAt = taskInput.dueAt;
+            changed = true;
+          }
+          if (!duplicate.description && taskInput.description) {
+            duplicate.description = taskInput.description;
+            changed = true;
+          }
+          if (changed) {
+            duplicate.updatedAt = new Date().toISOString();
+            await saveTask(duplicate);
+          }
           return sendJson(res, 200, duplicate);
         }
       }
@@ -988,6 +1086,82 @@ export const server = http.createServer(async (req, res) => {
               ? "Documenti pratica aggiornati."
               : "Anagrafica lead aggiornata.",
           actor: body.actor || "system"
+        })
+      ]);
+      return sendJson(res, 200, safeLead(lead));
+    }
+
+    const documentParams = routeMatch(pathname, "/leads/:leadId/documents/:documentId");
+    if (documentParams && method === "PATCH") {
+      const body = await parseBody(req);
+      const lead = await getLeadById(documentParams.leadId);
+      if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+      const documents = normalizePracticeDocuments(lead.documents);
+      const documentId = String(documentParams.documentId || "");
+      let found = false;
+      const now = new Date().toISOString();
+      documents.items = documents.items.map((item) => {
+        if (String(item.key) !== documentId) return item;
+        found = true;
+        return {
+          ...item,
+          received: Object.prototype.hasOwnProperty.call(body, "received") ? Boolean(body.received) : item.received,
+          verified: Object.prototype.hasOwnProperty.call(body, "verified") ? Boolean(body.verified) : item.verified,
+          note: Object.prototype.hasOwnProperty.call(body, "note") ? String(body.note || "") : item.note,
+          updatedAt: now
+        };
+      });
+      if (!found) return sendJson(res, 404, { error: "Documento non trovato." });
+      lead.documents = documents;
+      lead.updatedAt = now;
+      await saveLead(lead);
+      await syncDocumentChecklistTask(lead);
+      await appendActivities([
+        createActivity({
+          leadId: lead.id,
+          type: "documents_updated",
+          text: "Documento pratica aggiornato.",
+          actor: body.actor || "chat"
+        })
+      ]);
+      return sendJson(res, 200, safeLead(lead));
+    }
+
+    const paymentParams = routeMatch(pathname, "/leads/:leadId/payments/:paymentId");
+    if (paymentParams && method === "PATCH") {
+      const body = await parseBody(req);
+      const lead = await getLeadById(paymentParams.leadId);
+      if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+      const payments = normalizePracticePayments(lead.payments);
+      const paymentId = String(paymentParams.paymentId || "");
+      const allowedStatuses = new Set(["pending", "received", "verified"]);
+      const now = new Date().toISOString();
+      let found = false;
+      payments.items = payments.items.map((item) => {
+        if (String(item.id) !== paymentId) return item;
+        found = true;
+        const nextStatus = allowedStatuses.has(String(body.status || "")) ? String(body.status) : item.status;
+        return {
+          ...item,
+          status: nextStatus,
+          receivedAt: nextStatus === "received" || nextStatus === "verified" ? item.receivedAt || now : item.receivedAt,
+          verifiedAt: nextStatus === "verified" ? item.verifiedAt || now : item.verifiedAt,
+          method: Object.prototype.hasOwnProperty.call(body, "method") ? String(body.method || "") : item.method,
+          note: Object.prototype.hasOwnProperty.call(body, "note") ? String(body.note || "") : item.note,
+          updatedAt: now
+        };
+      });
+      if (!found) return sendJson(res, 404, { error: "Pagamento non trovato." });
+      lead.payments = payments;
+      lead.updatedAt = now;
+      await saveLead(lead);
+      await syncPaymentChecklistTask(lead);
+      await appendActivities([
+        createActivity({
+          leadId: lead.id,
+          type: "payments_updated",
+          text: "Pagamento pratica aggiornato.",
+          actor: body.actor || "chat"
         })
       ]);
       return sendJson(res, 200, safeLead(lead));

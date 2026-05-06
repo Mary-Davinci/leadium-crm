@@ -215,6 +215,15 @@ function normalizeTask(input: Task): Task {
   };
 }
 
+function dedupeTasksById<T extends Task>(items: T[]) {
+  const byId = new Map<string, T>();
+  items.forEach((item) => {
+    if (!item?.id) return;
+    byId.set(item.id, item);
+  });
+  return Array.from(byId.values());
+}
+
 function formatDate(value?: string | null) {
   if (!value) return "Da pianificare";
   return new Date(value).toLocaleString("it-IT");
@@ -449,7 +458,7 @@ export function LeadBoardPage() {
     const usersSnapshot = globalUsers?.data || usersCache || storageUsers || [];
 
     if (globalBoard?.data) {
-      setTasks(globalBoard.data.tasks.map(normalizeTask));
+      setTasks(dedupeTasksById(globalBoard.data.tasks.map(normalizeTask)));
       setLeads(globalBoard.data.leads.map(normalizeLead));
     }
     if (usersSnapshot.length) {
@@ -473,7 +482,7 @@ export function LeadBoardPage() {
               ? Promise.resolve(storageUsers)
               : api<UserItem[]>("/api/users")
       ]);
-      const normalizedTasks = (Array.isArray(boardData?.tasks) ? boardData.tasks : []).map(normalizeTask);
+      const normalizedTasks = dedupeTasksById((Array.isArray(boardData?.tasks) ? boardData.tasks : []).map(normalizeTask));
       const normalizedLeads = (Array.isArray(boardData?.leads) ? boardData.leads : []).map(normalizeLead);
       setTaskBoardCache(normalizedTasks, normalizedLeads);
       setTasks(normalizedTasks);
@@ -633,7 +642,7 @@ export function LeadBoardPage() {
       );
       upsertTaskInBoard(created);
       invalidateDashboardCache();
-      setTasks((prev) => [created, ...prev]);
+      setTasks((prev) => dedupeTasksById([created, ...prev]));
       setSelectedTaskId(created.id);
       setDetailActivated(true);
       event.currentTarget.reset();
@@ -1135,7 +1144,7 @@ export function LeadBoardPage() {
                     return (
                       <article
                         key={task.id}
-                        className={`lb-card ${selectedTask?.id === task.id ? "selected" : ""}`}
+                        className={`lb-card ${selectedTask?.id === task.id ? "selected" : ""} ${task.priority >= 80 && task.status !== "done" ? "priority-glow" : ""}`}
                         onClick={() => {
                           setDetailActivated(true);
                           setSelectedTaskId(task.id);

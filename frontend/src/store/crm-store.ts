@@ -56,22 +56,56 @@ export type DashboardInboxPayload = {
   };
 };
 
+export type CrmConversation = {
+  id: string;
+  leadId?: string | null;
+  customerName?: string;
+  phone?: string;
+  unreadCount?: number;
+  lastMessagePreview?: string;
+  lastMessageAt?: string;
+  assignedTo?: string;
+  status?: string;
+  channel?: string;
+  lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
+  replyWindowExpiresAt?: string | null;
+  hasOpenSession?: boolean;
+};
+
+export type CrmChatMessage = {
+  id: string;
+  direction: "inbound" | "outbound";
+  text: string;
+  createdAt: string;
+  status?: string;
+  messageType?: string;
+  templateKey?: string;
+  templateName?: string;
+};
+
 type CrmStoreState = {
   taskBoard: TimedValue<{ tasks: CrmTask[]; leads: Lead[] }> | null;
   users: TimedValue<CrmUser[]> | null;
   workflow: TimedValue<Workflow> | null;
   dashboard: TimedValue<{ kpi: DashboardKpi; inbox: DashboardInboxPayload }> | null;
+  chatConversations: TimedValue<CrmConversation[]> | null;
+  chatMessages: Record<string, TimedValue<{ conversation: CrmConversation; messages: CrmChatMessage[] }>>;
   practiceLists: Record<string, TimedValue<Lead[]>>;
   leadDetails: Record<string, TimedValue<LeadDetail>>;
 };
 
 const DASHBOARD_CACHE_KEY = "leadium_dashboard_cache_v1";
+const CHAT_CONVERSATIONS_CACHE_KEY = "leadium_chat_conversations_cache_v1";
+const CHAT_MESSAGES_CACHE_PREFIX = "leadium_chat_messages_cache_v1_";
 
 const state: CrmStoreState = {
   taskBoard: null,
   users: null,
   workflow: null,
   dashboard: null,
+  chatConversations: null,
+  chatMessages: {},
   practiceLists: {},
   leadDetails: {}
 };
@@ -81,12 +115,43 @@ export const CRM_STORE_TTLS = {
   users: 10 * 60 * 1000,
   workflow: 10 * 60 * 1000,
   dashboard: 2 * 60 * 1000,
+  chatConversations: 20 * 1000,
+  chatMessages: 45 * 1000,
   practiceList: 2 * 60 * 1000,
   leadDetail: 5 * 60 * 1000
 } as const;
 
 function isFresh<T>(entry: TimedValue<T> | null | undefined, ttlMs: number) {
   return Boolean(entry && Date.now() - entry.loadedAt < ttlMs);
+}
+
+function normalizeContactPhone(value?: string) {
+  return String(value || "").replace(/\D+/g, "");
+}
+
+function getLeadContactKey(lead: Lead) {
+  const phone = normalizeContactPhone(lead.phone);
+  if (phone) return `phone::${phone}`;
+  const email = String(lead.email || "").trim().toLowerCase();
+  if (email) return `email::${email}`;
+  return `id::${String(lead.id || "")}`;
+}
+
+function compactLeadsByContact(leads: Lead[]) {
+  const byContact = new Map<string, Lead>();
+  leads.forEach((lead) => {
+    if (!lead?.id) return;
+    const key = getLeadContactKey(lead);
+    const current = byContact.get(key);
+    if (!current) {
+      byContact.set(key, lead);
+      return;
+    }
+    const currentTime = new Date(current.updatedAt || current.createdAt || 0).getTime();
+    const nextTime = new Date(lead.updatedAt || lead.createdAt || 0).getTime();
+    if (nextTime >= currentTime) byContact.set(key, lead);
+  });
+  return Array.from(byContact.values());
 }
 
 function readDashboardCacheStorage() {
@@ -110,6 +175,52 @@ function writeDashboardCacheStorage(value: TimedValue<{ kpi: DashboardKpi; inbox
   } catch {}
 }
 
+function readChatConversationsStorage() {
+  try {
+    const raw = window.sessionStorage.getItem(CHAT_CONVERSATIONS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as TimedValue<CrmConversation[]>;
+    if (!parsed?.loadedAt || !Array.isArray(parsed.data)) {
+      window.sessionStorage.removeItem(CHAT_CONVERSATIONS_CACHE_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeChatConversationsStorage(value: TimedValue<CrmConversation[]>) {
+  try {
+    window.sessionStorage.setItem(CHAT_CONVERSATIONS_CACHE_KEY, JSON.stringify(value));
+  } catch {}
+}
+
+function getChatMessagesCacheKey(conversationId: string) {
+  return `${CHAT_MESSAGES_CACHE_PREFIX}${conversationId}`;
+}
+
+function readChatMessagesStorage(conversationId: string) {
+  try {
+    const raw = window.sessionStorage.getItem(getChatMessagesCacheKey(conversationId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as TimedValue<{ conversation: CrmConversation; messages: CrmChatMessage[] }>;
+    if (!parsed?.loadedAt || !parsed.data?.conversation || !Array.isArray(parsed.data.messages)) {
+      window.sessionStorage.removeItem(getChatMessagesCacheKey(conversationId));
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeChatMessagesStorage(conversationId: string, value: TimedValue<{ conversation: CrmConversation; messages: CrmChatMessage[] }>) {
+  try {
+    window.sessionStorage.setItem(getChatMessagesCacheKey(conversationId), JSON.stringify(value));
+  } catch {}
+}
+
 export function getCrmStoreSnapshot() {
   return state;
 }
@@ -119,8 +230,13 @@ export function getTaskBoardCache() {
 }
 
 export function setTaskBoardCache(tasks: CrmTask[], leads: Lead[]) {
+  const tasksById = new Map<string, CrmTask>();
+  tasks.forEach((task) => {
+    if (!task?.id) return;
+    tasksById.set(String(task.id), task);
+  });
   state.taskBoard = {
-    data: { tasks, leads },
+    data: { tasks: Array.from(tasksById.values()), leads: compactLeadsByContact(leads) },
     loadedAt: Date.now()
   };
 }
@@ -178,13 +294,70 @@ export function isDashboardCacheFresh() {
   return isFresh(state.dashboard, CRM_STORE_TTLS.dashboard);
 }
 
+export function getChatConversationsCache() {
+  if (!state.chatConversations) {
+    state.chatConversations = readChatConversationsStorage();
+  }
+  return state.chatConversations;
+}
+
+export function setChatConversationsCache(conversations: CrmConversation[]) {
+  const byId = new Map<string, CrmConversation>();
+  conversations.forEach((conversation) => {
+    if (!conversation?.id) return;
+    byId.set(String(conversation.id), conversation);
+  });
+  state.chatConversations = {
+    data: Array.from(byId.values()),
+    loadedAt: Date.now()
+  };
+  writeChatConversationsStorage(state.chatConversations);
+}
+
+export function isChatConversationsCacheFresh() {
+  return isFresh(getChatConversationsCache(), CRM_STORE_TTLS.chatConversations);
+}
+
+export function getChatMessagesCache(conversationId: string) {
+  if (!conversationId) return null;
+  if (!state.chatMessages[conversationId]) {
+    const storage = readChatMessagesStorage(conversationId);
+    if (storage) state.chatMessages[conversationId] = storage;
+  }
+  return state.chatMessages[conversationId] || null;
+}
+
+export function setChatMessagesCache(conversationId: string, conversation: CrmConversation, messages: CrmChatMessage[]) {
+  if (!conversationId) return;
+  state.chatMessages[conversationId] = {
+    data: { conversation, messages },
+    loadedAt: Date.now()
+  };
+  writeChatMessagesStorage(conversationId, state.chatMessages[conversationId]);
+}
+
+export function isChatMessagesCacheFresh(conversationId: string) {
+  return isFresh(getChatMessagesCache(conversationId), CRM_STORE_TTLS.chatMessages);
+}
+
+export function patchConversationInChatCache(conversationId: string, patch: Partial<CrmConversation>) {
+  const current = getChatConversationsCache();
+  if (current) {
+    setChatConversationsCache(current.data.map((conversation) => (conversation.id === conversationId ? { ...conversation, ...patch } : conversation)));
+  }
+  const messagesEntry = getChatMessagesCache(conversationId);
+  if (messagesEntry) {
+    setChatMessagesCache(conversationId, { ...messagesEntry.data.conversation, ...patch }, messagesEntry.data.messages);
+  }
+}
+
 export function getPracticeListCache(key: string) {
   return state.practiceLists[key] || null;
 }
 
 export function setPracticeListCache(key: string, leads: Lead[]) {
   state.practiceLists[key] = {
-    data: leads,
+    data: compactLeadsByContact(leads),
     loadedAt: Date.now()
   };
 }
@@ -244,14 +417,11 @@ export function patchLeadAcrossStore(leadId: string, updates: Partial<Lead>) {
 
 export function upsertTaskInBoard(task: CrmTask) {
   if (!state.taskBoard) return;
-  const exists = state.taskBoard.data.tasks.some((item) => item.id === task.id);
   state.taskBoard = {
     ...state.taskBoard,
     data: {
       ...state.taskBoard.data,
-      tasks: exists
-        ? state.taskBoard.data.tasks.map((item) => (item.id === task.id ? task : item))
-        : [task, ...state.taskBoard.data.tasks]
+      tasks: [task, ...state.taskBoard.data.tasks.filter((item) => item.id !== task.id)]
     }
   };
 }
