@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
+import cruiseHeroImage from "../asset/cruise_chatgpt.png";
 import "../styles/pratica-detail-page.css";
 
 type Workflow = {
@@ -795,31 +796,6 @@ export function PraticaDetailPage() {
     updatePaymentItem(item.id, { dueAt: nextDue.toISOString() });
   }
 
-  async function completePrimaryTask() {
-    if (!primaryTask) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api(`/api/tasks/${primaryTask.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "done" })
-      });
-      const cached = getTaskBoardCache();
-      if (cached?.data?.tasks?.length) {
-        const nextTasks = cached.data.tasks.map((task) =>
-          task.id === primaryTask.id ? { ...task, status: "done", updatedAt: new Date().toISOString() } : task
-        );
-        setTaskBoardCache(nextTasks, cached.data.leads);
-        setTaskBoardTasks(nextTasks);
-      }
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore completamento task.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   useEffect(() => {
     load().catch(() => null);
   }, [id]);
@@ -895,14 +871,7 @@ export function PraticaDetailPage() {
 
 
   const timeline = useMemo(() => (detail?.timeline || []).slice().reverse(), [detail]);
-  const primaryTask = useMemo(() => {
-    if (!detail?.lead.id) return null;
-    const tasks = taskBoardTasks.filter((task) => task.status === "open" && task.leadId === detail.lead.id);
-    if (!tasks.length) return null;
-    return [...tasks].sort(compareTasks)[0];
-  }, [detail?.lead.id, taskBoardTasks]);
   const priority = detail ? getPriority(detail.lead) : "media";
-  const nextMeta = primaryTask ? getTaskUrgencyMeta(primaryTask) : getNextActionMeta(detail?.lead.nextActionAt);
   const statusClass = detail ? getStatusClass(detail.lead.status) : "pd-status-new";
   const nextStatuses = detail ? workflow?.flow[detail.lead.status] || [] : [];
   const compactTimeline = useMemo(() => timeline.slice(0, 8), [timeline]);
@@ -935,66 +904,6 @@ export function PraticaDetailPage() {
         : documentsState.items,
     [documentsState, showOnlyMissingDocuments]
   );
-  const topPendingPayment = useMemo(() => {
-    if (!pendingPayments.length) return null;
-    return [...pendingPayments].sort((a, b) => {
-      const aTs = a.dueAt ? new Date(a.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
-      const bTs = b.dueAt ? new Date(b.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
-      return aTs - bTs;
-    })[0];
-  }, [pendingPayments]);
-  const paymentHeroMeta = useMemo(() => (topPendingPayment ? getPaymentUrgencyMeta(topPendingPayment) : null), [topPendingPayment]);
-  const taskHeroMeta = useMemo(
-    () =>
-      primaryTask
-        ? {
-            label: primaryTask.title,
-            detail: `${getTaskKindLabel(primaryTask.kind)} - ${primaryTask.dueAt ? formatDateDisplay(primaryTask.dueAt) : "Da pianificare"}`,
-            className: getTaskUrgencyMeta(primaryTask).className,
-            weight: getTaskUrgencyMeta(primaryTask).className === "pd-next-overdue" ? 90 : getTaskUrgencyMeta(primaryTask).className === "pd-next-today" ? 80 : 70
-          }
-        : null,
-    [primaryTask]
-  );
-  const documentHeroMeta = useMemo(
-    () =>
-      missingDocumentsCount > 0
-        ? {
-            label: `Documenti mancanti: ${missingDocumentsCount}`,
-            detail: "Completa documenti richiesti per sbloccare la pratica.",
-            className: "pd-next-empty",
-            weight: 50
-          }
-        : null,
-    [missingDocumentsCount]
-  );
-  const heroAction = useMemo(() => {
-    const candidates = [paymentHeroMeta, taskHeroMeta, documentHeroMeta].filter(Boolean) as Array<{
-      label: string;
-      detail: string;
-      className: string;
-      weight: number;
-    }>;
-    if (!candidates.length) {
-      return {
-        label: nextMeta.label,
-        detail: nextMeta.detail,
-        className: nextMeta.className,
-        type: "fallback" as const
-      };
-    }
-    const winner = [...candidates].sort((a, b) => b.weight - a.weight)[0];
-    return {
-      ...winner,
-      type:
-        winner === paymentHeroMeta
-          ? ("payment" as const)
-          : winner === taskHeroMeta
-            ? ("task" as const)
-            : ("document" as const)
-    };
-  }, [documentHeroMeta, nextMeta.className, nextMeta.detail, nextMeta.label, paymentHeroMeta, taskHeroMeta]);
-
   return (
     <div className="pd-page panel">
 
@@ -1008,7 +917,13 @@ export function PraticaDetailPage() {
             id="overview-section"
             className={`pd-top-hero ${highlightSection === "overview" ? "pd-focus-highlight" : ""}`}
           >
+            <div className="pd-hero-visual" aria-hidden="true">
+              <img src={cruiseHeroImage} alt="" />
+            </div>
             <div className="pd-hero-main">
+              <Link className="pd-back-btn pd-back-btn-inline" to="/pratiche">
+                Torna a pratiche
+              </Link>
               <h4>{detail.lead.fullName}</h4>
               <p className="pd-sub">{detail.lead.phone}</p>
               <p className="pd-sub pd-sub-secondary">{detail.lead.email || "-"}</p>
@@ -1016,98 +931,53 @@ export function PraticaDetailPage() {
                 <span className={`pd-status ${statusClass}`}>{getStatusLabel(detail.lead.status)}</span>
                 <span className={`pd-priority pd-priority-${priority}`}>{getPriorityLabel(priority)}</span>
               </div>
-            </div>
-            <Link className="pd-back-btn" to="/pratiche">
-              Torna a pratiche
-            </Link>
-            <div className={`pd-next-action-focus ${heroAction.className}`}>
-              <div>
-                <h5>Prossima azione</h5>
-                <p>{heroAction.label}</p>
-                <small>{heroAction.detail}</small>
-              </div>
-              <div className="pd-next-actions">
-                {heroAction.type === "payment" ? (
-                  <>
-                    <button type="button" disabled={busy} onClick={registerCall}>
-                      Chiama cliente
-                    </button>
-                    {topPendingPayment ? (
-                      <button type="button" className="secondary" disabled={busy} onClick={() => postponePayment(topPendingPayment, 1)}>
-                        +1 giorno
+              <div className="pd-hero-actions">
+                <button type="button" disabled={busy} onClick={registerCall}>
+                  Chiama
+                </button>
+                <button type="button" className="secondary" onClick={() => navigate("/chat")}>
+                  Apri chat
+                </button>
+                <button type="button" className="secondary" disabled={busy} onClick={createTask}>
+                  Crea task
+                </button>
+                <button type="button" className="secondary" onClick={() => setNoteModalOpen(true)}>
+                  Inserisci nota
+                </button>
+                <details className="pd-hero-more">
+                  <summary>Altre azioni</summary>
+                  <div className="pd-hero-more-menu">
+                    <div className="pd-inline-control pd-inline-control-block">
+                      <select value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)}>
+                        <option value="">Cambia stato...</option>
+                        {nextStatuses.map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="button" className="secondary" disabled={busy || !statusDraft} onClick={updateStatus}>
+                        Applica
                       </button>
-                    ) : null}
-                  </>
-                ) : primaryTask ? (
-                  <>
-                    <button type="button" disabled={busy} onClick={registerCall}>
-                      Chiama
-                    </button>
-                    <button type="button" className="secondary" onClick={() => navigate("/tasks")}>
-                      Apri task
-                    </button>
-                    <button type="button" className="secondary" disabled={busy} onClick={completePrimaryTask}>
-                      Completa
-                    </button>
-                  </>
-                ) : (
-                  <button type="button" className="secondary" disabled={busy} onClick={createTask}>
-                    Crea task
-                  </button>
-                )}
-              </div>
-            </div>
-          </section>
-
-          <section className="pd-action-bar">
-            <div className="pd-action-primary">
-              <button type="button" disabled={busy} onClick={registerCall}>
-                Chiama
-              </button>
-              <button type="button" className="secondary" onClick={() => navigate("/chat")}>
-                Apri chat
-              </button>
-            </div>
-
-            <span className="pd-action-separator" aria-hidden="true" />
-
-            <div className="pd-action-secondary">
-              <button type="button" className="secondary" disabled={busy} onClick={createTask}>
-                Crea task
-              </button>
-              <button type="button" className="secondary" onClick={() => setNoteModalOpen(true)}>
-                Inserisci nota
-              </button>
-
-              <div className="pd-inline-control">
-                <select value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)}>
-                  <option value="">Cambia stato...</option>
-                  {nextStatuses.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-                <button type="button" className="secondary" disabled={busy || !statusDraft} onClick={updateStatus}>
-                  Applica
-                </button>
-              </div>
-
-              <div className="pd-inline-control">
-                <input
-                  list="pd-assignees"
-                  value={assigneeDraft}
-                  onChange={(event) => setAssigneeDraft(event.target.value)}
-                  placeholder="Assegna a..."
-                />
-                <datalist id="pd-assignees">
-                  {assignees.map((assignee) => (
-                    <option key={assignee} value={assignee} />
-                  ))}
-                </datalist>
-                <button type="button" className="secondary" disabled={busy} onClick={updateAssignee}>
-                  Assegna
-                </button>
+                    </div>
+                    <div className="pd-inline-control pd-inline-control-block">
+                      <input
+                        list="pd-assignees"
+                        value={assigneeDraft}
+                        onChange={(event) => setAssigneeDraft(event.target.value)}
+                        placeholder="Assegna a..."
+                      />
+                      <datalist id="pd-assignees">
+                        {assignees.map((assignee) => (
+                          <option key={assignee} value={assignee} />
+                        ))}
+                      </datalist>
+                      <button type="button" className="secondary" disabled={busy} onClick={updateAssignee}>
+                        Assegna
+                      </button>
+                    </div>
+                  </div>
+                </details>
               </div>
             </div>
           </section>
