@@ -46,6 +46,7 @@ export function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoComplete="email"
+                placeholder=" "
               />
               <label htmlFor="login-email">Email</label>
             </div>
@@ -57,6 +58,7 @@ export function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 autoComplete="current-password"
+                placeholder=" "
               />
               <label htmlFor="login-password">Password</label>
             </div>

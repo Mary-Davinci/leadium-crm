@@ -107,7 +107,7 @@ type NoteEntry = {
 };
 
 const DEFAULT_DOCUMENTS: PracticeDocumentItem[] = [
-  { key: "identity_document", label: "Documento identita / Passaporto", required: true, received: false, verified: false, note: "", attachments: [] },
+  { key: "identity_document", label: "Documento identita / passaporto", required: true, received: false, verified: false, note: "", attachments: [] },
   { key: "passenger_data", label: "Dati passeggeri", required: true, received: false, verified: false, note: "", attachments: [] },
   { key: "signed_contract", label: "Contratto firmato", required: true, received: false, verified: false, note: "", attachments: [] },
   { key: "deposit_payment", label: "Conferma pagamento acconto", required: true, received: false, verified: false, note: "", attachments: [] }
@@ -389,6 +389,15 @@ function formatDateDisplay(value?: string) {
   return new Date(value).toLocaleString("it-IT");
 }
 
+function formatDateParts(value?: string) {
+  if (!value) return { date: "Da definire", time: "" };
+  const date = new Date(value);
+  return {
+    date: date.toLocaleDateString("it-IT"),
+    time: date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })
+  };
+}
+
 function getTimelineDayLabel(value: string) {
   const date = new Date(value);
   const now = new Date();
@@ -507,6 +516,7 @@ export function PraticaDetailPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
+  const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteHistory, setNoteHistory] = useState<NoteEntry[]>([]);
   const [statusDraft, setStatusDraft] = useState("");
   const [assigneeDraft, setAssigneeDraft] = useState("");
@@ -632,6 +642,7 @@ export function PraticaDetailPage() {
         body: JSON.stringify({ notes: noteDraft })
       });
       await load();
+      setNoteModalOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore salvataggio nota.");
     } finally {
@@ -884,41 +895,6 @@ export function PraticaDetailPage() {
 
 
   const timeline = useMemo(() => (detail?.timeline || []).slice().reverse(), [detail]);
-  const groupedTimeline = useMemo(() => {
-    const groups: Array<{ label: string; items: TimelineItem[] }> = [];
-    timeline.forEach((item) => {
-      const label = getTimelineDayLabel(item.createdAt);
-      const bucket = groups.find((group) => group.label === label);
-      if (bucket) {
-        bucket.items.push(item);
-      } else {
-        groups.push({ label, items: [item] });
-      }
-    });
-    return groups;
-  }, [timeline]);
-  const timelineNotes = useMemo(
-    () =>
-      timeline
-        .filter((item) => includesAny(item.type, ["note"]))
-        .map((item, index) => ({
-          id: `timeline-${index}-${item.createdAt}`,
-          text: item.text,
-          createdAt: item.createdAt,
-          actor: item.actor || "operatore"
-        })),
-    [timeline]
-  );
-
-  const mergedNoteHistory = useMemo(() => {
-    const map = new Map<string, NoteEntry>();
-    [...noteHistory, ...timelineNotes].forEach((item) => {
-      const key = `${item.text}-${item.createdAt}`;
-      if (!map.has(key)) map.set(key, item);
-    });
-    return Array.from(map.values()).sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
-  }, [noteHistory, timelineNotes]);
-
   const primaryTask = useMemo(() => {
     if (!detail?.lead.id) return null;
     const tasks = taskBoardTasks.filter((task) => task.status === "open" && task.leadId === detail.lead.id);
@@ -929,19 +905,7 @@ export function PraticaDetailPage() {
   const nextMeta = primaryTask ? getTaskUrgencyMeta(primaryTask) : getNextActionMeta(detail?.lead.nextActionAt);
   const statusClass = detail ? getStatusClass(detail.lead.status) : "pd-status-new";
   const nextStatuses = detail ? workflow?.flow[detail.lead.status] || [] : [];
-  const latestCall = useMemo(
-    () => timeline.find((item) => includesAny(item.type, ["call"])),
-    [timeline]
-  );
-  const latestStatusChange = useMemo(
-    () => timeline.find((item) => includesAny(item.type, ["status"])),
-    [timeline]
-  );
-  const latestTask = useMemo(
-    () => timeline.find((item) => includesAny(item.type, ["task"])),
-    [timeline]
-  );
-  const callLogs = useMemo(() => (detail?.callLogs || []).slice(0, 6), [detail]);
+  const compactTimeline = useMemo(() => timeline.slice(0, 8), [timeline]);
   const documentsState = useMemo(() => normalizeDocuments(detail?.lead.documents || documentsDraft), [detail?.lead.documents, documentsDraft]);
   const documentsBadge = useMemo(() => getDocumentsBadge(documentsState), [documentsState]);
   const missingDocumentsCount = useMemo(() => getMissingDocumentsCount(documentsState), [documentsState]);
@@ -962,6 +926,7 @@ export function PraticaDetailPage() {
         .reduce((sum, item) => sum + Number(item.amount || 0), 0),
     [paymentsState]
   );
+  const totalRemainingPayments = Math.max(0, totalRequiredPayments - totalPaidPayments);
   const paymentProgress = totalRequiredPayments > 0 ? Math.min(100, Math.round((totalPaidPayments / totalRequiredPayments) * 100)) : 0;
   const visibleDocuments = useMemo(
     () =>
@@ -1046,6 +1011,7 @@ export function PraticaDetailPage() {
             <div className="pd-hero-main">
               <h4>{detail.lead.fullName}</h4>
               <p className="pd-sub">{detail.lead.phone}</p>
+              <p className="pd-sub pd-sub-secondary">{detail.lead.email || "-"}</p>
               <div className="pd-badges">
                 <span className={`pd-status ${statusClass}`}>{getStatusLabel(detail.lead.status)}</span>
                 <span className={`pd-priority pd-priority-${priority}`}>{getPriorityLabel(priority)}</span>
@@ -1056,7 +1022,7 @@ export function PraticaDetailPage() {
             </Link>
             <div className={`pd-next-action-focus ${heroAction.className}`}>
               <div>
-                <h5>⚠ Azione da fare</h5>
+                <h5>Prossima azione</h5>
                 <p>{heroAction.label}</p>
                 <small>{heroAction.detail}</small>
               </div>
@@ -1096,10 +1062,10 @@ export function PraticaDetailPage() {
           <section className="pd-action-bar">
             <div className="pd-action-primary">
               <button type="button" disabled={busy} onClick={registerCall}>
-                📞 Chiama
+                Chiama
               </button>
               <button type="button" className="secondary" onClick={() => navigate("/chat")}>
-                ✉ Scrivi
+                Apri chat
               </button>
             </div>
 
@@ -1107,7 +1073,10 @@ export function PraticaDetailPage() {
 
             <div className="pd-action-secondary">
               <button type="button" className="secondary" disabled={busy} onClick={createTask}>
-                📨 Crea task
+                Crea task
+              </button>
+              <button type="button" className="secondary" onClick={() => setNoteModalOpen(true)}>
+                Inserisci nota
               </button>
 
               <div className="pd-inline-control">
@@ -1144,71 +1113,13 @@ export function PraticaDetailPage() {
           </section>
 
           <div className="pd-grid">
-            <section className="pd-card pd-card-client">
-              <h5>Dettagli cliente</h5>
-              <div className="pd-contact-list">
-                <p>
-                  <span className="pd-contact-label">📞 Telefono</span>
-                  <strong className="pd-contact-value">{detail.lead.phone || "-"}</strong>
-                </p>
-                <p>
-                  <span className="pd-contact-label">✉ Email</span>
-                  <strong className="pd-contact-value is-linklike">{detail.lead.email || "-"}</strong>
-                </p>
-                <p>
-                  <span className="pd-contact-label">📍 Fonte</span>
-                  <strong className="pd-contact-value">{detail.lead.source || "-"}</strong>
-                </p>
-                <p>
-                  <span className="pd-contact-label">👤 Assegnato</span>
-                  <strong className="pd-contact-value">{detail.lead.assignedTo || "me"}</strong>
-                </p>
-              </div>
-            </section>
-
-            <section
-              id="task-section"
-              className={`pd-card pd-card-practice ${highlightSection === "task" ? "pd-focus-highlight" : ""}`}
-            >
-              <h5>Dettagli pratica</h5>
-              <div className="pd-practice-summary">
-                <span className="pd-practice-summary-label">Viaggio / pratica</span>
-                <strong>{getPracticeLabel(detail.lead)}</strong>
-              </div>
-              {primaryTask ? (
-                <>
-                  <div className="pd-practice-pairs">
-                    <div className="pd-practice-line pd-practice-line-soft">
-                      <span>Task principale</span>
-                      <strong>{primaryTask.title}</strong>
-                    </div>
-                    <div className="pd-practice-line pd-practice-line-soft">
-                      <span>Tipo task</span>
-                      <strong>{getTaskKindLabel(primaryTask.kind)}</strong>
-                    </div>
-                    <div className="pd-practice-line pd-practice-line-soft">
-                      <span>Scadenza task</span>
-                      <strong>{primaryTask.dueAt ? formatDateDisplay(primaryTask.dueAt) : "Da pianificare"}</strong>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="pd-practice-pairs">
-                  <div className="pd-practice-line pd-practice-line-soft">
-                    <span>Prossima azione</span>
-                    <strong>{formatDateDisplay(detail.lead.nextActionAt)}</strong>
-                  </div>
-                </div>
-              )}
-            </section>
-
             <section
               id="documents-section"
               className={`pd-card pd-card-documents ${highlightSection === "documents" ? "pd-focus-highlight" : ""}`}
             >
               <div className="pd-docs-head">
                 <div>
-                  <h5>📄 Documenti pratica</h5>
+                  <h5>Documenti</h5>
                   <p className="pd-docs-subtitle">
                     {missingDocumentsCount > 0
                       ? `${missingDocumentsCount} mancanti`
@@ -1370,7 +1281,7 @@ export function PraticaDetailPage() {
             >
               <div className="pd-payments-head">
                 <div>
-                  <h5>💳 Pagamenti pratica</h5>
+                  <h5>Pagamenti pratica</h5>
                   <p className="pd-payments-subtitle">
                     {pendingPayments.length
                       ? `${pendingPayments.length} rate mancanti - ${paymentsBadge.amountText}`
@@ -1378,13 +1289,29 @@ export function PraticaDetailPage() {
                   </p>
                 </div>
               </div>
-              <div className="pd-payments-progress">
-                <div className="pd-payments-progress-meta">
-                  <strong>Pagato: {formatCurrency(totalPaidPayments)} / {formatCurrency(totalRequiredPayments)}</strong>
-                  <span>{paymentProgress}%</span>
+              <div className="pd-payments-summary-card">
+                <div className="pd-payments-summary">
+                  <article>
+                    <span>Totale pratica</span>
+                    <strong>{formatCurrency(totalRequiredPayments)}</strong>
+                  </article>
+                  <article>
+                    <span>Pagato</span>
+                    <strong>{formatCurrency(totalPaidPayments)}</strong>
+                    <small>{paymentProgress}%</small>
+                  </article>
+                  <article>
+                    <span>Residuo</span>
+                    <strong className={totalRemainingPayments > 0 ? "is-warning" : "is-ok"}>{formatCurrency(totalRemainingPayments)}</strong>
+                  </article>
                 </div>
-                <div className="pd-payments-progress-bar" aria-hidden="true">
-                  <span style={{ width: `${paymentProgress}%` }} />
+                <div className="pd-payments-progress">
+                  <div className="pd-payments-progress-bar" aria-hidden="true">
+                    <span style={{ width: `${paymentProgress}%` }} />
+                  </div>
+                  <div className="pd-payments-progress-foot">
+                    <span>{paymentProgress}%</span>
+                  </div>
                 </div>
               </div>
               {pendingPayments.length ? (
@@ -1398,192 +1325,146 @@ export function PraticaDetailPage() {
                   <span>Tutti i pagamenti richiesti risultano verificati.</span>
                 </div>
               )}
+              <div className="pd-payments-table-head" aria-hidden="true">
+                <span>Voce</span>
+                <span>Importo</span>
+                <span>Scadenza</span>
+                <span>Stato</span>
+                <span>Azioni</span>
+              </div>
               <div className="pd-payments-list">
-                {paymentsState.items.map((item) => (
-                  <article
-                    key={item.id}
-                    className={`pd-payment-row pd-payment-${item.status} ${paymentKey === item.id ? "pd-focus-target-row" : ""}`}
-                  >
-                    <div className="pd-payment-main">
-                      <strong>{item.label}</strong>
+                {paymentsState.items.map((item) => {
+                  const due = formatDateParts(item.dueAt);
+                  return (
+                    <article key={item.id} className={`pd-payment-row pd-payment-${item.status} ${paymentKey === item.id ? "pd-focus-target-row" : ""}`}>
+                      <div className="pd-payment-main">
+                        <strong>{item.label}</strong>
+                      </div>
                       <span className="pd-payment-amount">{formatCurrency(item.amount)}</span>
-                    </div>
-                    <div className="pd-payment-meta">
+                      <div className="pd-payment-meta">
+                        <small>
+                          <span>{due.date}</span>
+                          {due.time ? <span>{due.time}</span> : null}
+                        </small>
+                      </div>
                       <span className={`pd-payment-status pd-payment-status-${item.status}`}>{getPaymentStatusLabel(item.status)}</span>
-                      <small>Scadenza: {item.dueAt ? formatDateDisplay(item.dueAt) : "Da definire"}</small>
-                    </div>
-                    <div className="pd-payment-actions">
-                      {item.status === "pending" ? (
-                        <button type="button" className="secondary" disabled={busy} onClick={() => updatePaymentStatus(item, "received")}>
-                          Segna ricevuto
-                        </button>
-                      ) : null}
-                      {item.status === "pending" ? (
-                        <button type="button" className="secondary" disabled={busy} onClick={() => postponePayment(item, 1)}>
-                          +1 giorno
-                        </button>
-                      ) : null}
-                      {item.status === "pending" ? (
-                        <button type="button" className="secondary" disabled={busy} onClick={registerCall}>
-                          Chiama cliente
-                        </button>
-                      ) : null}
-                      {item.status !== "verified" ? (
-                        <button type="button" className="secondary" disabled={busy} onClick={() => updatePaymentStatus(item, "verified")}>
-                          Verifica
-                        </button>
-                      ) : null}
-                      {item.status !== "pending" ? (
-                        <button type="button" className="secondary" disabled={busy} onClick={() => updatePaymentStatus(item, "pending")}>
-                          Riapri
-                        </button>
-                      ) : null}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
-
-            <section
-              id="notes-section"
-              className={`pd-card pd-card-notes ${highlightSection === "notes" ? "pd-focus-highlight" : ""}`}
-            >
-              <h5>Note pratica</h5>
-              <textarea
-                className="pd-notes-input"
-                value={noteDraft}
-                onChange={(event) => setNoteDraft(event.target.value)}
-                rows={4}
-                placeholder="Nota operativa rapida..."
-              />
-              <div className="pd-actions">
-                <button type="button" disabled={busy} onClick={saveNote}>
-                  Salva nota
-                </button>
-              </div>
-            </section>
-
-            <section className="pd-card pd-card-quick">
-              <h5>Dettagli rapidi</h5>
-              <div className="pd-quick-items">
-                {primaryTask ? (
-                  <article>
-                    <strong className="pd-quick-label">✅ Task principale</strong>
-                    <span className="pd-quick-value">
-                      {primaryTask.title} - {getTaskKindLabel(primaryTask.kind)}
-                    </span>
-                  </article>
-                ) : null}
-                <article>
-                  <strong className="pd-quick-label">📞 Ultima chiamata</strong>
-                  <span className="pd-quick-value">{latestCall ? formatDateDisplay(latestCall.createdAt) : "Nessuna chiamata"}</span>
-                </article>
-                <article>
-                  <strong className="pd-quick-label">🔄 Ultimo cambio stato</strong>
-                  <span className="pd-quick-value">{latestStatusChange ? formatDateDisplay(latestStatusChange.createdAt) : "Nessun cambio stato"}</span>
-                </article>
-                <article>
-                  <strong className="pd-quick-label">✅ Ultimo task</strong>
-                  <span className="pd-quick-value">{latestTask ? formatDateDisplay(latestTask.createdAt) : "Nessun task"}</span>
-                </article>
+                      <div className="pd-payment-actions">
+                        <details className="pd-payment-menu">
+                          <summary className="pd-payment-menu-trigger">Azioni</summary>
+                          <div className="pd-payment-menu-list">
+                            {item.status === "pending" ? (
+                              <button type="button" disabled={busy} onClick={() => updatePaymentStatus(item, "received")}>
+                                Segna ricevuto
+                              </button>
+                            ) : null}
+                            {item.status === "pending" ? (
+                              <button type="button" disabled={busy} onClick={() => postponePayment(item, 1)}>
+                                Posticipa +1 giorno
+                              </button>
+                            ) : null}
+                            {item.status === "pending" ? (
+                              <button type="button" disabled={busy} onClick={registerCall}>
+                                Chiama cliente
+                              </button>
+                            ) : null}
+                            {item.status !== "verified" ? (
+                              <button type="button" disabled={busy} onClick={() => updatePaymentStatus(item, "verified")}>
+                                Verifica
+                              </button>
+                            ) : null}
+                            {item.status !== "pending" ? (
+                              <button type="button" disabled={busy} onClick={() => updatePaymentStatus(item, "pending")}>
+                                Riapri pagamento
+                              </button>
+                            ) : null}
+                          </div>
+                        </details>
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             </section>
 
             <section
               id="timeline-section"
-              className={`pd-card pd-card-timeline pd-timeline ${highlightSection === "timeline" ? "pd-focus-highlight" : ""}`}
+              className={`pd-card pd-card-timeline ${highlightSection === "timeline" ? "pd-focus-highlight" : ""}`}
             >
-              <h5>Timeline pratica</h5>
-              {timeline.length ? (
-                <div className="pd-timeline-groups">
-                  {primaryTask ? (
-                    <section className="pd-timeline-group">
-                      <h6 className="pd-timeline-group-title">Task operativo</h6>
-                      <div className="pd-timeline-track">
-                        <article className="pd-timeline-item pd-timeline-task pd-timeline-current-task">
-                          <div>
-                            <strong>{primaryTask.title}</strong>
-                            <span>{primaryTask.updatedAt ? new Date(primaryTask.updatedAt).toLocaleString("it-IT") : ""}</span>
+              <div className="pd-timeline-head">
+                <div>
+                  <h5>Timeline attivita</h5>
+                  <p className="pd-timeline-subtitle">
+                    {compactTimeline.length ? `${compactTimeline.length} eventi recenti` : "Nessuna attivita recente"}
+                  </p>
+                </div>
+              </div>
+              {compactTimeline.length ? (
+                <div className="pd-timeline-list">
+                  {compactTimeline.map((item, idx) => {
+                    const meta = getTimelineMeta(item.type);
+                    return (
+                      <article key={`${item.createdAt}-${idx}`} className={`pd-timeline-entry pd-timeline-${meta.className}`}>
+                        <span className="pd-timeline-dot" aria-hidden="true" />
+                        <div className="pd-timeline-content">
+                          <div className="pd-timeline-topline">
+                            <strong>{getTimelineLabel(item.type)}</strong>
+                            <span>{formatDateDisplay(item.createdAt)}</span>
                           </div>
-                          <p>
-                            {getTaskKindLabel(primaryTask.kind)} -{" "}
-                            {primaryTask.dueAt ? `Scadenza ${formatDateDisplay(primaryTask.dueAt)}` : "Da pianificare"}
-                          </p>
-                        </article>
-                      </div>
-                    </section>
-                  ) : null}
-                  {groupedTimeline.map((group, groupIdx) => (
-                    <section key={`${group.label}-${groupIdx}`} className="pd-timeline-group">
-                      <h6 className="pd-timeline-group-title">{group.label}</h6>
-                      <div className="pd-timeline-track">
-                        {group.items.slice(0, 8).map((item, idx) => {
-                          const meta = getTimelineMeta(item.type);
-                          return (
-                            <article key={`${group.label}-${item.createdAt}-${idx}`} className={`pd-timeline-item pd-timeline-${meta.className}`}>
-                              <div>
-                                <strong>
-                                  {meta.icon} {getTimelineLabel(item.type)} {item.text}
-                                </strong>
-                                <span>{new Date(item.createdAt).toLocaleString("it-IT")}</span>
-                              </div>
-                            </article>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ))}
+                          <p>{item.text}</p>
+                          <small>{item.actor || "Sistema"}</small>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="muted">Nessuna attivita disponibile.</p>
               )}
             </section>
-
-            <section className="pd-card pd-card-calls">
-              <h5>Storico chiamate</h5>
-              {callLogs.length ? (
-                <div className="pd-calllog-list">
-                  {callLogs.map((call) => (
-                    <article key={call.id} className={`pd-calllog-item ${getCallOutcomeClass(call.outcome)}`}>
-                      <div className="pd-calllog-main">
-                        <strong>{getCallOutcomeLabel(call.outcome)}</strong>
-                        <span>{new Date(call.startedAt).toLocaleString("it-IT")}</span>
-                      </div>
-                      <div className="pd-calllog-meta">
-                        <small>Operatore: {call.actor || "operatore"}</small>
-                        {call.endedAt ? <small>Fine: {new Date(call.endedAt).toLocaleTimeString("it-IT")}</small> : null}
-                      </div>
-                      {call.note?.trim() ? <p>{call.note}</p> : null}
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">Nessuna chiamata registrata.</p>
-              )}
-            </section>
-
-            <section className="pd-card pd-card-history">
-              <div className="pd-note-history">
-                <h6>Storico note</h6>
-                {mergedNoteHistory.length ? (
-                  mergedNoteHistory.slice(0, 5).map((note) => (
-                    <article key={note.id}>
-                      <strong>{new Date(note.createdAt).toLocaleString("it-IT")}</strong>
-                      <span>{note.actor}</span>
-                      <p>{note.text || "(vuota)"}</p>
-                    </article>
-                  ))
-                ) : (
-                  <p className="muted">Nessuna nota storica disponibile.</p>
-                )}
-              </div>
-            </section>
           </div>
+
+          {noteModalOpen ? (
+            <div className="pd-note-modal-backdrop" role="presentation" onClick={() => setNoteModalOpen(false)}>
+              <div
+                className="pd-note-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="pd-note-modal-title"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="pd-note-modal-head">
+                  <div>
+                    <h5 id="pd-note-modal-title">Inserisci nota</h5>
+                    <p>Aggiungi o aggiorna il commento operativo della pratica.</p>
+                  </div>
+                  <button type="button" className="secondary" onClick={() => setNoteModalOpen(false)}>
+                    Chiudi
+                  </button>
+                </div>
+                <textarea
+                  className="pd-notes-input"
+                  value={noteDraft}
+                  onChange={(event) => setNoteDraft(event.target.value)}
+                  rows={6}
+                  placeholder="Scrivi qui la nota o il commento..."
+                />
+                <div className="pd-note-modal-actions">
+                  <button type="button" className="secondary" onClick={() => setNoteModalOpen(false)}>
+                    Annulla
+                  </button>
+                  <button type="button" disabled={busy} onClick={saveNote}>
+                    Salva nota
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </>
       ) : null}
     </div>
   );
 }
+
 
 
 

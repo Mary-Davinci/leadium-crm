@@ -121,6 +121,7 @@ export function PratichePage() {
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [detailPanelDismissed, setDetailPanelDismissed] = useState(false);
   const [selectedDetail, setSelectedDetail] = useState<LeadDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
@@ -132,6 +133,7 @@ export function PratichePage() {
   const [callOutcomeFilter, setCallOutcomeFilter] = useState("");
   const [documentFilter, setDocumentFilter] = useState(false);
   const [paymentFilter, setPaymentFilter] = useState(false);
+  const [showExtraFilters, setShowExtraFilters] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [callModalLead, setCallModalLead] = useState<Lead | null>(null);
@@ -553,7 +555,7 @@ export function PratichePage() {
   async function handleMarkUrgent(lead: Lead) {
     const urgentTag = "URGENTE";
     const currentNotes = String(lead.notes || "").trim();
-    const notes = currentNotes.toLowerCase().includes("urgente") ? currentNotes : `${urgentTag} - ${currentNotes || "Da gestire con priorità alta."}`;
+    const notes = currentNotes.toLowerCase().includes("urgente") ? currentNotes : `${urgentTag} - ${currentNotes || "Da gestire con prioritÃ  alta."}`;
     try {
       await api(`/api/leads/${lead.id}`, {
         method: "PATCH",
@@ -564,7 +566,7 @@ export function PratichePage() {
       setLeads((prev) => prev.map((item) => (item.id === lead.id ? { ...item, notes } : item)));
       setSelectedDetail((prev) => (prev && prev.lead.id === lead.id ? { ...prev, lead: { ...prev.lead, notes } } : prev));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore aggiornamento priorità.");
+      setError(e instanceof Error ? e.message : "Errore aggiornamento prioritÃ .");
     }
   }
 
@@ -766,10 +768,20 @@ export function PratichePage() {
   }, [sortedRows, selectedLeadId]);
 
   useEffect(() => {
-    if (!selectedLeadId && sortedRows.length) {
-      setSelectedLeadId(sortedRows[0].id);
+    if (selectedLeadId) {
+      setDetailPanelDismissed(false);
     }
-  }, [sortedRows, selectedLeadId]);
+  }, [selectedLeadId]);
+
+  function handleSelectLead(leadId: string | null) {
+    setDetailPanelDismissed(false);
+    setSelectedLeadId(leadId);
+  }
+
+  function handleCloseQuickDetail() {
+    setDetailPanelDismissed(true);
+    setSelectedLeadId(null);
+  }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -816,50 +828,61 @@ export function PratichePage() {
 
   const modalAutoFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
   const modalClosedOutcome = callOutcome === "not_interested";
+  const isQuickDetailVisible = Boolean(selectedLeadId);
 
   return (
     <div className="pr-page">
       <section className="panel pr-main">
         <header className="pr-header">
-          <div>
-            <h3>Pratiche</h3>
-            <p className="muted">Gestisci clienti, documenti, pagamenti e follow-up.</p>
-            <div className="pr-smart-badges">
+          <div className="pr-smart-badges">
+              <button
+                type="button"
+                className={`pr-smart-badge all ${smartFilter === "" ? "active" : ""}`}
+                onClick={() => setSmartFilter("")}
+              >
+                Tutte <span>{leads.length}</span>
+              </button>
               <button
                 type="button"
                 className={`pr-smart-badge overdue ${smartFilter === "overdue" ? "active" : ""}`}
                 onClick={() => setSmartFilter((current) => (current === "overdue" ? "" : "overdue"))}
               >
-                🔴 {smartCounts.overdue} scadute
+                Urgenti <span>{smartCounts.overdue}</span>
               </button>
               <button
                 type="button"
                 className={`pr-smart-badge today ${smartFilter === "today" ? "active" : ""}`}
                 onClick={() => setSmartFilter((current) => (current === "today" ? "" : "today"))}
               >
-                🟡 {smartCounts.today} oggi
+                Oggi <span>{smartCounts.today}</span>
               </button>
               <button
                 type="button"
                 className={`pr-smart-badge planned ${smartFilter === "planned" ? "active" : ""}`}
                 onClick={() => setSmartFilter((current) => (current === "planned" ? "" : "planned"))}
               >
-                🟢 {smartCounts.planned} pianificate
+                Pianificate <span>{smartCounts.planned}</span>
               </button>
               <button
                 type="button"
                 className={`pr-smart-badge fresh ${smartFilter === "new" ? "active" : ""}`}
                 onClick={() => setSmartFilter((current) => (current === "new" ? "" : "new"))}
               >
-                🔵 {smartCounts.fresh} nuove
+                Nuove <span>{smartCounts.fresh}</span>
               </button>
-            </div>
           </div>
-          <button type="button">+ Nuova pratica</button>
         </header>
 
         <div className="pr-filters">
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca cliente, telefono, crociera..." />
+          <label className="pr-search-field">
+            <span className="pr-search-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16">
+                <circle cx="7" cy="7" r="4.5" />
+                <path d="M10.5 10.5 14 14" />
+              </svg>
+            </span>
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca nelle pratiche..." />
+          </label>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="">Tutti gli stati</option>
             {workflow?.statuses.map((status) => (
@@ -877,34 +900,59 @@ export function PratichePage() {
             ))}
           </select>
           <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-            <option value="">Tutte le priorità</option>
+            <option value="">Tutte le priorità </option>
             <option value="alta">Alta</option>
             <option value="media">Media</option>
             <option value="bassa">Bassa</option>
           </select>
-          <select value={callOutcomeFilter} onChange={(e) => setCallOutcomeFilter(e.target.value)}>
-            <option value="">Tutti gli esiti chiamata</option>
-            <option value="completed">Completata</option>
-            <option value="no_answer">Nessuna risposta</option>
-            <option value="busy">Occupato</option>
-            <option value="call_back">Da richiamare</option>
-            <option value="interested">Interessato</option>
-            <option value="not_interested">Non interessato</option>
-          </select>
-          <label className="pr-check">
-            <input type="checkbox" checked={documentFilter} onChange={(e) => setDocumentFilter(e.target.checked)} />
-            Documenti mancanti
-          </label>
-          <label className="pr-check">
-            <input type="checkbox" checked={paymentFilter} onChange={(e) => setPaymentFilter(e.target.checked)} />
-            Pagamenti in scadenza
-          </label>
+          <button
+            type="button"
+            className={`pr-filter-toggle ${showExtraFilters ? "active" : ""}`}
+            onClick={() => setShowExtraFilters((current) => !current)}
+          >
+            <span className="pr-filter-toggle-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16">
+                <path d="M2 4h12M4.5 8h7M6.5 12h3" />
+              </svg>
+            </span>
+            Extra filtri
+          </button>
         </div>
+
+        {showExtraFilters ? (
+          <div className="pr-filters pr-filters-extra">
+            <select value={callOutcomeFilter} onChange={(e) => setCallOutcomeFilter(e.target.value)}>
+              <option value="">Tutti gli esiti chiamata</option>
+              <option value="completed">Completata</option>
+              <option value="no_answer">Nessuna risposta</option>
+              <option value="busy">Occupato</option>
+              <option value="call_back">Da richiamare</option>
+              <option value="interested">Interessato</option>
+              <option value="not_interested">Non interessato</option>
+            </select>
+            <label className="pr-check">
+              <input type="checkbox" checked={documentFilter} onChange={(e) => setDocumentFilter(e.target.checked)} />
+              Documenti mancanti
+            </label>
+            <label className="pr-check">
+              <input type="checkbox" checked={paymentFilter} onChange={(e) => setPaymentFilter(e.target.checked)} />
+              Pagamenti in scadenza
+            </label>
+          </div>
+        ) : null}
 
         {loading ? <p className="muted">Caricamento pratiche...</p> : null}
         {error ? <p className="pr-error">{error}</p> : null}
 
         <div className="pr-list">
+          <div className="pr-list-head" aria-hidden="true">
+            <span>Priorita</span>
+            <span>Cliente</span>
+            <span>Ultimo contatto</span>
+            <span>Prossima azione</span>
+            <span>Scadenza</span>
+            <span>Assegnato</span>
+          </div>
           {sortedRows.length ? (
             sortedRows.map((lead) => (
               <PracticeCard
@@ -914,7 +962,7 @@ export function PratichePage() {
                 isSelected={selectedLeadId === lead.id}
                 isBusy={loading}
                 availableStatuses={workflow?.flow[lead.status] || []}
-                onSelect={setSelectedLeadId}
+                onSelect={handleSelectLead}
                 onPrefetchDetail={prefetchLeadDetail}
                 onOpen={(id) => navigate(buildPracticeUrl(id))}
                 onStartCall={handleStartCall}
@@ -933,15 +981,13 @@ export function PratichePage() {
         </div>
       </section>
 
-      <aside className="panel pr-sidebar">
-        {detailError ? <p className="pr-error">{detailError}</p> : null}
-        <PracticesQuickDetail
-          detail={selectedDetail}
-          linkedTask={selectedLeadId ? primaryTaskByLeadId.get(selectedLeadId) || null : null}
-          loading={detailLoading}
-          onOpenFullDetail={(id) => navigate(buildPracticeUrl(id))}
-        />
-      </aside>
+      {isQuickDetailVisible ? <div className="pr-drawer-backdrop" onClick={handleCloseQuickDetail} /> : null}
+      {isQuickDetailVisible ? (
+        <aside className={`pr-sidebar ${selectedLeadId ? "open" : "closed"}`}>
+          {detailError ? <p className="pr-error">{detailError}</p> : null}
+          <PracticesQuickDetail detail={selectedDetail} loading={detailLoading} />
+        </aside>
+      ) : null}
 
       {callModalLead ? (
         <div
@@ -959,7 +1005,7 @@ export function PratichePage() {
               <div>
                 <h3>Esito chiamata</h3>
                 <p>
-                  {callModalLead.fullName} · {callModalLead.phone || "-"}
+                  {callModalLead.fullName} Â· {callModalLead.phone || "-"}
                 </p>
               </div>
             </div>
@@ -989,8 +1035,8 @@ export function PratichePage() {
               {modalAutoFollowUp ? (
                 <div className="pr-call-hint">
                   {callOutcome === "call_back"
-                    ? "Follow-up automatico: verrà impostato un richiamo con la data selezionata."
-                    : "Follow-up automatico: verrà creato un richiamo per domani."}
+                    ? "Follow-up automatico: verrÃ  impostato un richiamo con la data selezionata."
+                    : "Follow-up automatico: verrÃ  creato un richiamo per domani."}
                 </div>
               ) : !modalClosedOutcome ? (
                 <>
@@ -1015,7 +1061,7 @@ export function PratichePage() {
                 </>
               ) : (
                 <div className="pr-call-hint pr-call-hint-closed">
-                  La pratica verrà chiusa senza creare una prossima azione.
+                  La pratica verrÃ  chiusa senza creare una prossima azione.
                 </div>
               )}
             </div>

@@ -83,17 +83,28 @@
   transition: 0.5s ease;
 }
 
+.login-box .input-box input::placeholder {
+  color: transparent;
+}
+
 .login-box .input-box input:focus {
   border-color: #0ef;
 }
 
-.login-box .input-box input:valid ~ label,
+.login-box .input-box input:not(:placeholder-shown) ~ label,
+.login-box .input-box input:-webkit-autofill ~ label,
 .login-box .input-box input:focus ~ label {
   top: -10px;
   font-size: 0.8em;
   background: #1f293a;
   padding: 0 6px;
   color: #0ef;
+}
+
+.login-box .input-box input:-webkit-autofill {
+  -webkit-text-fill-color: #fff;
+  -webkit-box-shadow: 0 0 0 1000px #1f293a inset;
+  box-shadow: 0 0 0 1000px #1f293a inset;
 }
 
 .login-box .input-box label {

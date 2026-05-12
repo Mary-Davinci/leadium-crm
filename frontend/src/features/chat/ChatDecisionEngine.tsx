@@ -116,7 +116,7 @@ export function ChatDecisionEngine({
         <div className="chat-contact-meta">
           <div className="meta-row">
             <span>Calendario</span>
-            <strong>Compleanno: -</strong>
+            <strong>data di nascita : -</strong>
           </div>
           <div className="meta-row">
             <span>Lingua</span>
