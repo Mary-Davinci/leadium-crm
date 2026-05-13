@@ -1,16 +1,13 @@
-import { KeyboardEvent, useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
+import { getAuthUser } from "../lib/auth";
 import { buildPracticeUrl, getPracticeFocusFromTask, getPracticeUrlOptionsFromTask } from "../features/practices/practice-links";
 import {
   getDashboardCache,
   getTaskBoardCache,
-  invalidateDashboardCache,
-  invalidateTaskBoardCache,
   isDashboardCacheFresh,
   isTaskBoardCacheFresh,
-  patchDashboardTaskItemStatus,
-  patchTaskStatusInBoard,
   setDashboardCache,
   setTaskBoardCache
 } from "../store/crm-store";
@@ -56,13 +53,6 @@ function IconPayment() {
     </svg>
   );
 }
-
-type Kpi = {
-  open: number;
-  today: number;
-  overdue: number;
-  done: number;
-};
 
 type Lead = {
   id: string;
@@ -114,18 +104,6 @@ type TaskBoardPayload = {
 
 type QuickFilter = "all" | "today" | "documents" | "payments";
 
-type PracticePreview = Lead & {
-  primaryTask: Task;
-  lane: "overdue" | "today" | "planned" | "done";
-  laneLabel: string;
-  kindLabel: string;
-  actionLabel: string;
-  nextActionAt: string;
-  statusClass: "new" | "ok" | "warn" | "success" | "neutral";
-  priorityClass: "high" | "medium" | "low";
-  priorityReason: string;
-};
-
 function includesAny(value: string, terms: string[]) {
   const normalized = String(value || "").toLowerCase();
   return terms.some((term) => normalized.includes(term));
@@ -164,16 +142,33 @@ function getTaskKindLabel(kind: string) {
   return "Task operativo";
 }
 
-function getLaneLabel(lane: ReturnType<typeof getTaskLane>) {
-  if (lane === "overdue") return "Scaduto";
-  if (lane === "today") return "Oggi";
-  if (lane === "done") return "Completato";
-  return "Pianificato";
+function buildFocusQueueTitle(task: Task, lead?: Lead | null) {
+  const title = String(task.title || "").trim();
+  const fullName = String(lead?.fullName || "").trim();
+  if (!fullName) return title || "Task operativo";
+  if (title.toLowerCase().includes(fullName.toLowerCase())) return title;
+  return `${title} ${fullName}`;
+}
+
+function isTodayDate(value?: string | null) {
+  if (!value) return false;
+  const date = new Date(value);
+  const now = new Date();
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+function taskMatches(task: Task, terms: string[]) {
+  return includesAny(`${task.kind} ${task.title} ${task.description || ""}`, terms);
 }
 
 export function DashboardPage() {
   const navigate = useNavigate();
-  const [kpi, setKpi] = useState<Kpi | null>(null);
+  const authUser = getAuthUser();
+  const isAdminView = authUser?.role === "admin" || authUser?.role === "super_admin";
   const [recent, setRecent] = useState<Lead[]>([]);
   const [inbox, setInbox] = useState<InboxPayload | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -181,6 +176,8 @@ export function DashboardPage() {
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [syncing, setSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [opsPulse, setOpsPulse] = useState(false);
+  const [opsSnapshot, setOpsSnapshot] = useState("");
 
   async function load() {
     const dashboardCache = getDashboardCache();
@@ -188,7 +185,6 @@ export function DashboardPage() {
     const snapshotLoadedAt = Math.max(dashboardCache?.loadedAt || 0, boardCache?.loadedAt || 0);
 
     if (dashboardCache?.data) {
-      setKpi(dashboardCache.data.kpi);
       setInbox(dashboardCache.data.inbox);
     }
     if (boardCache?.data) {
@@ -210,7 +206,7 @@ export function DashboardPage() {
       api<TaskBoardPayload>("/api/tasks/board")
     ]);
     const boardTasks = Array.isArray(boardData?.tasks) ? boardData.tasks : [];
-    const kpiData: Kpi = {
+    const kpiData = {
       open: boardTasks.filter((task) => task.status === "open").length,
       today: boardTasks.filter((task) => task.status === "open" && getTaskLane(task) === "today").length,
       overdue: boardTasks.filter((task) => task.status === "open" && getTaskLane(task) === "overdue").length,
@@ -219,7 +215,6 @@ export function DashboardPage() {
 
     setDashboardCache(kpiData, inboxData);
     setTaskBoardCache(boardTasks, Array.isArray(boardData?.leads) ? boardData.leads : []);
-    setKpi(kpiData);
     setInbox(inboxData);
     setRecent((Array.isArray(boardData?.leads) ? boardData.leads : []).slice(0, 12));
     setTasks(boardTasks);
@@ -234,90 +229,100 @@ export function DashboardPage() {
     });
   }, []);
 
-  async function completeTask(taskId?: string) {
-    if (!taskId) return;
-    const nextUpdatedAt = new Date().toISOString();
-    const previousTasks = tasks;
-    setTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, status: "done", updatedAt: nextUpdatedAt } : task)));
-    patchTaskStatusInBoard(taskId, "done");
-    patchDashboardTaskItemStatus(taskId, "done");
-    setLastSyncedAt(Date.now());
-    try {
-      await api(`/api/tasks/${taskId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "done" })
-      });
-      invalidateDashboardCache();
-      invalidateTaskBoardCache();
-      void load();
-    } catch (error) {
-      setTasks(previousTasks);
-      invalidateDashboardCache();
-      invalidateTaskBoardCache();
-      void load();
-      throw error;
-    }
-  }
-
   const openTasks = useMemo(() => tasks.filter((task) => task.status === "open"), [tasks]);
   const todayTasks = useMemo(() => openTasks.filter((task) => getTaskLane(task) === "today"), [openTasks]);
-  const overdueTasks = useMemo(() => openTasks.filter((task) => getTaskLane(task) === "overdue"), [openTasks]);
   const documentTasks = useMemo(() => openTasks.filter((task) => includesAny(task.kind, ["document"])), [openTasks]);
   const paymentTasks = useMemo(() => openTasks.filter((task) => includesAny(task.kind, ["payment", "saldo"])), [openTasks]);
-  const openUrgentTasks = useMemo(() => [...openTasks].sort(compareTasks).slice(0, 5), [openTasks]);
   const leadMap = useMemo(() => new Map(recent.map((lead) => [lead.id, lead])), [recent]);
 
   const searchTerm = search.trim().toLowerCase();
-  const filteredTasks = useMemo(
+
+  const focusQueue = useMemo(
     () =>
-      openTasks.filter((task) => {
-        const lead = task.leadId ? leadMap.get(task.leadId) : undefined;
-        const stack = `${task.title} ${task.description || ""} ${lead?.fullName || ""} ${lead?.phone || ""}`.toLowerCase();
-        if (searchTerm && !stack.includes(searchTerm)) return false;
-        if (quickFilter === "today") return getTaskLane(task) === "today";
-        if (quickFilter === "documents") return includesAny(task.kind, ["document"]);
-        if (quickFilter === "payments") return includesAny(task.kind, ["payment", "saldo"]);
-        return true;
-      }),
+      [...openTasks]
+        .filter((task) => {
+          const lead = task.leadId ? leadMap.get(task.leadId) : undefined;
+          const stack = `${task.title} ${task.description || ""} ${lead?.fullName || ""} ${lead?.phone || ""}`.toLowerCase();
+          if (searchTerm && !stack.includes(searchTerm)) return false;
+          if (quickFilter === "today") return getTaskLane(task) === "today";
+          if (quickFilter === "documents") return includesAny(task.kind, ["document"]);
+          if (quickFilter === "payments") return includesAny(task.kind, ["payment", "saldo"]);
+          return true;
+        })
+        .sort(compareTasks)
+        .slice(0, 4)
+        .map((task) => {
+          const lead = task.leadId ? leadMap.get(task.leadId) : undefined;
+          const lane = getTaskLane(task);
+          const priorityClass = task.priority >= 80 ? "high" : task.priority >= 50 ? "medium" : "low";
+          return {
+            task,
+            lead,
+            lane,
+            priorityClass,
+            title: buildFocusQueueTitle(task, lead),
+            subtitle: task.description || getTaskKindLabel(task.kind)
+          };
+        }),
     [openTasks, leadMap, quickFilter, searchTerm]
   );
 
-  const practices = useMemo(() => {
-    const grouped = new Map<string, Task[]>();
-    filteredTasks.forEach((task) => {
-      if (!task.leadId) return;
-      const bucket = grouped.get(task.leadId) || [];
-      bucket.push(task);
-      grouped.set(task.leadId, bucket);
-    });
+  const operationalMetrics = useMemo(() => {
+    const normalizedActor = String(authUser?.username || authUser?.name || "").trim().toLowerCase();
+    const todayCompleted = tasks.filter((task) => task.status === "done" && isTodayDate(task.updatedAt));
+    const isMine = (task: Task) => {
+      const assigned = String(task.assignedTo || "").trim().toLowerCase();
+      return Boolean(normalizedActor) && Boolean(assigned) && assigned === normalizedActor;
+    };
+    const completedCalls = todayCompleted.filter((task) => taskMatches(task, ["call", "richiamo", "chiamata"]));
+    const completedChats = todayCompleted.filter((task) => taskMatches(task, ["chat", "message", "messaggio", "whatsapp"]));
+    const completedPayments = todayCompleted.filter((task) => taskMatches(task, ["payment", "saldo", "pagamento"]));
+    const operatorCompleted = todayCompleted.filter(isMine);
+    const operatorCalls = completedCalls.filter(isMine).length;
+    const operatorChats = completedChats.filter(isMine).length;
+    const operatorDoneRateBase = operatorCompleted.length + todayTasks.filter(isMine).length;
+    const operatorDoneRate = operatorDoneRateBase ? Math.round((operatorCompleted.length / operatorDoneRateBase) * 100) : 0;
+    const activeTeam = new Set(todayCompleted.map((task) => String(task.assignedTo || "").trim()).filter(Boolean)).size;
+    const flowToday = completedCalls.length + completedChats.length + todayCompleted.length;
+    const loadOpen = openTasks.length;
 
-    return Array.from(grouped.entries())
-      .map(([leadId, taskItems]) => {
-        const lead = leadMap.get(leadId);
-        if (!lead) return null;
-        const orderedTasks = [...taskItems].sort(compareTasks);
-        const primaryTask = orderedTasks[0];
-        const lane = getTaskLane(primaryTask);
-        const priorityClass = primaryTask.priority >= 80 ? "high" : primaryTask.priority >= 50 ? "medium" : "low";
-        return {
-          ...lead,
-          primaryTask,
-          lane,
-          laneLabel: getLaneLabel(lane),
-          kindLabel: getTaskKindLabel(primaryTask.kind),
-          actionLabel: primaryTask.title,
-          nextActionAt: primaryTask.dueAt ? new Date(primaryTask.dueAt).toLocaleDateString("it-IT") : "Da pianificare",
-          statusClass: lane === "overdue" ? "warn" : lane === "today" ? "ok" : "new",
-          priorityClass,
-          priorityReason: lane === "overdue" ? "Scaduto da recuperare" : lane === "today" ? "Da fare oggi" : "Pianificato"
-        } as PracticePreview;
-      })
-      .filter(Boolean)
-      .slice(0, 6) as PracticePreview[];
-  }, [filteredTasks, leadMap]);
+    if (!isAdminView) {
+      return {
+        title: "Stato operativo",
+        subtitle: "Live oggi",
+        items: [
+          { key: "calls", label: "Chiamate effettuate", value: String(operatorCalls), meta: "oggi" },
+          { key: "chats", label: "Chat gestite", value: String(operatorChats), meta: "oggi" },
+          { key: "done", label: "Task completate", value: `${operatorDoneRate}%`, meta: `${operatorCompleted.length} chiuse` }
+        ]
+      };
+    }
 
-  const featuredTask = openUrgentTasks[0] || null;
-  const featuredTaskLead = featuredTask?.leadId ? leadMap.get(featuredTask.leadId) || null : null;
+    return {
+      title: "Stato operativo",
+      subtitle: "Vista team live",
+      items: [
+        { key: "team", label: "Team attivo", value: String(activeTeam), meta: "operatori oggi" },
+        { key: "flow", label: "Flusso live", value: String(flowToday), meta: `${completedCalls.length} chiamate · ${completedChats.length} chat` },
+        { key: "money", label: "Denaro seguito", value: String(completedPayments.length + paymentTasks.length), meta: "pagamenti oggi + aperti" },
+        { key: "load", label: "Carico operativo", value: String(loadOpen), meta: `${todayCompleted.length} task chiuse oggi` }
+      ]
+    };
+  }, [authUser?.name, authUser?.role, authUser?.username, isAdminView, openTasks, paymentTasks.length, tasks, todayTasks]);
+
+  useEffect(() => {
+    const nextSnapshot = JSON.stringify(operationalMetrics.items.map((item) => item.value));
+    if (!opsSnapshot) {
+      setOpsSnapshot(nextSnapshot);
+      return;
+    }
+    if (nextSnapshot !== opsSnapshot) {
+      setOpsSnapshot(nextSnapshot);
+      setOpsPulse(true);
+      const timer = window.setTimeout(() => setOpsPulse(false), 900);
+      return () => window.clearTimeout(timer);
+    }
+  }, [operationalMetrics.items, opsSnapshot]);
 
   function openLeadBoard(lane?: "overdue" | "today" | "planned" | "done") {
     navigate(lane ? `/tasks?lane=${lane}` : "/tasks");
@@ -326,29 +331,6 @@ export function DashboardPage() {
   function openPracticeFromTask(task?: Task | null) {
     if (!task?.leadId) return;
     navigate(buildPracticeUrl(task.leadId, getPracticeFocusFromTask(task), getPracticeUrlOptionsFromTask(task)));
-  }
-
-  function openTaskView(view: "open" | "today" | "overdue" | "done") {
-    if (view === "today") {
-      navigate("/tasks?lane=today");
-      return;
-    }
-    if (view === "overdue") {
-      navigate("/tasks?lane=overdue");
-      return;
-    }
-    if (view === "done") {
-      navigate("/tasks?lane=done");
-      return;
-    }
-    navigate("/tasks");
-  }
-
-  function handlePracticeKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      openLeadBoard();
-    }
   }
 
   const syncLabel = syncing
@@ -365,12 +347,12 @@ export function DashboardPage() {
       <section className="panel dash-op-toolbar">
         <div className="dash-op-toolbar-left">
           <div className="dash-op-search">
-            <span className="dash-op-search-icon">o</span>
+          
             <input
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Cerca..."
+              placeholder="Cerca pratiche, task o cliente..."
               aria-label="Ricerca globale"
             />
           </div>
@@ -378,233 +360,66 @@ export function DashboardPage() {
         </div>
         <div className="dash-op-toolbar-actions">
           <button type="button" className="dash-op-primary" onClick={() => openLeadBoard()}>
-            + Nuovo Cliente
-          </button>
-          <button type="button" className="dash-op-more-btn" aria-label="Altre azioni">
-            ...
+            Apri task board
           </button>
         </div>
       </section>
 
-      <section className="dash-op-quick-row">
-        <button
-          type="button"
-          className={`panel dash-op-quick q-callbacks ${quickFilter === "today" ? "active" : ""}`}
-          onClick={() => setQuickFilter("today")}
-        >
-          <span className="dash-op-quick-icon">
-            <IconCallback />
-          </span>
-          <div className="dash-op-quick-copy">
-            <strong>{todayTasks.length} task di oggi</strong>
-            <small>Include richiami, follow-up e task operativi</small>
-          </div>
-        </button>
-
-        <button type="button" className="panel dash-op-quick q-chat" onClick={() => navigate("/chat")}>
-          <span className="dash-op-quick-icon">
-            <IconChat />
-          </span>
-          <div className="dash-op-quick-copy">
-            <strong>{inbox?.kpis.unreadChats ?? 0} chat da rispondere</strong>
-            <small>Apri inbox e smaltisci le non lette</small>
-          </div>
-        </button>
-
-        <button
-          type="button"
-          className={`panel dash-op-quick q-docs ${quickFilter === "documents" ? "active" : ""}`}
-          onClick={() => setQuickFilter("documents")}
-        >
-          <span className="dash-op-quick-icon">
-            <IconDocument />
-          </span>
-          <div className="dash-op-quick-copy">
-            <strong>{documentTasks.length} task documenti</strong>
-            <small>Documenti da richiedere o verificare</small>
-          </div>
-        </button>
-
-        <button
-          type="button"
-          className={`panel dash-op-quick q-payments ${quickFilter === "payments" ? "active" : ""}`}
-          onClick={() => setQuickFilter("payments")}
-        >
-          <span className="dash-op-quick-icon">
-            <IconPayment />
-          </span>
-          <div className="dash-op-quick-copy">
-            <strong>{paymentTasks.length} pagamenti in scadenza</strong>
-            <small>Task pagamento ancora aperti</small>
-          </div>
-        </button>
-      </section>
-
-      <div className="dash-op-grid">
-        <section className="panel dash-op-practices">
+    
+      <div className="dash-op-top-grid">
+        <section className="panel dash-op-focus-queue">
           <header className="dash-op-head">
-            <h3>Pratiche da gestire</h3>
-            <button type="button" className="dash-op-link primary" onClick={() => setQuickFilter("all")}>
-              Mostra tutte le pratiche
-            </button>
+            <h3>Da fare adesso</h3>
           </header>
-          <p className="dash-op-section-note">Mostra solo lead collegati ad almeno un task aperto.</p>
-
-          <div className="dash-op-practice-list">
-            {practices.map((lead) => (
+          <p className="dash-op-section-note">Leadium ordina per te le priorita immediate. Parti da qui e non perdere tempo a decidere.</p>
+          <div className="dash-op-focus-queue-list">
+            {focusQueue.map(({ task, lane, priorityClass, title, subtitle }) => (
               <article
-                key={lead.id}
-                className={`dash-op-practice-item priority-${lead.priorityClass}`}
+                key={task.id}
+                className={`dash-op-focus-queue-item priority-${priorityClass}`}
                 role="button"
                 tabIndex={0}
-                onKeyDown={handlePracticeKeyDown}
-                onClick={() => openPracticeFromTask(lead.primaryTask)}
-                aria-label={`Apri pratica di ${lead.fullName}`}
+                onClick={() => openPracticeFromTask(task)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openPracticeFromTask(task);
+                  }
+                }}
               >
-                <div className="dash-op-practice-top">
-                  <div className="dash-op-practice-main">
-                    <h4>{lead.fullName}</h4>
-                    <p>{lead.phone}</p>
-                    <small>
-                      Task: {lead.kindLabel} - scadenza {lead.nextActionAt}
-                    </small>
-                  </div>
-                  <div className={`dash-op-practice-status ${lead.statusClass}`}>{lead.laneLabel}</div>
-                </div>
-
-                <div className="dash-op-practice-bottom">
-                  <div className="dash-op-practice-action">
-                    <span className={`priority-dot ${lead.priorityClass}`} />
-                    <span>{lead.actionLabel}</span>
-                    <small>{lead.priorityReason}</small>
-                  </div>
-                  <div className="dash-op-practice-buttons" onClick={(event) => event.stopPropagation()}>
-                    <button type="button" onClick={() => openLeadBoard(lead.lane)}>
-                      Apri task
-                    </button>
-                    <button type="button" className="secondary" onClick={() => openPracticeFromTask(lead.primaryTask)}>
-                      Apri pratica
-                    </button>
-                    <button type="button" onClick={() => navigate("/calls")}>
-                      Chiama
-                    </button>
-                    <button type="button" className="secondary" onClick={() => navigate("/chat")}>
-                      Scrivi
-                    </button>
+                <div className="dash-op-focus-queue-main">
+                  <span className={`dash-op-focus-dot ${priorityClass}`} />
+                  <div className="dash-op-focus-copy">
+                    <strong>{title}</strong>
+                    <small>{subtitle}</small>
                   </div>
                 </div>
+                <div className={`dash-op-focus-pill ${lane}`}>{lane === "overdue" ? "Ora" : lane === "today" ? "Oggi" : "Dopo"}</div>
               </article>
             ))}
-            {!practices.length ? <p className="dash-op-empty">Nessuna pratica collegata a task aperti con i filtri attuali.</p> : null}
+            {!focusQueue.length ? <p className="dash-op-empty">Nessun task operativo in coda al momento.</p> : null}
           </div>
-
-          <button type="button" className="dash-op-link subtle" onClick={() => openLeadBoard()}>
-            Vai alla Task Board completa
-          </button>
         </section>
 
-        <aside className="dash-op-side">
-          <section className="panel dash-op-tasks">
-            <h3>Task urgenti</h3>
-            <div className="dash-op-task-list">
-              {openUrgentTasks.map((task) => (
-                <article
-                  key={task.id}
-                  className={`dash-op-task-item ${getTaskLane(task) === "overdue" ? "overdue" : ""}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openPracticeFromTask(task)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      openPracticeFromTask(task);
-                    }
-                  }}
-                >
-                  <div className="dash-op-task-top">
-                    <strong>{task.title}</strong>
-                    <span>P{task.priority}</span>
-                  </div>
-                  <p>{task.description || "Azione richiesta"}</p>
-                  {task.dueAt ? <small className="dash-op-task-due">Scadenza: {new Date(task.dueAt).toLocaleString("it-IT")}</small> : null}
-                  <div className="dash-op-task-actions" onClick={(event) => event.stopPropagation()}>
-                    {getTaskLane(task) === "overdue" ? <em>Scaduto</em> : <small>{getTaskLane(task) === "today" ? "Oggi" : "In corso"}</small>}
-                    {task.leadId ? (
-                      <button type="button" className="secondary" onClick={() => openPracticeFromTask(task)}>
-                        Apri pratica
-                      </button>
-                    ) : null}
-                    <button type="button" onClick={() => completeTask(task.id)}>
-                      Completa
-                    </button>
-                  </div>
-                </article>
-              ))}
-              {!openUrgentTasks.length ? <p className="dash-op-empty">Nessun task urgente.</p> : null}
+        <aside className={`panel dash-op-ops-panel ${opsPulse ? "pulse" : ""}`}>
+          <header className="dash-op-head dash-op-ops-head">
+            <div>
+              <h3>{operationalMetrics.title}</h3>
+              <p className="dash-op-ops-subtitle">{operationalMetrics.subtitle}</p>
             </div>
-          </section>
-
-          <section className="panel dash-op-mini-kpis">
-            <h3>Stato task</h3>
-            <div className="dash-op-mini-grid">
-              <button type="button" className="kpi-open" onClick={() => openTaskView("open")}>
-                <strong>{kpi?.open ?? openTasks.length}</strong>
-                <span>Task aperti</span>
-              </button>
-              <button type="button" className="kpi-quote" onClick={() => openTaskView("today")}>
-                <strong>{kpi?.today ?? todayTasks.length}</strong>
-                <span>Task oggi</span>
-              </button>
-              <button type="button" className="kpi-win" onClick={() => openTaskView("overdue")}>
-                <strong>{kpi?.overdue ?? overdueTasks.length}</strong>
-                <span>Task scaduti</span>
-              </button>
-              <button type="button" className="kpi-conv" onClick={() => openTaskView("done")}>
-                <strong>{kpi?.done ?? tasks.filter((task) => task.status === "done").length}</strong>
-                <span>Completati</span>
-              </button>
-            </div>
-            <p className="dash-op-mini-foot">Dashboard operativa allineata ai task aperti.</p>
-          </section>
+            <span className="dash-op-live-badge">live</span>
+          </header>
+          <div className={`dash-op-ops-grid ${isAdminView ? "admin" : "operator"}`}>
+            {operationalMetrics.items.map((item) => (
+              <article key={item.key} className="dash-op-ops-card">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <small>{item.meta}</small>
+              </article>
+            ))}
+          </div>
         </aside>
       </div>
-
-      <section className="panel dash-op-focus">
-        <h3>Task piu urgente</h3>
-        {featuredTask ? (
-          <article className="dash-op-focus-card">
-            <div className="dash-op-focus-main">
-              <strong>{featuredTask.title}</strong>
-              <p>{featuredTaskLead ? `${featuredTaskLead.fullName} - ${featuredTaskLead.phone}` : "Task non collegato a una pratica"}</p>
-              <small>Tipo: {getTaskKindLabel(featuredTask.kind)}</small>
-              <small>Scadenza: {featuredTask.dueAt ? new Date(featuredTask.dueAt).toLocaleString("it-IT") : "Da pianificare"}</small>
-              <small>Urgenza: {getLaneLabel(getTaskLane(featuredTask))}</small>
-            </div>
-            <div className="dash-op-focus-actions">
-              {featuredTask.leadId ? (
-                <button type="button" className="primary" onClick={() => openPracticeFromTask(featuredTask)}>
-                  Apri pratica
-                </button>
-              ) : (
-                <button type="button" className="primary" onClick={() => openLeadBoard(getTaskLane(featuredTask))}>
-                  Apri task
-                </button>
-              )}
-              <button type="button" className="secondary" onClick={() => openLeadBoard(getTaskLane(featuredTask))}>
-                Apri task
-              </button>
-              <button type="button" className="secondary" onClick={() => navigate("/calls")}>
-                Chiama
-              </button>
-              <button type="button" className="secondary" onClick={() => navigate("/chat")}>
-                Scrivi
-              </button>
-            </div>
-          </article>
-        ) : (
-          <p className="dash-op-empty">Nessun task urgente al momento.</p>
-        )}
-      </section>
     </div>
   );
 }

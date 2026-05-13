@@ -77,7 +77,14 @@ export default function App() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/pratiche" element={<PratichePage />} />
         <Route path="/pratiche/:id" element={<PraticaDetailPage />} />
-        <Route path="/tasks" element={<LeadBoardPage />} />
+        <Route
+          path="/tasks"
+          element={
+            <RequireAdmin>
+              <LeadBoardPage />
+            </RequireAdmin>
+          }
+        />
         <Route path="/leadboard" element={<LegacyLeadBoardRedirect />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/calls" element={<CallsPage />} />

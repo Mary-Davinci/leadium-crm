@@ -787,9 +787,33 @@
 .pr-drawer-backdrop {
   position: fixed;
   inset: 58px 0 0 0;
-  background: rgba(15, 23, 42, 0.08);
-  backdrop-filter: blur(2px);
+  background:
+    radial-gradient(circle at 18% 22%, rgba(61, 121, 207, 0.12) 0%, rgba(61, 121, 207, 0) 42%),
+    radial-gradient(circle at 82% 30%, rgba(126, 170, 226, 0.1) 0%, rgba(126, 170, 226, 0) 38%),
+    linear-gradient(180deg, rgba(28, 43, 67, 0.08) 0%, rgba(28, 43, 67, 0.14) 100%);
+  backdrop-filter: blur(3px) saturate(1.02);
   z-index: 35;
+  animation: prBackdropFadeIn 0.2s ease, prBackdropDrift 9s ease-in-out infinite alternate;
+}
+
+@keyframes prBackdropFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes prBackdropDrift {
+  0% {
+    background-position: 0% 0%, 100% 0%, 0 0;
+  }
+
+  100% {
+    background-position: 6% 4%, 94% 8%, 0 0;
+  }
 }
 
 .pr-sidebar {
@@ -799,12 +823,12 @@
   width: min(420px, calc(100vw - 40px));
   max-height: min(620px, calc(100vh - 110px));
   overflow: auto;
-  padding: 2px;
-  background: linear-gradient(163deg, #00ff75 0%, #3700ff 100%);
+  padding: 1px;
+  background: linear-gradient(180deg, #dbe8f6 0%, #bfd4ea 100%);
   border-color: transparent;
   border: 0;
   border-radius: 16px;
-  box-shadow: 0 18px 36px rgba(16, 24, 40, 0.16);
+  box-shadow: 0 18px 36px rgba(16, 24, 40, 0.14);
   transition: transform 0.22s ease, opacity 0.22s ease, box-shadow 0.22s ease;
   transform-origin: center center;
   z-index: 40;
@@ -819,11 +843,11 @@
 .pr-sidebar.open {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
-  box-shadow: 0 0 30px 1px rgba(0, 255, 117, 0.2), 0 24px 48px rgba(16, 24, 40, 0.22);
+  box-shadow: 0 10px 28px rgba(46, 102, 183, 0.16), 0 24px 48px rgba(16, 24, 40, 0.18);
 }
 
 .pr-sidebar:hover {
-  box-shadow: 0 0 30px 1px rgba(0, 255, 117, 0.28), 0 24px 48px rgba(16, 24, 40, 0.22);
+  box-shadow: 0 12px 30px rgba(46, 102, 183, 0.18), 0 24px 48px rgba(16, 24, 40, 0.18);
 }
 
 .pr-drawer-shell {
@@ -832,7 +856,8 @@
   padding: 26px 24px;
   margin: 0;
   border-radius: 14px;
-  background: #1a1a1a;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid #dbe7f4;
   transition: opacity 0.24s ease, transform 0.24s ease;
   justify-items: center;
   text-align: center;
@@ -864,12 +889,12 @@
 .pr-drawer-identity h3 {
   margin: 0;
   font-size: 24px;
-  color: #f4f7fb;
+  color: #244061;
 }
 
 .pr-drawer-identity p {
   margin: 6px 0 0;
-  color: #a5b3c7;
+  color: #6880a2;
   font-size: 15px;
   font-weight: 600;
 }
@@ -883,7 +908,7 @@
 
 .pr-drawer-section h4 {
   margin: 0;
-  color: #e8eef8;
+  color: #35557d;
   font-size: 15px;
 }
 
@@ -895,47 +920,48 @@
 }
 
 .pr-drawer-blocker {
-  border: 1px solid rgba(137, 161, 194, 0.16);
+  border: 1px solid #dde7f2;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
+  background: #ffffff;
   padding: 14px;
   display: grid;
   gap: 6px;
+  box-shadow: 0 4px 14px rgba(31, 53, 88, 0.04);
 }
 
 .pr-drawer-blocker span {
-  color: #9dafc7;
+  color: #6c84a4;
   font-size: 13px;
   font-weight: 700;
 }
 
 .pr-drawer-blocker strong {
-  color: #eef4ff;
+  color: #284264;
   font-size: 18px;
   font-weight: 800;
 }
 
 .pr-drawer-blocker.warning {
-  border-color: rgba(255, 115, 115, 0.3);
-  background: linear-gradient(180deg, rgba(255, 89, 89, 0.12), rgba(255, 255, 255, 0.03));
+  border-color: #f1c8cb;
+  background: linear-gradient(180deg, #fff7f7 0%, #fffdfd 100%);
 }
 
 .pr-drawer-blocker.warning strong {
-  color: #ff7b7b;
+  color: #cf4a4a;
 }
 
 .pr-drawer-blocker.ok {
-  border-color: rgba(0, 255, 117, 0.16);
-  background: linear-gradient(180deg, rgba(0, 255, 117, 0.08), rgba(255, 255, 255, 0.03));
+  border-color: #cfe3d7;
+  background: linear-gradient(180deg, #f5fcf8 0%, #ffffff 100%);
 }
 
 .pr-drawer-blocker.ok strong {
-  color: #74efab;
+  color: #2c8a59;
 }
 
 .pr-drawer-empty {
   margin: 0;
-  color: #9dafc7;
+  color: #6f86a7;
   font-size: 14px;
   text-align: center;
 }
@@ -952,20 +978,21 @@
 .pr-drawer-action {
   min-height: 42px;
   border-radius: 12px;
-  border: 1px solid rgba(137, 161, 194, 0.16);
-  background: rgba(255, 255, 255, 0.05);
-  color: #eef4ff;
+  border: 1px solid #d4dfed;
+  background: #ffffff;
+  color: #35557d;
   font-size: 14px;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   text-decoration: none;
+  box-shadow: 0 2px 8px rgba(31, 53, 88, 0.05);
 }
 
 .pr-drawer-action-primary {
-  border-color: rgba(0, 255, 117, 0.18);
-  background: linear-gradient(163deg, #00c85d 0%, #2d4dff 100%);
+  border-color: #2e66b7;
+  background: linear-gradient(180deg, #3d79cf, #2e66b7);
   color: #fff;
 }
 

@@ -5,7 +5,7 @@ import "../styles/layout.css";
 
 const MENU = [
   { to: "/dashboard", label: "Dashboard", icon: "🏠" },
-  { to: "/tasks", label: "Task", icon: "🧾" },
+  { to: "/tasks", label: "Gestione operativa", icon: "🧭" },
   { to: "/pratiche", label: "Pratiche", icon: "🗂" },
   { to: "/chat", label: "Chat", icon: "💬" },
   { to: "/calls", label: "Chiamate", icon: "📞" },
@@ -14,7 +14,7 @@ const MENU = [
 ];
 
 function getTitle(pathname: string) {
-  if (pathname.startsWith("/tasks") || pathname.startsWith("/leadboard")) return "Task";
+  if (pathname.startsWith("/tasks") || pathname.startsWith("/leadboard")) return "Gestione operativa";
   if (pathname.startsWith("/pratiche")) return "Pratiche";
   if (pathname.startsWith("/chat")) return "Chat WhatsApp";
   if (pathname.startsWith("/calls")) return "Contatti / 3CX";
@@ -39,9 +39,8 @@ export function AppLayout() {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const title = getTitle(pathname);
   const roleLabel = getRoleLabel(user?.role);
-  const menuItems = MENU.filter((item) =>
-    item.to === "/users" ? user?.role === "admin" || user?.role === "super_admin" : true
-  );
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const menuItems = MENU.filter((item) => (item.to === "/users" || item.to === "/tasks" ? isAdmin : true));
 
   async function handleLogout() {
     await logout();
@@ -135,5 +134,3 @@ export function AppLayout() {
     </div>
   );
 }
-
-
