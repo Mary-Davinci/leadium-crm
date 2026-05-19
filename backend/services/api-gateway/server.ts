@@ -325,6 +325,7 @@ async function proxyRequest(
 function mapApiRoute(pathname: string) {
   if (pathname === "/api/workflow") return { base: WORKFLOW_URL, path: "/workflow" };
   if (pathname.startsWith("/api/leads")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
+  if (pathname.startsWith("/api/calls")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname.startsWith("/api/tasks")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname === "/api/3cx/webhook") return { base: CALL_URL, path: "/3cx/webhook" };
   if (pathname === "/api/analytics/kpis") return { base: ANALYTICS_URL, path: "/kpis" };

@@ -15,7 +15,7 @@ import {
   normalizePhone,
   saveLead
 } from "../common/leadStore";
-import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listCallLogsByLeadId } from "../common/callStore";
+import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listCallLogs, listCallLogsByLeadId } from "../common/callStore";
 import { createTask, findRecentManualDuplicate, getTaskById, listTasks, listTasksByLeadAndKind, saveTask, TaskRecord } from "../common/taskStore";
 
 const HOST = "0.0.0.0";
@@ -844,6 +844,32 @@ export const server = http.createServer(async (req, res) => {
         tasks: getCompactBoardTasks(tasksRows),
         leads: compactLeadsByContact(leadsRows).map(getBoardLeadSummary)
       });
+    }
+
+    if (method === "GET" && pathname === "/calls") {
+      const [callRows, leadsRows] = await Promise.all([listCallLogs(Number(query.limit || 200)), listLeads()]);
+      const leadById = new Map(leadsRows.map((lead: any) => [String(lead.id || ""), lead]));
+      return sendJson(
+        res,
+        200,
+        callRows.map((call) => {
+          const lead = leadById.get(String(call.leadId || "")) as any;
+          return {
+            ...call,
+            lead: lead
+              ? {
+                  id: lead.id,
+                  fullName: lead.fullName || "",
+                  phone: lead.phone || "",
+                  email: lead.email || "",
+                  status: lead.status || "",
+                  assignedTo: lead.assignedTo || "",
+                  source: lead.source || ""
+                }
+              : null
+          };
+        })
+      );
     }
 
     if (method === "GET" && pathname === "/tasks") {

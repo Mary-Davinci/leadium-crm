@@ -38,6 +38,20 @@ export async function listCallLogsByLeadId(leadId: string) {
   return docs.map((doc) => fromCallDoc(doc)).filter(Boolean) as CallLogRecord[];
 }
 
+export async function listCallLogs(limit = 200) {
+  const safeLimit = Math.max(1, Math.min(Number(limit || 200), 1000));
+  if (!isMongoEnabled()) {
+    const rows = readDb().callLogs || [];
+    return rows
+      .slice()
+      .sort((a: CallLogRecord, b: CallLogRecord) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+      .slice(0, safeLimit);
+  }
+  const db = await getMongoDb();
+  const docs = await db.collection("callLogs").find({}).sort({ startedAt: -1 }).limit(safeLimit).toArray();
+  return docs.map((doc) => fromCallDoc(doc)).filter(Boolean) as CallLogRecord[];
+}
+
 export async function createCallLog(input: Omit<CallLogRecord, "id">) {
   const item: CallLogRecord = {
     id: newId("call"),

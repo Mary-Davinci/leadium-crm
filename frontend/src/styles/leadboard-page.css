@@ -180,7 +180,7 @@
 
 .ops-operator-head {
   padding: 0 12px 6px 16px;
-  color: #627386;
+  color: #666;
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
@@ -188,7 +188,7 @@
 
 .ops-operator-card {
   width: 100%;
-  border: 1px solid #d9dee6;
+  border: 1px solid #dedede;
   border-left-width: 5px;
   border-radius: 8px;
   background: #fff;
@@ -212,7 +212,7 @@
 .ops-operator-card:hover,
 .ops-operator-card.active,
 .ops-operator-card:focus {
-  border-color: #bfc8d4;
+  border-color: #c9c9c9;
   background: #fafafa;
   background-image: none;
   box-shadow: 0 6px 14px rgba(24, 33, 46, 0.08);
@@ -245,21 +245,21 @@
 
 .ops-operator-person strong {
   display: block;
-  color: #1d2b3f;
+  color: #222;
   font-size: 15px;
 }
 
 .ops-operator-person small,
 .ops-last-activity small {
   overflow: hidden;
-  color: #6a7482;
+  color: #6b6b6b;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ops-last-activity strong {
   overflow: hidden;
-  color: #28384c;
+  color: #2e2e2e;
   font-size: 12px;
   font-weight: 800;
   text-overflow: ellipsis;
@@ -290,7 +290,7 @@
 }
 
 .ops-load-cell strong {
-  color: #1c2a3a;
+  color: #222;
   font-size: 22px;
   line-height: 1;
 }
@@ -317,7 +317,7 @@
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
-  background: #eceff3;
+  background: #eeeeee;
 }
 
 .ops-load-track span {
@@ -338,10 +338,10 @@
 .ops-count {
   width: 34px;
   height: 30px;
-  border: 1px solid #d9dee6;
+  border: 1px solid #dedede;
   border-radius: 7px;
   background: #f8f8f8;
-  color: #27384c;
+  color: #333;
   display: grid;
   place-items: center;
   font-size: 13px;

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache } from "../store/crm-store";
+import { build3CXCallUri, clearPending3CXCall, createPending3CXCall } from "../lib/threecx";
+import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache, upsertTaskInBoard } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
+import { Lead as ThreeCXLead } from "../features/practices/pratiche.types";
 import cruiseHeroImage from "../asset/cruise_chatgpt.png";
 import "../styles/pratica-detail-page.css";
 
@@ -80,6 +82,15 @@ type TimelineItem = {
   text: string;
   actor: string;
   createdAt: string;
+};
+
+type TaskDraft = {
+  kind: string;
+  title: string;
+  description: string;
+  assignedTo: string;
+  priority: number;
+  dueAt: string;
 };
 
 type CallLog = {
@@ -399,6 +410,27 @@ function formatDateParts(value?: string) {
   };
 }
 
+function toDateTimeLocalValue(value?: string | Date) {
+  const date = value ? new Date(value) : new Date();
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function buildDefaultTaskDraft(lead: Lead): TaskDraft {
+  const due = new Date();
+  due.setDate(due.getDate() + 1);
+  due.setHours(9, 0, 0, 0);
+  return {
+    kind: "follow_up",
+    title: `Follow-up ${lead.fullName}`,
+    description: `Task operativo creato dal dettaglio pratica per ${lead.fullName}.`,
+    assignedTo: lead.assignedTo || "",
+    priority: 80,
+    dueAt: toDateTimeLocalValue(due)
+  };
+}
+
 function getTimelineDayLabel(value: string) {
   const date = new Date(value);
   const now = new Date();
@@ -518,6 +550,8 @@ export function PraticaDetailPage() {
   const [error, setError] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [noteModalOpen, setNoteModalOpen] = useState(false);
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
   const [noteHistory, setNoteHistory] = useState<NoteEntry[]>([]);
   const [statusDraft, setStatusDraft] = useState("");
   const [assigneeDraft, setAssigneeDraft] = useState("");
@@ -557,23 +591,39 @@ export function PraticaDetailPage() {
     }
   }
 
+  function openTaskModal() {
+    if (!detail?.lead) return;
+    setTaskDraft(buildDefaultTaskDraft(detail.lead));
+    setTaskModalOpen(true);
+  }
+
   async function createTask() {
-    if (!detail?.lead.id) return;
+    if (!detail?.lead.id || !taskDraft) return;
+    const title = taskDraft.title.trim();
+    if (!title) {
+      setError("Inserisci un titolo per il task.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      await api("/api/tasks", {
+      const created = await api<CrmTask>("/api/tasks", {
         method: "POST",
         body: JSON.stringify({
           leadId: detail.lead.id,
-          kind: "follow_up",
-          title: `Follow-up ${detail.lead.fullName}`,
-          description: `Task creato dal dettaglio pratica per ${detail.lead.fullName}.`,
+          kind: taskDraft.kind,
+          title,
+          description: taskDraft.description.trim(),
+          assignedTo: taskDraft.assignedTo.trim(),
           source: "pratica_detail",
-          priority: 80,
-          dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+          priority: Number(taskDraft.priority || 50),
+          dueAt: taskDraft.dueAt ? new Date(taskDraft.dueAt).toISOString() : null
         })
       });
+      upsertTaskInBoard(created);
+      setTaskBoardTasks((current) => [created, ...current.filter((task) => task.id !== created.id)]);
+      setTaskModalOpen(false);
+      setTaskDraft(null);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore creazione task.");
@@ -597,6 +647,18 @@ export function PraticaDetailPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function startCall() {
+    if (!detail?.lead) return;
+    const pendingCall = createPending3CXCall(detail.lead as ThreeCXLead);
+    const uri = build3CXCallUri(detail.lead as ThreeCXLead, pendingCall);
+    if (!uri) {
+      clearPending3CXCall();
+      setError("Numero cliente non disponibile per avviare la chiamata.");
+      return;
+    }
+    window.location.href = uri;
   }
 
   async function updateStatus() {
@@ -932,52 +994,18 @@ export function PraticaDetailPage() {
                 <span className={`pd-priority pd-priority-${priority}`}>{getPriorityLabel(priority)}</span>
               </div>
               <div className="pd-hero-actions">
-                <button type="button" disabled={busy} onClick={registerCall}>
+                <button type="button" disabled={busy} onClick={startCall}>
                   Chiama
                 </button>
                 <button type="button" className="secondary" onClick={() => navigate("/chat")}>
                   Apri chat
                 </button>
-                <button type="button" className="secondary" disabled={busy} onClick={createTask}>
+                <button type="button" className="secondary" disabled={busy} onClick={openTaskModal}>
                   Crea task
                 </button>
                 <button type="button" className="secondary" onClick={() => setNoteModalOpen(true)}>
                   Inserisci nota
                 </button>
-                <details className="pd-hero-more">
-                  <summary>Altre azioni</summary>
-                  <div className="pd-hero-more-menu">
-                    <div className="pd-inline-control pd-inline-control-block">
-                      <select value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)}>
-                        <option value="">Cambia stato...</option>
-                        {nextStatuses.map((status) => (
-                          <option key={status} value={status}>
-                            {status}
-                          </option>
-                        ))}
-                      </select>
-                      <button type="button" className="secondary" disabled={busy || !statusDraft} onClick={updateStatus}>
-                        Applica
-                      </button>
-                    </div>
-                    <div className="pd-inline-control pd-inline-control-block">
-                      <input
-                        list="pd-assignees"
-                        value={assigneeDraft}
-                        onChange={(event) => setAssigneeDraft(event.target.value)}
-                        placeholder="Assegna a..."
-                      />
-                      <datalist id="pd-assignees">
-                        {assignees.map((assignee) => (
-                          <option key={assignee} value={assignee} />
-                        ))}
-                      </datalist>
-                      <button type="button" className="secondary" disabled={busy} onClick={updateAssignee}>
-                        Assegna
-                      </button>
-                    </div>
-                  </div>
-                </details>
               </div>
             </div>
           </section>
@@ -1233,7 +1261,7 @@ export function PraticaDetailPage() {
                               </button>
                             ) : null}
                             {item.status === "pending" ? (
-                              <button type="button" disabled={busy} onClick={registerCall}>
+                              <button type="button" disabled={busy} onClick={startCall}>
                                 Chiama cliente
                               </button>
                             ) : null}
@@ -1292,6 +1320,112 @@ export function PraticaDetailPage() {
               )}
             </section>
           </div>
+
+          {taskModalOpen && taskDraft ? (
+            <div className="pd-note-modal-backdrop" role="presentation" onClick={() => setTaskModalOpen(false)}>
+              <form
+                className="pd-note-modal pd-task-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="pd-task-modal-title"
+                onClick={(event) => event.stopPropagation()}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void createTask();
+                }}
+              >
+                <div className="pd-note-modal-head">
+                  <div>
+                    <h5 id="pd-task-modal-title">Crea task operativo</h5>
+                    <p>Definisci cosa deve fare l'operatore, entro quando e con quale priorità.</p>
+                  </div>
+                  <button type="button" className="secondary" onClick={() => setTaskModalOpen(false)}>
+                    Chiudi
+                  </button>
+                </div>
+
+                <div className="pd-task-form-grid">
+                  <label className="pd-task-field pd-task-field-wide">
+                    <span>Titolo task</span>
+                    <input
+                      value={taskDraft.title}
+                      onChange={(event) => setTaskDraft((current) => (current ? { ...current, title: event.target.value } : current))}
+                      placeholder="Es. Richiamare cliente per saldo"
+                    />
+                  </label>
+
+                  <label className="pd-task-field">
+                    <span>Tipo</span>
+                    <select
+                      value={taskDraft.kind}
+                      onChange={(event) => setTaskDraft((current) => (current ? { ...current, kind: event.target.value } : current))}
+                    >
+                      <option value="follow_up">Follow-up</option>
+                      <option value="call">Richiamo</option>
+                      <option value="document_checklist">Documenti</option>
+                      <option value="payment_checklist">Pagamento</option>
+                      <option value="manual">Manuale</option>
+                    </select>
+                  </label>
+
+                  <label className="pd-task-field">
+                    <span>Assegnato a</span>
+                    <input
+                      list="pd-task-assignees"
+                      value={taskDraft.assignedTo}
+                      onChange={(event) => setTaskDraft((current) => (current ? { ...current, assignedTo: event.target.value } : current))}
+                      placeholder={detail.lead.assignedTo || "Operatore"}
+                    />
+                    <datalist id="pd-task-assignees">
+                      {assignees.map((assignee) => (
+                        <option key={assignee} value={assignee} />
+                      ))}
+                    </datalist>
+                  </label>
+
+                  <label className="pd-task-field">
+                    <span>Priorità</span>
+                    <select
+                      value={taskDraft.priority}
+                      onChange={(event) => setTaskDraft((current) => (current ? { ...current, priority: Number(event.target.value) } : current))}
+                    >
+                      <option value={90}>Alta</option>
+                      <option value={60}>Media</option>
+                      <option value={30}>Bassa</option>
+                    </select>
+                  </label>
+
+                  <label className="pd-task-field">
+                    <span>Scadenza</span>
+                    <input
+                      type="datetime-local"
+                      value={taskDraft.dueAt}
+                      onChange={(event) => setTaskDraft((current) => (current ? { ...current, dueAt: event.target.value } : current))}
+                    />
+                  </label>
+
+                  <label className="pd-task-field pd-task-field-wide">
+                    <span>Descrizione operativa</span>
+                    <textarea
+                      value={taskDraft.description}
+                      onChange={(event) => setTaskDraft((current) => (current ? { ...current, description: event.target.value } : current))}
+                      rows={4}
+                      placeholder="Aggiungi contesto utile per chi prende in carico il task."
+                    />
+                  </label>
+                </div>
+
+                <div className="pd-note-modal-actions">
+                  <button type="button" className="secondary" onClick={() => setTaskModalOpen(false)}>
+                    Annulla
+                  </button>
+                  <button type="submit" disabled={busy || !taskDraft.title.trim()}>
+                    Crea task
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : null}
 
           {noteModalOpen ? (
             <div className="pd-note-modal-backdrop" role="presentation" onClick={() => setNoteModalOpen(false)}>

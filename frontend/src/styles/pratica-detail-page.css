@@ -1141,6 +1141,48 @@
   gap: 8px;
 }
 
+.pd-task-modal {
+  width: min(100%, 680px);
+}
+
+.pd-task-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pd-task-field {
+  display: grid;
+  gap: 6px;
+}
+
+.pd-task-field-wide {
+  grid-column: 1 / -1;
+}
+
+.pd-task-field span {
+  color: #3f5878;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pd-task-field input,
+.pd-task-field select,
+.pd-task-field textarea {
+  width: 100%;
+  border: 1px solid #cfd8e7;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #284266;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.pd-task-field textarea {
+  min-height: 108px;
+  resize: vertical;
+}
+
 .pd-timeline-head {
   display: flex;
   align-items: flex-start;
@@ -1473,6 +1515,14 @@
     width: 100%;
     box-shadow: none;
     margin-top: 8px;
+  }
+
+  .pd-task-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pd-task-field-wide {
+    grid-column: auto;
   }
 
   .pd-grid {
