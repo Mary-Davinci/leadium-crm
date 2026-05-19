@@ -192,6 +192,7 @@
   border-left-width: 5px;
   border-radius: 8px;
   background: #fff;
+  background-image: none;
   color: inherit;
   padding: 10px 12px;
   text-align: left;
@@ -200,11 +201,20 @@
   outline: none;
 }
 
+.content .ops-operator-card,
+.content .ops-operator-card:hover,
+.content .ops-operator-card.active,
+.content .ops-operator-card:focus {
+  background: #fff;
+  background-image: none;
+}
+
 .ops-operator-card:hover,
 .ops-operator-card.active,
 .ops-operator-card:focus {
   border-color: #bfc8d4;
   background: #fafafa;
+  background-image: none;
   box-shadow: 0 6px 14px rgba(24, 33, 46, 0.08);
 }
 

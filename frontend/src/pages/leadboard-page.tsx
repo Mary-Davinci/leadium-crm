@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { getAuthUser } from "../lib/auth";
 import { api } from "../lib/api";
@@ -362,7 +362,6 @@ export function LeadBoardPage() {
                 >
                   <div className="ops-operator-person" role="cell">
                     <strong>{operator.displayName}</strong>
-                    <small>{operator.username}</small>
                   </div>
 
                   <div className="ops-operator-status" role="cell">
