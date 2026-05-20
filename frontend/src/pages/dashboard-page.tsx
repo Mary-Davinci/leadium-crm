@@ -358,12 +358,7 @@ export function DashboardPage() {
           </div>
           <small className={`dash-op-sync ${syncing ? "syncing" : ""}`}>{syncLabel}</small>
         </div>
-        <div className="dash-op-toolbar-actions">
-          <button type="button" className="dash-op-primary" onClick={() => openLeadBoard()}>
-            Apri task board
-          </button>
-        </div>
-      </section>
+              </section>
 
     
       <div className="dash-op-top-grid">
