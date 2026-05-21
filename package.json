@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Workspace CRM Crocieriamo",
   "scripts": {
+    "build": "npm --prefix backend install --include=dev && npm --prefix backend run build",
     "dev": "node scripts/dev.mjs",
     "start": "npm --prefix backend start",
     "dev:backend": "npm --prefix backend run dev",

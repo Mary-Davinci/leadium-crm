@@ -18,6 +18,7 @@
     "dev:whatsapp": "tsx services/whatsapp-service/server.ts"
   },
   "dependencies": {
+    "crm-crocieriamo": "file:..",
     "mongodb": "^6.21.0"
   },
   "devDependencies": {
