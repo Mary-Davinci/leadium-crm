@@ -8,7 +8,7 @@
     "dev": "tsx services/scripts/dev-stack.ts",
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node dist/services/lead-service/task-sync.spec.js",
-    "start": "node dist/services/api-gateway/server.js",
+    "start": "node dist/services/scripts/dev-stack.js",
     "dev:gateway": "tsx services/api-gateway/server.ts",
     "dev:lead": "tsx services/lead-service/server.ts",
     "dev:workflow": "tsx services/workflow-service/server.ts",
