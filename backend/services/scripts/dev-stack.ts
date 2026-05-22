@@ -2,15 +2,16 @@ import "../../loadEnv";
 import path from "path";
 
 const ROOT = path.join(__dirname, "..");
+const runtimeExtension = __filename.endsWith(".js") ? ".js" : ".ts";
 
 const services = [
-  { name: "workflow-service", entry: path.join(ROOT, "workflow-service", "server.ts") },
-  { name: "lead-service", entry: path.join(ROOT, "lead-service", "server.ts") },
-  { name: "call-service", entry: path.join(ROOT, "call-service", "server.ts") },
-  { name: "analytics-service", entry: path.join(ROOT, "analytics-service", "server.ts") },
-  { name: "ingest-service", entry: path.join(ROOT, "ingest-service", "server.ts") },
-  { name: "whatsapp-service", entry: path.join(ROOT, "whatsapp-service", "server.ts") },
-  { name: "api-gateway", entry: path.join(ROOT, "api-gateway", "server.ts") }
+  { name: "workflow-service", entry: path.join(ROOT, "workflow-service", `server${runtimeExtension}`) },
+  { name: "lead-service", entry: path.join(ROOT, "lead-service", `server${runtimeExtension}`) },
+  { name: "call-service", entry: path.join(ROOT, "call-service", `server${runtimeExtension}`) },
+  { name: "analytics-service", entry: path.join(ROOT, "analytics-service", `server${runtimeExtension}`) },
+  { name: "ingest-service", entry: path.join(ROOT, "ingest-service", `server${runtimeExtension}`) },
+  { name: "whatsapp-service", entry: path.join(ROOT, "whatsapp-service", `server${runtimeExtension}`) },
+  { name: "api-gateway", entry: path.join(ROOT, "api-gateway", `server${runtimeExtension}`) }
 ];
 
 for (const service of services) {
