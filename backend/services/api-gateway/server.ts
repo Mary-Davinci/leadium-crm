@@ -566,4 +566,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`api-gateway su http://localhost:${PORT}`);
+  console.log(
+    `[api-gateway] auth config mongoEnabled=${Boolean(process.env.MONGODB_URI)} db=${process.env.MONGODB_DB_NAME || "crocieriamo"} frontend=${FRONTEND_URL}`
+  );
 });

@@ -67,6 +67,14 @@ function hashPassword(password: string) {
   return createHash("sha256").update(`${AUTH_SALT}:${password}`).digest("hex");
 }
 
+function hashPasswordWithoutSalt(password: string) {
+  return createHash("sha256").update(password).digest("hex");
+}
+
+function hashPasswordWithSuffixSalt(password: string) {
+  return createHash("sha256").update(`${password}:${AUTH_SALT}`).digest("hex");
+}
+
 function isSha256Hash(value: unknown) {
   return /^[a-f0-9]{64}$/i.test(String(value || ""));
 }
@@ -135,7 +143,10 @@ async function ensureMongoAuthSetup() {
 
 export async function authenticateUser(identifier: string, password: string): Promise<AuthPublicUser | null> {
   if (!identifier || !password) return null;
-  if (!isMongoEnabled()) return null;
+  if (!isMongoEnabled()) {
+    console.error("[auth] login refused: Mongo disabled or MONGODB_URI missing");
+    return null;
+  }
 
   try {
     await withAuthTimeout(ensureMongoAuthSetup(), "Mongo auth setup");
@@ -158,11 +169,33 @@ export async function authenticateUser(identifier: string, password: string): Pr
       const localPart = identifierLower.split("@")[0] || "";
       if (localPart) user = await users.findOne({ usernameLower: localPart });
     }
-    if (!user) return null;
+    if (!user) {
+      console.warn(`[auth] login denied: user not found for "${identifierLower}"`);
+      return null;
+    }
 
     const expectedHash = hashPassword(password);
+    const legacyHashWithoutSalt = hashPasswordWithoutSalt(password);
+    const legacyHashWithSuffixSalt = hashPasswordWithSuffixSalt(password);
     if (user.passwordHash) {
       if (user.passwordHash !== expectedHash) {
+        const matchesLegacyHash =
+          user.passwordHash === legacyHashWithoutSalt || user.passwordHash === legacyHashWithSuffixSalt;
+        if (matchesLegacyHash) {
+          await users.updateOne(
+            {
+              $or: [
+                { usernameLower: String(user.usernameLower || "").toLowerCase() },
+                { emailLower: String(user.emailLower || "").toLowerCase() }
+              ]
+            },
+            { $set: { passwordHash: expectedHash, updatedAt: new Date().toISOString() }, $unset: { password: "" } }
+          );
+          console.warn(
+            `[auth] migrated legacy password hash for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
+          );
+          return toPublicMongoUser(user);
+        }
         // Legacy/manual recovery path:
         // if a plain password is present, or was accidentally saved in passwordHash,
         // and matches the login password, re-hash it and migrate.
@@ -178,8 +211,14 @@ export async function authenticateUser(identifier: string, password: string): Pr
             },
             { $set: { passwordHash: expectedHash, updatedAt: new Date().toISOString() }, $unset: { password: "" } }
           );
+          console.warn(
+            `[auth] migrated plain-text password storage for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
+          );
           return toPublicMongoUser(user);
         }
+        console.warn(
+          `[auth] login denied: password mismatch for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
+        );
         return null;
       }
       return toPublicMongoUser(user);
@@ -195,11 +234,18 @@ export async function authenticateUser(identifier: string, password: string): Pr
         },
         { $set: { passwordHash: expectedHash, updatedAt: new Date().toISOString() }, $unset: { password: "" } }
       );
+      console.warn(
+        `[auth] migrated password field for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
+      );
       return toPublicMongoUser(user);
     }
 
+    console.warn(
+      `[auth] login denied: no usable password fields for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
+    );
     return null;
-  } catch {
+  } catch (error) {
+    console.error("[auth] login failed with internal error", error);
     return null;
   }
 }
