@@ -110,6 +110,59 @@ function toPublicMongoUser(user: MongoAuthUser): AuthPublicUser {
   };
 }
 
+async function bootstrapAdminUser(users: {
+  updateOne(query: Record<string, unknown>, update: Record<string, unknown>, options?: { upsert?: boolean }): Promise<unknown>;
+}) {
+  const username = String(process.env.AUTH_BOOTSTRAP_ADMIN_USERNAME || "").trim();
+  const email = String(process.env.AUTH_BOOTSTRAP_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.AUTH_BOOTSTRAP_ADMIN_PASSWORD || "").trim();
+  if (!username && !email && !password) return;
+  if (!username || !email || !password) {
+    console.warn("[auth] bootstrap admin skipped: username, email and password are required");
+    return;
+  }
+  if (!email.includes("@")) {
+    console.warn("[auth] bootstrap admin skipped: invalid email");
+    return;
+  }
+  if (password.length < 6) {
+    console.warn("[auth] bootstrap admin skipped: password must be at least 6 characters");
+    return;
+  }
+
+  const role = normalizeRole(process.env.AUTH_BOOTSTRAP_ADMIN_ROLE || "super_admin");
+  const now = new Date().toISOString();
+  const usernameLower = username.toLowerCase();
+  const emailLower = email.toLowerCase();
+  await users.updateOne(
+    {
+      $or: [{ usernameLower }, { emailLower }, { username }, { email }]
+    },
+    {
+      $set: {
+        username,
+        usernameLower,
+        email,
+        emailLower,
+        name: String(process.env.AUTH_BOOTSTRAP_ADMIN_NAME || "Admin").trim() || "Admin",
+        surname: String(process.env.AUTH_BOOTSTRAP_ADMIN_SURNAME || "").trim(),
+        organization: String(process.env.AUTH_BOOTSTRAP_ADMIN_ORGANIZATION || "").trim(),
+        role,
+        passwordHash: hashPassword(password),
+        updatedAt: now
+      },
+      $setOnInsert: {
+        createdAt: now
+      },
+      $unset: {
+        password: ""
+      }
+    },
+    { upsert: true }
+  );
+  console.warn(`[auth] bootstrap admin ensured for "${usernameLower}"`);
+}
+
 async function ensureMongoAuthSetup() {
   if (!isMongoEnabled()) return;
   if (mongoAuthSetupPromise) return mongoAuthSetupPromise;
@@ -137,6 +190,8 @@ async function ensureMongoAuthSetup() {
         { $set: { email: normalizedEmail, emailLower, updatedAt: new Date().toISOString() } }
       );
     }
+
+    await bootstrapAdminUser(users);
   })();
   return mongoAuthSetupPromise;
 }
