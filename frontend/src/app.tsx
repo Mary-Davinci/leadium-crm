@@ -11,6 +11,7 @@ import { ChangePasswordPage } from "./pages/change-password-page";
 import { DashboardPage } from "./pages/dashboard-page";
 import { LeadBoardPage, LegacyLeadBoardRedirect } from "./pages/leadboard-page";
 import { LoginPage } from "./pages/login-page";
+import { LeadImportPage } from "./pages/lead-import-page";
 import { PraticaDetailPage } from "./pages/pratica-detail-page";
 import { PratichePage } from "./pages/pratiche-page";
 import { ProfilePage } from "./pages/profile-page";
@@ -77,6 +78,14 @@ export default function App() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/pratiche" element={<PratichePage />} />
         <Route path="/pratiche/:id" element={<PraticaDetailPage />} />
+        <Route
+          path="/tasks/import"
+          element={
+            <RequireAdmin>
+              <LeadImportPage />
+            </RequireAdmin>
+          }
+        />
         <Route
           path="/tasks"
           element={

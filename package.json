@@ -8,6 +8,11 @@
     "dev": "node scripts/dev.mjs",
     "start": "npm --prefix backend start",
     "dev:backend": "npm --prefix backend run dev",
-    "dev:frontend": "npm --prefix frontend run dev"
+    "dev:frontend": "npm --prefix frontend run dev",
+    "import:leads:dry": "node scripts/import-crocieriamo-leads.mjs",
+    "import:leads": "node scripts/import-crocieriamo-leads.mjs --apply"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
   }
 }

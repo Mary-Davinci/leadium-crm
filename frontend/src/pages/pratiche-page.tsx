@@ -555,7 +555,7 @@ export function PratichePage() {
   async function handleMarkUrgent(lead: Lead) {
     const urgentTag = "URGENTE";
     const currentNotes = String(lead.notes || "").trim();
-    const notes = currentNotes.toLowerCase().includes("urgente") ? currentNotes : `${urgentTag} - ${currentNotes || "Da gestire con prioritÃ  alta."}`;
+    const notes = currentNotes.toLowerCase().includes("urgente") ? currentNotes : `${urgentTag} - ${currentNotes || "Da gestire con priorita alta."}`;
     try {
       await api(`/api/leads/${lead.id}`, {
         method: "PATCH",
@@ -566,7 +566,7 @@ export function PratichePage() {
       setLeads((prev) => prev.map((item) => (item.id === lead.id ? { ...item, notes } : item)));
       setSelectedDetail((prev) => (prev && prev.lead.id === lead.id ? { ...prev, lead: { ...prev.lead, notes } } : prev));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore aggiornamento prioritÃ .");
+      setError(e instanceof Error ? e.message : "Errore aggiornamento priorita.");
     }
   }
 
@@ -900,7 +900,7 @@ export function PratichePage() {
             ))}
           </select>
           <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-            <option value="">Tutte le priorità </option>
+            <option value="">Tutte le priorita</option>
             <option value="alta">Alta</option>
             <option value="media">Media</option>
             <option value="bassa">Bassa</option>
@@ -948,10 +948,10 @@ export function PratichePage() {
           <div className="pr-list-head" aria-hidden="true">
             <span>Priorita</span>
             <span>Cliente</span>
-            <span>Ultimo contatto</span>
+            <span>Contatti</span>
             <span>Prossima azione</span>
-            <span>Scadenza</span>
-            <span>Assegnato</span>
+            <span>SLA</span>
+            <span>Owner</span>
           </div>
           {sortedRows.length ? (
             sortedRows.map((lead) => (
@@ -1005,7 +1005,7 @@ export function PratichePage() {
               <div>
                 <h3>Esito chiamata</h3>
                 <p>
-                  {callModalLead.fullName} Â· {callModalLead.phone || "-"}
+                  {callModalLead.fullName} - {callModalLead.phone || "-"}
                 </p>
               </div>
             </div>
@@ -1035,8 +1035,8 @@ export function PratichePage() {
               {modalAutoFollowUp ? (
                 <div className="pr-call-hint">
                   {callOutcome === "call_back"
-                    ? "Follow-up automatico: verrÃ  impostato un richiamo con la data selezionata."
-                    : "Follow-up automatico: verrÃ  creato un richiamo per domani."}
+                    ? "Follow-up automatico: verra impostato un richiamo con la data selezionata."
+                    : "Follow-up automatico: verra creato un richiamo per domani."}
                 </div>
               ) : !modalClosedOutcome ? (
                 <>
@@ -1061,7 +1061,7 @@ export function PratichePage() {
                 </>
               ) : (
                 <div className="pr-call-hint pr-call-hint-closed">
-                  La pratica verrÃ  chiusa senza creare una prossima azione.
+                  La pratica verra chiusa senza creare una prossima azione.
                 </div>
               )}
             </div>

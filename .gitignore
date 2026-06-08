@@ -25,3 +25,4 @@ npm-debug.log*
 backend/data/*.json
 coverage/
 .DS_Store
+.npm-cache/

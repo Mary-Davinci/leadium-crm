@@ -11,6 +11,7 @@ import {
   resetUserPassword,
   updateUser
 } from "./auth-store";
+import { applyLeadImport, previewLeadImport } from "./lead-import";
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.PORT || 4110);
@@ -416,6 +417,36 @@ const server = http.createServer(async (req, res) => {
       }
       await resetUserPassword(identity, newPassword);
       sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (pathname === "/api/lead-import/preview" && method === "POST") {
+      const session = getSessionFromRequest(req);
+      if (!session) {
+        sendJson(res, 401, { error: "Non autorizzato." });
+        return;
+      }
+      if (!isAdmin(session.user)) {
+        sendJson(res, 403, { error: "Permesso negato." });
+        return;
+      }
+      const body = (await parseJsonBody(req)) as { source?: string; status?: string; leads?: unknown[] };
+      const preview = await previewLeadImport(body);
+      sendJson(res, 200, preview);
+      return;
+    }
+    if (pathname === "/api/lead-import/apply" && method === "POST") {
+      const session = getSessionFromRequest(req);
+      if (!session) {
+        sendJson(res, 401, { error: "Non autorizzato." });
+        return;
+      }
+      if (!isAdmin(session.user)) {
+        sendJson(res, 403, { error: "Permesso negato." });
+        return;
+      }
+      const body = (await parseJsonBody(req)) as { source?: string; status?: string; leads?: unknown[] };
+      const result = await applyLeadImport(body, session.user.username || "excel_import");
+      sendJson(res, 200, result);
       return;
     }
     if (pathname === "/api/users" && method === "GET") {

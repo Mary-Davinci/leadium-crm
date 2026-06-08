@@ -109,6 +109,10 @@ function includesAny(value: string, terms: string[]) {
   return terms.some((term) => normalized.includes(term));
 }
 
+function normalizeActorKey(value?: string | null) {
+  return String(value || "").trim().toLocaleLowerCase("it");
+}
+
 function getTaskLane(task: Task): "overdue" | "today" | "planned" | "done" {
   if (task.status === "done") return "done";
   const now = new Date();
@@ -188,7 +192,7 @@ export function DashboardPage() {
       setInbox(dashboardCache.data.inbox);
     }
     if (boardCache?.data) {
-      setRecent(boardCache.data.leads.slice(0, 12));
+      setRecent(boardCache.data.leads);
       setTasks(boardCache.data.tasks);
     }
     if (snapshotLoadedAt) {
@@ -216,7 +220,7 @@ export function DashboardPage() {
     setDashboardCache(kpiData, inboxData);
     setTaskBoardCache(boardTasks, Array.isArray(boardData?.leads) ? boardData.leads : []);
     setInbox(inboxData);
-    setRecent((Array.isArray(boardData?.leads) ? boardData.leads : []).slice(0, 12));
+    setRecent(Array.isArray(boardData?.leads) ? boardData.leads : []);
     setTasks(boardTasks);
     setLastSyncedAt(Date.now());
     setSyncing(false);
@@ -229,17 +233,45 @@ export function DashboardPage() {
     });
   }, []);
 
+  const actorKeys = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [authUser?.username, authUser?.name, authUser?.email]
+            .map((value) => normalizeActorKey(value))
+            .filter(Boolean)
+        )
+      ),
+    [authUser?.email, authUser?.name, authUser?.username]
+  );
+
+  const isOwnedByCurrentUser = useMemo(
+    () => (assignedTo?: string | null) => {
+      const assignedKey = normalizeActorKey(assignedTo);
+      return Boolean(assignedKey) && actorKeys.includes(assignedKey);
+    },
+    [actorKeys]
+  );
+
+  const visibleTasks = useMemo(
+    () => (isAdminView ? tasks : tasks.filter((task) => isOwnedByCurrentUser(task.assignedTo))),
+    [isAdminView, isOwnedByCurrentUser, tasks]
+  );
+  const visibleLeads = useMemo(
+    () => (isAdminView ? recent : recent.filter((lead) => isOwnedByCurrentUser(lead.assignedTo))),
+    [isAdminView, isOwnedByCurrentUser, recent]
+  );
   const openTasks = useMemo(() => tasks.filter((task) => task.status === "open"), [tasks]);
-  const todayTasks = useMemo(() => openTasks.filter((task) => getTaskLane(task) === "today"), [openTasks]);
-  const documentTasks = useMemo(() => openTasks.filter((task) => includesAny(task.kind, ["document"])), [openTasks]);
+  const visibleOpenTasks = useMemo(() => visibleTasks.filter((task) => task.status === "open"), [visibleTasks]);
+  const visibleTodayTasks = useMemo(() => visibleOpenTasks.filter((task) => getTaskLane(task) === "today"), [visibleOpenTasks]);
   const paymentTasks = useMemo(() => openTasks.filter((task) => includesAny(task.kind, ["payment", "saldo"])), [openTasks]);
-  const leadMap = useMemo(() => new Map(recent.map((lead) => [lead.id, lead])), [recent]);
+  const leadMap = useMemo(() => new Map(visibleLeads.map((lead) => [lead.id, lead])), [visibleLeads]);
 
   const searchTerm = search.trim().toLowerCase();
 
   const focusQueue = useMemo(
     () =>
-      [...openTasks]
+      [...visibleOpenTasks]
         .filter((task) => {
           const lead = task.leadId ? leadMap.get(task.leadId) : undefined;
           const stack = `${task.title} ${task.description || ""} ${lead?.fullName || ""} ${lead?.phone || ""}`.toLowerCase();
@@ -264,24 +296,19 @@ export function DashboardPage() {
             subtitle: task.description || getTaskKindLabel(task.kind)
           };
         }),
-    [openTasks, leadMap, quickFilter, searchTerm]
+    [visibleOpenTasks, leadMap, quickFilter, searchTerm]
   );
 
   const operationalMetrics = useMemo(() => {
-    const normalizedActor = String(authUser?.username || authUser?.name || "").trim().toLowerCase();
     const todayCompleted = tasks.filter((task) => task.status === "done" && isTodayDate(task.updatedAt));
-    const isMine = (task: Task) => {
-      const assigned = String(task.assignedTo || "").trim().toLowerCase();
-      return Boolean(normalizedActor) && Boolean(assigned) && assigned === normalizedActor;
-    };
+    const visibleCompletedToday = visibleTasks.filter((task) => task.status === "done" && isTodayDate(task.updatedAt));
     const completedCalls = todayCompleted.filter((task) => taskMatches(task, ["call", "richiamo", "chiamata"]));
     const completedChats = todayCompleted.filter((task) => taskMatches(task, ["chat", "message", "messaggio", "whatsapp"]));
     const completedPayments = todayCompleted.filter((task) => taskMatches(task, ["payment", "saldo", "pagamento"]));
-    const operatorCompleted = todayCompleted.filter(isMine);
-    const operatorCalls = completedCalls.filter(isMine).length;
-    const operatorChats = completedChats.filter(isMine).length;
-    const operatorDoneRateBase = operatorCompleted.length + todayTasks.filter(isMine).length;
-    const operatorDoneRate = operatorDoneRateBase ? Math.round((operatorCompleted.length / operatorDoneRateBase) * 100) : 0;
+    const operatorCalls = visibleCompletedToday.filter((task) => taskMatches(task, ["call", "richiamo", "chiamata"])).length;
+    const operatorChats = visibleCompletedToday.filter((task) => taskMatches(task, ["chat", "message", "messaggio", "whatsapp"])).length;
+    const operatorDoneRateBase = visibleCompletedToday.length + visibleTodayTasks.length;
+    const operatorDoneRate = operatorDoneRateBase ? Math.round((visibleCompletedToday.length / operatorDoneRateBase) * 100) : 0;
     const activeTeam = new Set(todayCompleted.map((task) => String(task.assignedTo || "").trim()).filter(Boolean)).size;
     const flowToday = completedCalls.length + completedChats.length + todayCompleted.length;
     const loadOpen = openTasks.length;
@@ -293,7 +320,7 @@ export function DashboardPage() {
         items: [
           { key: "calls", label: "Chiamate effettuate", value: String(operatorCalls), meta: "oggi" },
           { key: "chats", label: "Chat gestite", value: String(operatorChats), meta: "oggi" },
-          { key: "done", label: "Task completate", value: `${operatorDoneRate}%`, meta: `${operatorCompleted.length} chiuse` }
+          { key: "done", label: "Task completate", value: `${operatorDoneRate}%`, meta: `${visibleCompletedToday.length} chiuse` }
         ]
       };
     }
@@ -308,7 +335,7 @@ export function DashboardPage() {
         { key: "load", label: "Carico operativo", value: String(loadOpen), meta: `${todayCompleted.length} task chiuse oggi` }
       ]
     };
-  }, [authUser?.name, authUser?.role, authUser?.username, isAdminView, openTasks, paymentTasks.length, tasks, todayTasks]);
+  }, [isAdminView, openTasks, paymentTasks.length, tasks, visibleTasks, visibleTodayTasks]);
 
   useEffect(() => {
     const nextSnapshot = JSON.stringify(operationalMetrics.items.map((item) => item.value));

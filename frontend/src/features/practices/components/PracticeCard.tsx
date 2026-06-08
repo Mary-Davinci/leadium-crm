@@ -3,8 +3,12 @@ import { Lead } from "../pratiche.types";
 import { CrmTask } from "../../../store/crm-store";
 import {
   getNextActionMeta,
+  getMissingDocumentsCount,
   getPriority,
+  getStatusClass,
+  getStatusLabel,
   getSuggestedAction,
+  getTravelLabel,
   urgencyLabels
 } from "../pratiche.utils";
 
@@ -135,6 +139,28 @@ function getAssigneeShortName(value?: string) {
   return `${parts[0]} ${parts[1][0] || ""}.`;
 }
 
+function getSourceLabel(source?: string) {
+  const normalized = String(source || "").trim().toLowerCase();
+  if (!normalized) return "Manuale";
+  if (normalized.includes("whatsapp")) return "WhatsApp";
+  if (normalized.includes("facebook") || normalized.includes("fb")) return "Facebook";
+  if (normalized.includes("instagram") || normalized.includes("ig")) return "Instagram";
+  if (normalized.includes("excel")) return "Import";
+  if (normalized.includes("web") || normalized.includes("modulo")) return "Web";
+  return normalized.length > 18 ? `${normalized.slice(0, 18)}...` : normalized;
+}
+
+function getFallbackActionLabel(lead: Lead, suggestedKind: "call" | "open" | "task") {
+  const status = String(lead.status || "").toLowerCase();
+  const notes = String(lead.notes || "").toLowerCase();
+  if (!lead.nextActionAt) return "Pianifica follow-up";
+  if (status.includes("preventivo")) return "Invia preventivo";
+  if (notes.includes("pagamento") || notes.includes("saldo") || status.includes("pagament")) return "Sollecita pagamento";
+  if (suggestedKind === "call") return "Chiama lead";
+  if (suggestedKind === "task") return "Aggiorna task";
+  return "Apri pratica";
+}
+
 function getLastContactVisual(lead: Lead): MetaVisual {
   const source = String(lead.source || "").toLowerCase();
   if (lead.latestCallOutcome === "no_answer") {
@@ -187,7 +213,6 @@ export function PracticeCard({
   const priority = getPriority(lead);
   const nextMeta = getNextActionMeta(lead.nextActionAt);
   const suggestedAction = getSuggestedAction(lead);
-  const linkedTaskDueText = linkedTask?.dueAt ? new Date(linkedTask.dueAt).toLocaleString("it-IT") : "Da pianificare";
   const hasHighPriorityTask = Boolean(linkedTask && linkedTask.status !== "done" && linkedTask.priority >= 80);
   const linkedTaskKindText = linkedTask
     ? linkedTask.kind.includes("payment") || linkedTask.kind.includes("saldo")
@@ -202,15 +227,25 @@ export function PracticeCard({
               ? "Aggiornamento"
               : "Task operativo"
     : "";
-  const nextActionLabel = linkedTask ? `${linkedTaskKindText}` : suggestedAction.label;
+  const nextActionLabel = linkedTask ? linkedTaskKindText : getFallbackActionLabel(lead, suggestedAction.kind);
   const nextActionMeta = linkedTask ? linkedTask.title : nextMeta.dateText;
   const dueValue = linkedTask?.dueAt || lead.nextActionAt;
   const dueLabel = dueValue ? formatDueShort(dueValue) : "Da pianificare";
   const dueMeta = getDueDeltaLabel(dueValue);
   const assigneeName = lead.assignedTo || "Non assegnato";
+  const assigneeInitials = getAssigneeInitials(assigneeName);
   const lastContact = getLastContactVisual(lead);
   const nextAction = getNextActionVisual(nextActionLabel, nextActionMeta);
   const dueInfo = getDueVisual(dueLabel, dueMeta);
+  const statusLabel = getStatusLabel(lead.status);
+  const statusClass = getStatusClass(lead.status);
+  const sourceLabel = getSourceLabel(lead.source);
+  const travelLabel = getTravelLabel(lead);
+  const documentsMissing = getMissingDocumentsCount(lead);
+  const isUrgent = String(lead.notes || "").toLowerCase().includes("urgente");
+  const primaryContact = lead.phone || lead.email || "-";
+  const secondaryContact = lead.phone && lead.email ? lead.email : `${lastContact.label} - ${lastContact.meta}`;
+  const priorityMeta = hasHighPriorityTask ? "Task urgente" : documentsMissing ? `${documentsMissing} doc. da ricevere` : "In coda";
   const clickTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -251,15 +286,20 @@ export function PracticeCard({
           <span className={`pr-priority-dot pr-priority-dot-${priority}`} aria-hidden="true" />
           <div className="pr-cell-stack">
             <strong className={`pr-priority-label pr-priority-label-${priority}`}>{urgencyLabels[priority]}</strong>
+            <span className="pr-priority-meta">{priorityMeta}</span>
           </div>
         </div>
 
         <div className="pr-cell pr-cell-client">
-          <span className="pr-client-link">
-            {lead.fullName}
-          </span>
+          <span className="pr-client-link">{lead.fullName}</span>
           <div className="pr-cell-stack">
-            <span>{lead.phone || "-"}</span>
+            <span className="pr-client-travel">{travelLabel}</span>
+          </div>
+          <div className="pr-inline-tags">
+            <span className={`pr-status ${statusClass}`}>{statusLabel}</span>
+            <span className="pr-source-badge">{sourceLabel}</span>
+            {documentsMissing ? <span className="pr-documents-badge">{documentsMissing} doc</span> : null}
+            {isUrgent ? <span className="pr-urgent-tag">Urgente</span> : null}
           </div>
         </div>
 
@@ -268,8 +308,8 @@ export function PracticeCard({
             <CellIcon kind={lastContact.icon} />
           </span>
           <div className="pr-cell-stack">
-            <strong>{lastContact.label}</strong>
-            <span>{lastContact.meta}</span>
+            <strong>{primaryContact}</strong>
+            <span>{secondaryContact}</span>
           </div>
         </div>
 
@@ -283,11 +323,15 @@ export function PracticeCard({
         <div className={`pr-cell pr-cell-text pr-cell-tone-${dueInfo.tone}`}>
           <div className="pr-cell-stack">
             <strong>{dueInfo.label}</strong>
+            <span className="pr-due-meta">{dueInfo.meta}</span>
           </div>
         </div>
 
         <div className="pr-cell pr-cell-assigned">
           <div className="pr-assignee">
+            <span className="pr-assignee-avatar" aria-hidden="true">
+              {assigneeInitials}
+            </span>
             <span className="pr-assignee-name">{getAssigneeShortName(assigneeName)}</span>
           </div>
         </div>

@@ -14,6 +14,7 @@ const MENU = [
 ];
 
 function getTitle(pathname: string) {
+  if (pathname.startsWith("/tasks/import")) return "Importa lead";
   if (pathname.startsWith("/tasks") || pathname.startsWith("/leadboard")) return "Gestione operativa";
   if (pathname.startsWith("/pratiche")) return "Pratiche";
   if (pathname.startsWith("/chat")) return "Chat WhatsApp";
