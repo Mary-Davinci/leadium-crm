@@ -12,10 +12,35 @@
 
 .pr-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 2px 0 0;
+}
+
+.pr-header-groups {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pr-header-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.pr-header-copy h2 {
+  margin: 0;
+  color: #213b62;
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.pr-header-copy p {
+  margin: 0;
+  color: #6d83a3;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .pr-smart-badges {
@@ -103,6 +128,10 @@
   grid-template-columns: minmax(260px, 1.35fr) 160px 180px 160px 132px;
   gap: 12px;
   align-items: center;
+}
+
+.pr-filters-compact {
+  grid-template-columns: minmax(260px, 1.45fr) 180px 160px 132px;
 }
 
 .pr-filters input,
@@ -922,6 +951,10 @@
 }
 
 @media (max-width: 1180px) {
+  .pr-header {
+    align-items: stretch;
+  }
+
   .pr-filters {
     grid-template-columns: 1fr 1fr;
   }
@@ -941,6 +974,14 @@
 }
 
 @media (max-width: 820px) {
+  .pr-header {
+    align-items: stretch;
+  }
+
+  .pr-smart-badges {
+    gap: 8px;
+  }
+
   .pr-filters,
   .pr-filters-extra {
     grid-template-columns: 1fr;

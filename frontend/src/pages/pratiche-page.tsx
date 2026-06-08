@@ -6,6 +6,7 @@ import { buildPracticeUrl } from "../features/practices/practice-links";
 import { CallOutcome, Lead, LeadDetail, Workflow } from "../features/practices/pratiche.types";
 import { getPriority, getPriorityScore, getSmartBucket, includesAny, normalizeLead } from "../features/practices/pratiche.utils";
 import { api } from "../lib/api";
+import { getAuthUser } from "../lib/auth";
 import { build3CXCallUri, clearPending3CXCall, createPending3CXCall } from "../lib/threecx";
 import {
   CrmTask,
@@ -117,7 +118,10 @@ function writePracticeDetailCacheStorage(leadId: string, data: LeadDetail) {
 export function PratichePage() {
   const defaultFollowUpAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
   const navigate = useNavigate();
-  const [smartFilter, setSmartFilter] = useState<"" | "overdue" | "today" | "planned" | "new">("");
+  const authUser = getAuthUser();
+  const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
+  const [scopeFilter, setScopeFilter] = useState<"mine" | "all">("mine");
+  const [focusFilter, setFocusFilter] = useState<"" | "overdue" | "today" | "callbacks" | "documents" | "payments">("");
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
@@ -149,6 +153,24 @@ export function PratichePage() {
     () => `search=${debouncedSearch.trim().toLowerCase()}|status=${String(statusFilter || "").toLowerCase()}`,
     [debouncedSearch, statusFilter]
   );
+
+  function normalizeIdentity(value?: string | null) {
+    return String(value || "").trim().toLocaleLowerCase("it");
+  }
+
+  const currentUserKeys = useMemo(() => {
+    const keys = new Set<string>();
+    const fullName = [String(authUser?.name || "").trim(), String(authUser?.surname || "").trim()].filter(Boolean).join(" ").trim();
+    [authUser?.username, authUser?.name, authUser?.email, fullName].forEach((value) => {
+      const normalized = normalizeIdentity(value);
+      if (normalized) keys.add(normalized);
+    });
+    return keys;
+  }, [authUser]);
+
+  function isLeadAssignedToCurrentUser(lead: Lead) {
+    return currentUserKeys.has(normalizeIdentity(lead.assignedTo));
+  }
 
   function compareTasks(a: CrmTask, b: CrmTask) {
     const getLaneWeight = (task: CrmTask) => {
@@ -698,11 +720,18 @@ export function PratichePage() {
     return "planned" as const;
   };
 
+  const getBaseScopeRows = (input: Lead[]) =>
+    input.filter((lead) => {
+      if (assignedFilter && String(lead.assignedTo || "") !== assignedFilter) return false;
+      if (scopeFilter === "mine" && !isLeadAssignedToCurrentUser(lead)) return false;
+      return true;
+    });
+
+  const scopedRows = useMemo(() => getBaseScopeRows(leads), [leads, assignedFilter, scopeFilter, currentUserKeys]);
+
   const rows = useMemo(
     () =>
-      leads.filter((lead) => {
-        if (assignedFilter && String(lead.assignedTo || "") !== assignedFilter) return false;
-
+      scopedRows.filter((lead) => {
         const priority = getPriority(lead);
         if (priorityFilter && priority !== priorityFilter) return false;
         if (callOutcomeFilter && String(lead.latestCallOutcome || "") !== callOutcomeFilter) return false;
@@ -710,10 +739,14 @@ export function PratichePage() {
         const stack = `${lead.status} ${lead.notes}`.toLowerCase();
         if (documentFilter && !includesAny(stack, ["document", "doc"])) return false;
         if (paymentFilter && !includesAny(stack, ["saldo", "pagament", "rata", "scaden"])) return false;
-        if (smartFilter && getOperationalBucket(lead) !== smartFilter) return false;
+        if (focusFilter === "overdue" && getOperationalBucket(lead) !== "overdue") return false;
+        if (focusFilter === "today" && getOperationalBucket(lead) !== "today") return false;
+        if (focusFilter === "callbacks" && !includesAny(`${lead.status} ${lead.notes} ${lead.latestCallOutcome || ""}`.toLowerCase(), ["richiam", "call_back"])) return false;
+        if (focusFilter === "documents" && !includesAny(stack, ["document", "doc"])) return false;
+        if (focusFilter === "payments" && !includesAny(stack, ["saldo", "pagament", "rata", "scaden"])) return false;
         return true;
       }),
-    [leads, assignedFilter, priorityFilter, callOutcomeFilter, documentFilter, paymentFilter, smartFilter, primaryTaskByLeadId]
+    [scopedRows, priorityFilter, callOutcomeFilter, documentFilter, paymentFilter, focusFilter, primaryTaskByLeadId]
   );
 
   const sortedRows = useMemo(() => {
@@ -753,13 +786,21 @@ export function PratichePage() {
     });
   }, [rows, primaryTaskByLeadId]);
 
+  const scopeCounts = useMemo(() => {
+    const mine = leads.filter((lead) => isLeadAssignedToCurrentUser(lead)).length;
+    return { mine, all: leads.length };
+  }, [leads, currentUserKeys]);
+
   const smartCounts = useMemo(() => {
-    const overdue = leads.filter((lead) => getOperationalBucket(lead) === "overdue").length;
-    const today = leads.filter((lead) => getOperationalBucket(lead) === "today").length;
-    const planned = leads.filter((lead) => getOperationalBucket(lead) === "planned").length;
-    const fresh = leads.filter((lead) => getOperationalBucket(lead) === "new").length;
-    return { overdue, today, planned, fresh };
-  }, [leads, primaryTaskByLeadId]);
+    const overdue = scopedRows.filter((lead) => getOperationalBucket(lead) === "overdue").length;
+    const today = scopedRows.filter((lead) => getOperationalBucket(lead) === "today").length;
+    const callbacks = scopedRows.filter((lead) =>
+      includesAny(`${lead.status} ${lead.notes} ${lead.latestCallOutcome || ""}`.toLowerCase(), ["richiam", "call_back"])
+    ).length;
+    const documents = scopedRows.filter((lead) => includesAny(`${lead.status} ${lead.notes}`.toLowerCase(), ["document", "doc"])).length;
+    const payments = scopedRows.filter((lead) => includesAny(`${lead.status} ${lead.notes}`.toLowerCase(), ["saldo", "pagament", "rata", "scaden"])).length;
+    return { overdue, today, callbacks, documents, payments };
+  }, [scopedRows, primaryTaskByLeadId]);
 
   useEffect(() => {
     if (!selectedLeadId) return;
@@ -829,51 +870,82 @@ export function PratichePage() {
   const modalAutoFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
   const modalClosedOutcome = callOutcome === "not_interested";
   const isQuickDetailVisible = Boolean(selectedLeadId);
+  const pageTitle = scopeFilter === "all" && isAdmin ? "Pratiche del team" : "Il mio lavoro";
+  const pageSubtitle =
+    scopeFilter === "all" && isAdmin
+      ? "Monitora il carico operativo del team e intervieni dove serve."
+      : "Qui trovi le pratiche assegnate a te e le priorita su cui muoverti oggi.";
 
   return (
     <div className="pr-page">
       <section className="panel pr-main">
         <header className="pr-header">
-          <div className="pr-smart-badges">
+          <div className="pr-header-groups">
+            <div className="pr-header-copy">
+              <h2>{pageTitle}</h2>
+              <p>{pageSubtitle}</p>
+            </div>
+
+            <div className="pr-smart-badges">
               <button
                 type="button"
-                className={`pr-smart-badge all ${smartFilter === "" ? "active" : ""}`}
-                onClick={() => setSmartFilter("")}
+                className={`pr-smart-badge all ${scopeFilter === "mine" ? "active" : ""}`}
+                onClick={() => setScopeFilter("mine")}
               >
-                Tutte <span>{leads.length}</span>
+                Le mie <span>{scopeCounts.mine}</span>
+              </button>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  className={`pr-smart-badge all ${scopeFilter === "all" ? "active" : ""}`}
+                  onClick={() => setScopeFilter("all")}
+                >
+                  Tutte <span>{scopeCounts.all}</span>
+                </button>
+              ) : null}
+            </div>
+
+            <div className="pr-smart-badges">
+              <button
+                type="button"
+                className={`pr-smart-badge overdue ${focusFilter === "overdue" ? "active" : ""}`}
+                onClick={() => setFocusFilter((current) => (current === "overdue" ? "" : "overdue"))}
+              >
+                In ritardo <span>{smartCounts.overdue}</span>
               </button>
               <button
                 type="button"
-                className={`pr-smart-badge overdue ${smartFilter === "overdue" ? "active" : ""}`}
-                onClick={() => setSmartFilter((current) => (current === "overdue" ? "" : "overdue"))}
-              >
-                Urgenti <span>{smartCounts.overdue}</span>
-              </button>
-              <button
-                type="button"
-                className={`pr-smart-badge today ${smartFilter === "today" ? "active" : ""}`}
-                onClick={() => setSmartFilter((current) => (current === "today" ? "" : "today"))}
+                className={`pr-smart-badge today ${focusFilter === "today" ? "active" : ""}`}
+                onClick={() => setFocusFilter((current) => (current === "today" ? "" : "today"))}
               >
                 Oggi <span>{smartCounts.today}</span>
               </button>
               <button
                 type="button"
-                className={`pr-smart-badge planned ${smartFilter === "planned" ? "active" : ""}`}
-                onClick={() => setSmartFilter((current) => (current === "planned" ? "" : "planned"))}
+                className={`pr-smart-badge planned ${focusFilter === "callbacks" ? "active" : ""}`}
+                onClick={() => setFocusFilter((current) => (current === "callbacks" ? "" : "callbacks"))}
               >
-                Pianificate <span>{smartCounts.planned}</span>
+                Da richiamare <span>{smartCounts.callbacks}</span>
               </button>
               <button
                 type="button"
-                className={`pr-smart-badge fresh ${smartFilter === "new" ? "active" : ""}`}
-                onClick={() => setSmartFilter((current) => (current === "new" ? "" : "new"))}
+                className={`pr-smart-badge fresh ${focusFilter === "documents" ? "active" : ""}`}
+                onClick={() => setFocusFilter((current) => (current === "documents" ? "" : "documents"))}
               >
-                Nuove <span>{smartCounts.fresh}</span>
+                Documenti <span>{smartCounts.documents}</span>
               </button>
+              <button
+                type="button"
+                className={`pr-smart-badge fresh ${focusFilter === "payments" ? "active" : ""}`}
+                onClick={() => setFocusFilter((current) => (current === "payments" ? "" : "payments"))}
+              >
+                Pagamenti <span>{smartCounts.payments}</span>
+              </button>
+            </div>
           </div>
         </header>
 
-        <div className="pr-filters">
+        <div className={`pr-filters ${isAdmin ? "" : "pr-filters-compact"}`}>
           <label className="pr-search-field">
             <span className="pr-search-icon" aria-hidden="true">
               <svg viewBox="0 0 16 16">
@@ -891,14 +963,16 @@ export function PratichePage() {
               </option>
             ))}
           </select>
-          <select value={assignedFilter} onChange={(e) => setAssignedFilter(e.target.value)}>
-            <option value="">Tutti gli assegnati</option>
-            {assignees.map((assignee) => (
-              <option key={assignee} value={assignee}>
-                {assignee}
-              </option>
-            ))}
-          </select>
+          {isAdmin ? (
+            <select value={assignedFilter} onChange={(e) => setAssignedFilter(e.target.value)}>
+              <option value="">Tutti gli assegnati</option>
+              {assignees.map((assignee) => (
+                <option key={assignee} value={assignee}>
+                  {assignee}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
             <option value="">Tutte le priorita</option>
             <option value="alta">Alta</option>
