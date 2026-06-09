@@ -125,6 +125,8 @@ export function normalizePracticeDocuments(input: any) {
               mimeType: String(attachment?.mimeType || ""),
               size: Number(attachment?.size || 0),
               dataUrl: String(attachment?.dataUrl || ""),
+              storageKey: String(attachment?.storageKey || ""),
+              storageProvider: String(attachment?.storageProvider || ""),
               uploadedAt: attachment?.uploadedAt ? String(attachment.uploadedAt) : new Date().toISOString()
             }))
           : []

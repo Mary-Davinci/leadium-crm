@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
+import { apiUrl } from "../lib/api-url";
+import { clearSession, getAuthToken } from "../lib/auth";
 import { build3CXCallUri, clearPending3CXCall, createPending3CXCall } from "../lib/threecx";
 import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache, upsertTaskInBoard } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
@@ -54,6 +56,8 @@ type PracticeDocumentAttachment = {
   mimeType?: string;
   size?: number;
   dataUrl?: string;
+  storageKey?: string;
+  storageProvider?: string;
   uploadedAt?: string;
 };
 
@@ -155,6 +159,8 @@ function normalizeDocuments(input?: PracticeDocumentsState | null): PracticeDocu
             mimeType: String(attachment.mimeType || ""),
             size: Number(attachment.size || 0),
             dataUrl: String(attachment.dataUrl || ""),
+            storageKey: String(attachment.storageKey || ""),
+            storageProvider: String(attachment.storageProvider || ""),
             uploadedAt: attachment.uploadedAt ? String(attachment.uploadedAt) : new Date().toISOString()
           }))
           : []
@@ -285,6 +291,14 @@ function getDocumentRowState(item: PracticeDocumentItem) {
   return "pending";
 }
 
+type StorageUploadResponse = {
+  attachment: PracticeDocumentAttachment;
+};
+
+type StorageDownloadResponse = {
+  url: string;
+};
+
 function readFileAsAttachment(file: File): Promise<PracticeDocumentAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -300,6 +314,40 @@ function readFileAsAttachment(file: File): Promise<PracticeDocumentAttachment> {
     reader.onerror = () => reject(new Error("Errore lettura file."));
     reader.readAsDataURL(file);
   });
+}
+
+async function uploadDocumentToStorage(leadId: string, documentKey: PracticeDocumentKey, file: File) {
+  const token = getAuthToken();
+  const query = new URLSearchParams({
+    leadId,
+    documentKey,
+    fileName: file.name
+  });
+  const uploadResponse = await fetch(apiUrl(`/api/document-storage/upload?${query.toString()}`), {
+    method: "POST",
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "Content-Type": file.type || "application/octet-stream"
+    },
+    body: file
+  });
+
+  const raw = await uploadResponse.text();
+  let payload: StorageUploadResponse | { error?: string } = {};
+  if (raw) {
+    try {
+      payload = JSON.parse(raw) as StorageUploadResponse | { error?: string };
+    } catch {
+      payload = { error: raw };
+    }
+  }
+
+  if (!uploadResponse.ok) {
+    if (uploadResponse.status === 401) clearSession();
+    throw new Error((payload as { error?: string }).error || "Upload documento non riuscito.");
+  }
+
+  return (payload as StorageUploadResponse).attachment;
 }
 
 function getStatusLabel(status: string) {
@@ -559,6 +607,8 @@ export function PraticaDetailPage() {
   const [documentsDraft, setDocumentsDraft] = useState<PracticeDocumentsState>({ items: DEFAULT_DOCUMENTS });
   const [paymentsDraft, setPaymentsDraft] = useState<PracticePaymentsState>({ items: DEFAULT_PAYMENTS });
   const [expandedDocumentNotes, setExpandedDocumentNotes] = useState<Record<string, boolean>>({});
+  const [uploadingDocuments] = useState<Record<string, boolean>>({});
+  const [uploadedDocuments] = useState<Record<string, boolean>>({});
   const [showOnlyMissingDocuments, setShowOnlyMissingDocuments] = useState(false);
   const [highlightSection, setHighlightSection] = useState<PracticeFocusSection | null>(null);
 
@@ -782,13 +832,21 @@ export function PraticaDetailPage() {
       return;
     }
     try {
-      const attachment = await readFileAsAttachment(file);
+      const attachment = detail?.lead.id
+        ? await uploadDocumentToStorage(detail.lead.id, key, file).catch(async (error) => {
+            if (error instanceof Error && error.message.toLowerCase().includes("storage documenti non configurato")) {
+              return readFileAsAttachment(file);
+            }
+            throw error;
+          })
+        : await readFileAsAttachment(file);
       const nextDocuments = {
         items: documentsDraft.items.map((item) =>
           item.key === key
             ? {
               ...item,
               received: true,
+              verified: true,
               attachments: [...(item.attachments || []), attachment],
               updatedAt: new Date().toISOString()
             }
@@ -802,20 +860,60 @@ export function PraticaDetailPage() {
     }
   }
 
-  function removeDocumentAttachment(key: PracticeDocumentKey, attachmentId: string) {
+  async function openDocumentAttachment(attachment: PracticeDocumentAttachment) {
+    try {
+      if (attachment.dataUrl) {
+        window.open(attachment.dataUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      if (!attachment.storageKey) {
+        setError("Allegato non disponibile.");
+        return;
+      }
+      const payload = await api<StorageDownloadResponse>("/api/document-storage/presign-download", {
+        method: "POST",
+        body: JSON.stringify({
+          storageKey: attachment.storageKey,
+          fileName: attachment.name
+        })
+      });
+      window.open(payload.url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore apertura allegato.");
+    }
+  }
+
+  async function removeDocumentAttachment(key: PracticeDocumentKey, attachmentId: string) {
+    const attachmentToRemove =
+      documentsDraft.items.find((item) => item.key === key)?.attachments?.find((attachment) => attachment.id === attachmentId) || null;
+    if (attachmentToRemove?.storageKey) {
+      try {
+        await api("/api/document-storage/delete", {
+          method: "POST",
+          body: JSON.stringify({
+            storageKey: attachmentToRemove.storageKey
+          })
+        });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Errore rimozione allegato.");
+        return;
+      }
+    }
     const nextDocuments = {
       items: documentsDraft.items.map((item) =>
         item.key === key
           ? {
-            ...item,
-            attachments: (item.attachments || []).filter((attachment) => attachment.id !== attachmentId),
-            updatedAt: new Date().toISOString()
-          }
+              ...item,
+              attachments: (item.attachments || []).filter((attachment) => attachment.id !== attachmentId),
+              received: (item.attachments || []).filter((attachment) => attachment.id !== attachmentId).length > 0,
+              verified: (item.attachments || []).filter((attachment) => attachment.id !== attachmentId).length > 0,
+              updatedAt: new Date().toISOString()
+            }
           : item
       )
     };
     setDocumentsDraft(nextDocuments);
-    void saveDocuments(nextDocuments);
+    await saveDocuments(nextDocuments);
   }
 
   function updatePaymentItem(id: string, updates: Partial<PracticePaymentItem>) {
@@ -1053,12 +1151,22 @@ export function PraticaDetailPage() {
                     className={`pd-doc-row pd-doc-row-${getDocumentRowState(item)} ${documentKey === item.key ? "pd-focus-target-row" : ""}`}
                   >
                     <div className="pd-doc-row-main">
-                      <strong>
-                        <span className="pd-doc-row-icon" aria-hidden="true">
-                          {getDocumentRowIcon(item)}
-                        </span>{" "}
-                        {item.label}
-                      </strong>
+                      <div className="pd-doc-row-title">
+                        <strong>
+                          <span className="pd-doc-row-icon" aria-hidden="true">
+                            {getDocumentRowIcon(item)}
+                          </span>{" "}
+                          {item.label}
+                        </strong>
+                        {item.attachments?.length ? (
+                          <span className={`pd-doc-upload-state pd-doc-upload-state-persistent ${uploadedDocuments[item.key] ? "is-success" : ""}`}>
+                            <span className="pd-doc-upload-state-icon" aria-hidden="true">
+                              ✓
+                            </span>
+                            {item.attachments.length === 1 ? "1 allegato caricato" : `${item.attachments.length} allegati caricati`}
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="pd-doc-flags">
                         <label>
                           <input
@@ -1100,27 +1208,49 @@ export function PraticaDetailPage() {
                       </div>
                     </div>
                     <div className="pd-doc-row-actions">
-                      <label className="pd-doc-upload" title="Carica documento">
+                      {item.attachments?.length ? (
+                        <button type="button" className="pd-doc-attachment-link" onClick={() => void openDocumentAttachment(item.attachments[0])}>
+                          <span className="pd-doc-file-button">
+                            <span className="pd-doc-folder-container" aria-hidden="true">
+                              <span className="pd-doc-file-back" />
+                              <span className="pd-doc-file-page" />
+                              <span className="pd-doc-file-front" />
+                            </span>
+                          </span>
+                        </button>
+                      ) : null}
+                      {!item.attachments?.length ? (
+                        <label className="pd-doc-upload" title="Carica documento">
                         <span className="pd-doc-upload-shine" aria-hidden="true" />
                         <span className="pd-doc-upload-icons" aria-hidden="true">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="m5 12 7-7 7 7" />
-                            <path d="M12 19V5" />
-                          </svg>
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="m5 12 7-7 7 7" />
-                            <path d="M12 19V5" />
-                          </svg>
+                          <span className="pd-doc-upload-icon pd-doc-upload-icon-default">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="m5 12 7-7 7 7" />
+                              <path d="M12 19V5" />
+                            </svg>
+                          </span>
+                          <span className="pd-doc-upload-icon pd-doc-upload-icon-progress">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21 12a9 9 0 1 1-3.1-6.8" />
+                            </svg>
+                          </span>
+                          <span className="pd-doc-upload-icon pd-doc-upload-icon-success">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="m5 13 4 4L19 7" />
+                            </svg>
+                          </span>
                         </span>
                         <input
                           type="file"
                           accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
+                          disabled={busy}
                           onChange={(event) => {
                             void handleDocumentUpload(item.key, event.currentTarget.files?.[0] || null);
                             event.currentTarget.value = "";
                           }}
                         />
-                      </label>
+                        </label>
+                      ) : null}
                       <button
                         type="button"
                         className="pd-doc-note-toggle"
@@ -1133,19 +1263,28 @@ export function PraticaDetailPage() {
                       >
                         {item.note?.trim() || expandedDocumentNotes[item.key] ? "Modifica" : "+ Nota"}
                       </button>
+                      {item.attachments?.length ? (
+                        <button
+                          type="button"
+                          className="pd-doc-delete-button"
+                          onClick={() => void removeDocumentAttachment(item.key, item.attachments[0].id)}
+                          aria-label="Rimuovi documento"
+                          title="Rimuovi documento"
+                        >
+                          <span className="pd-doc-bin-top" aria-hidden="true" />
+                          <span className="pd-doc-bin-bottom" aria-hidden="true" />
+                          <span className="pd-doc-bin-garbage" aria-hidden="true" />
+                        </button>
+                      ) : null}
                     </div>
                     {item.attachments?.length ? (
                       <div className="pd-doc-attachments">
                         {item.attachments.map((attachment) => (
                           <div key={attachment.id} className="pd-doc-attachment">
-                            {attachment.dataUrl ? (
-                              <a href={attachment.dataUrl} download={attachment.name} target="_blank" rel="noreferrer">
-                                Allegato: {attachment.name}
-                              </a>
-                            ) : (
-                              <span>Allegato: {attachment.name}</span>
-                            )}
-                            <button type="button" onClick={() => removeDocumentAttachment(item.key, attachment.id)}>
+                            <span className="pd-doc-attachment-icon" aria-hidden="true">
+                              ✓
+                            </span>
+                            <button type="button" onClick={() => void removeDocumentAttachment(item.key, attachment.id)}>
                               x
                             </button>
                           </div>

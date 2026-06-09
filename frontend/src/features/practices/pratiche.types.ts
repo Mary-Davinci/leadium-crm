@@ -51,6 +51,8 @@ export type PracticeDocumentAttachment = {
   mimeType?: string;
   size?: number;
   dataUrl?: string;
+  storageKey?: string;
+  storageProvider?: string;
   uploadedAt?: string;
 };
 

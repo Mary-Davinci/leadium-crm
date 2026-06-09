@@ -11,6 +11,7 @@ import {
   resetUserPassword,
   updateUser
 } from "./auth-store";
+import { createSignedDownload, createSignedUpload, deleteStoredObject, isDocumentStorageEnabled, uploadDocumentBuffer } from "./document-storage";
 import { applyLeadImport, previewLeadImport } from "./lead-import";
 
 const HOST = "0.0.0.0";
@@ -24,6 +25,7 @@ const WHATSAPP_URL = process.env.WHATSAPP_SERVICE_URL || "http://localhost:4306"
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5179";
 const SLA_FIRST_CONTACT_MINUTES = Number(process.env.SLA_FIRST_CONTACT_MINUTES || 5);
 const AUTH_SESSION_TTL_HOURS = Number(process.env.AUTH_SESSION_TTL_HOURS || 12);
+const DOCUMENT_UPLOAD_MAX_BYTES = Number(process.env.DOCUMENT_UPLOAD_MAX_BYTES || 8 * 1024 * 1024);
 const ALLOWED_ORIGINS = new Set(
   [FRONTEND_URL, ...(process.env.CORS_ORIGINS || "").split(",")]
     .map((origin) => origin.trim().replace(/\/+$/, ""))
@@ -447,6 +449,139 @@ const server = http.createServer(async (req, res) => {
       const body = (await parseJsonBody(req)) as { source?: string; status?: string; leads?: unknown[] };
       const result = await applyLeadImport(body, session.user.username || "excel_import");
       sendJson(res, 200, result);
+      return;
+    }
+    if (pathname === "/api/document-storage/presign-upload" && method === "POST") {
+      const session = getSessionFromRequest(req);
+      if (!session) {
+        sendJson(res, 401, { error: "Non autorizzato." });
+        return;
+      }
+      if (!isDocumentStorageEnabled()) {
+        sendJson(res, 501, { error: "Storage documenti non configurato." });
+        return;
+      }
+      const body = (await parseJsonBody(req)) as {
+        leadId?: string;
+        documentKey?: string;
+        fileName?: string;
+        mimeType?: string;
+        size?: number;
+      };
+      const leadId = String(body.leadId || "").trim();
+      const documentKey = String(body.documentKey || "").trim();
+      const fileName = String(body.fileName || "").trim();
+      const mimeType = String(body.mimeType || "application/octet-stream").trim();
+      const size = Number(body.size || 0);
+      if (!leadId || !documentKey || !fileName) {
+        sendJson(res, 400, { error: "leadId, documentKey e fileName sono obbligatori." });
+        return;
+      }
+      if (!Number.isFinite(size) || size <= 0) {
+        sendJson(res, 400, { error: "Dimensione file non valida." });
+        return;
+      }
+      const attachmentId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const signed = await createSignedUpload({
+        leadId,
+        documentKey,
+        attachmentId,
+        fileName,
+        mimeType
+      });
+      sendJson(res, 200, {
+        attachment: {
+          id: attachmentId,
+          name: fileName,
+          mimeType,
+          size,
+          storageKey: signed.storageKey,
+          storageProvider: "backblaze_b2",
+          uploadedAt: new Date().toISOString()
+        },
+        upload: signed.upload
+      });
+      return;
+    }
+    if (pathname === "/api/document-storage/upload" && method === "POST") {
+      const session = getSessionFromRequest(req);
+      if (!session) {
+        sendJson(res, 401, { error: "Non autorizzato." });
+        return;
+      }
+      if (!isDocumentStorageEnabled()) {
+        sendJson(res, 501, { error: "Storage documenti non configurato." });
+        return;
+      }
+      const leadId = String(url.searchParams.get("leadId") || "").trim();
+      const documentKey = String(url.searchParams.get("documentKey") || "").trim();
+      const fileName = String(url.searchParams.get("fileName") || "").trim();
+      const mimeType = String(req.headers["content-type"] || "application/octet-stream").trim();
+      if (!leadId || !documentKey || !fileName) {
+        sendJson(res, 400, { error: "leadId, documentKey e fileName sono obbligatori." });
+        return;
+      }
+      const body = await readBody(req);
+      if (!body || !body.length) {
+        sendJson(res, 400, { error: "File non ricevuto." });
+        return;
+      }
+      if (body.length > DOCUMENT_UPLOAD_MAX_BYTES) {
+        sendJson(res, 413, { error: `Il file supera il limite di ${Math.round(DOCUMENT_UPLOAD_MAX_BYTES / (1024 * 1024))} MB.` });
+        return;
+      }
+      const attachment = await uploadDocumentBuffer({
+        leadId,
+        documentKey,
+        fileName,
+        mimeType,
+        size: body.length,
+        body
+      });
+      sendJson(res, 200, { attachment });
+      return;
+    }
+    if (pathname === "/api/document-storage/presign-download" && method === "POST") {
+      const session = getSessionFromRequest(req);
+      if (!session) {
+        sendJson(res, 401, { error: "Non autorizzato." });
+        return;
+      }
+      if (!isDocumentStorageEnabled()) {
+        sendJson(res, 501, { error: "Storage documenti non configurato." });
+        return;
+      }
+      const body = (await parseJsonBody(req)) as { storageKey?: string; fileName?: string };
+      const storageKey = String(body.storageKey || "").trim();
+      if (!storageKey) {
+        sendJson(res, 400, { error: "storageKey obbligatorio." });
+        return;
+      }
+      const signed = await createSignedDownload({
+        storageKey,
+        fileName: String(body.fileName || "").trim()
+      });
+      sendJson(res, 200, signed);
+      return;
+    }
+    if (pathname === "/api/document-storage/delete" && method === "POST") {
+      const session = getSessionFromRequest(req);
+      if (!session) {
+        sendJson(res, 401, { error: "Non autorizzato." });
+        return;
+      }
+      if (!isDocumentStorageEnabled()) {
+        sendJson(res, 501, { error: "Storage documenti non configurato." });
+        return;
+      }
+      const body = (await parseJsonBody(req)) as { storageKey?: string };
+      const storageKey = String(body.storageKey || "").trim();
+      if (!storageKey) {
+        sendJson(res, 400, { error: "storageKey obbligatorio." });
+        return;
+      }
+      await deleteStoredObject(storageKey);
+      sendJson(res, 200, { ok: true });
       return;
     }
     if (pathname === "/api/users" && method === "GET") {

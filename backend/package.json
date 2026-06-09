@@ -18,6 +18,8 @@
     "dev:whatsapp": "tsx services/whatsapp-service/server.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1063.0",
+    "@aws-sdk/s3-request-presigner": "^3.1063.0",
     "crm-crocieriamo": "file:..",
     "mongodb": "^6.21.0"
   },

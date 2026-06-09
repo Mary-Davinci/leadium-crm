@@ -853,6 +853,12 @@
   grid-template-columns: minmax(205px, 0.95fr) minmax(0, 1fr);
 }
 
+.pd-doc-row-title {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .pd-doc-row-main strong {
   color: #284266;
   font-size: 13px;
@@ -868,29 +874,10 @@
   min-width: 16px;
 }
 
-.pd-doc-flags {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-}
-
-.pd-doc-flags label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: #496682;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.pd-doc-row-complete .pd-doc-flags label {
-  color: #2f7249;
-}
-
-.pd-doc-row-progress .pd-doc-flags label {
-  color: #8b5f1a;
+.pd-doc-upload-state,
+.pd-doc-flags,
+.pd-doc-attachment-icon {
+  display: none;
 }
 
 .pd-doc-row-actions {
@@ -899,6 +886,7 @@
   justify-content: flex-end;
   gap: 5px;
   align-self: start;
+  flex-wrap: wrap;
 }
 
 .pd-doc-note-toggle {
@@ -915,8 +903,8 @@
 
 .pd-doc-upload {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -926,22 +914,23 @@
   background: linear-gradient(135deg, #3b82f6 0%, #5169e6 55%, #1fbfd4 100%);
   color: #fff;
   cursor: pointer;
-  box-shadow: 0 10px 34px -12px rgba(59, 130, 246, 0.55);
+  box-shadow: 0 10px 40px -10px rgba(59, 130, 246, 0.5);
   backdrop-filter: blur(8px);
   transition:
-    transform 0.32s cubic-bezier(0.175, 0.885, 0.32, 1.275),
-    box-shadow 0.32s ease,
-    border-color 0.32s ease;
+    transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    box-shadow 0.5s ease,
+    border-color 0.3s ease,
+    background 0.28s ease;
 }
 
 .pd-doc-upload:hover {
-  transform: scale(1.08);
+  transform: scale(1.1);
   border-color: rgba(255, 255, 255, 0.4);
-  box-shadow: 0 18px 50px -16px rgba(34, 211, 238, 0.58);
+  box-shadow: 0 20px 60px -15px rgba(34, 211, 238, 0.6);
 }
 
 .pd-doc-upload:active {
-  transform: scale(0.94);
+  transform: scale(0.95);
 }
 
 .pd-doc-upload-shine {
@@ -953,7 +942,7 @@
 }
 
 .pd-doc-upload:hover .pd-doc-upload-shine {
-  opacity: 1;
+  opacity: 0.2;
 }
 
 .pd-doc-upload-icons {
@@ -963,11 +952,31 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.42s ease;
+  transition: transform 0.5s ease;
 }
 
 .pd-doc-upload:hover .pd-doc-upload-icons {
-  transform: translateY(-135%);
+  transform: translateY(-150%);
+}
+
+.pd-doc-upload-icon-default {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pd-doc-upload-icon-progress,
+.pd-doc-upload-icon-success {
+  position: absolute;
+  top: 150%;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .pd-doc-upload-icons svg {
@@ -976,12 +985,12 @@
   height: 18px;
 }
 
-.pd-doc-upload-icons svg:first-child {
+.pd-doc-upload-icon-default svg {
   color: #ffffff;
 }
 
-.pd-doc-upload-icons svg:last-child {
-  top: 135%;
+.pd-doc-upload-icon-progress svg,
+.pd-doc-upload-icon-success svg {
   color: #dffbff;
 }
 
@@ -990,30 +999,252 @@
 }
 
 .pd-doc-attachments {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 5px;
-  flex-wrap: wrap;
-  padding: 2px 0 0;
+  display: none;
 }
 
 .pd-doc-attachment {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 0 7px;
-  border-radius: 999px;
-  border: 1px solid #d7e0ee;
-  background: #f8fbff;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.pd-doc-delete-button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background-color: rgb(255, 95, 95);
+  cursor: pointer;
+  border: 2px solid rgb(255, 201, 201);
+  transition-duration: 0.3s;
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+}
+
+.pd-doc-bin-bottom {
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 1px 1px 3px 3px;
+  z-index: 2;
+}
+
+.pd-doc-bin-top {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: #fff;
+  transform-origin: right;
+  transition-duration: 0.3s;
+  z-index: 2;
+  margin-bottom: 1px;
+}
+
+.pd-doc-bin-garbage {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.82);
+  z-index: 1;
+  opacity: 0;
+  transition: all 0.3s;
+}
+
+.pd-doc-delete-button:hover .pd-doc-bin-top {
+  transform: rotate(45deg);
+}
+
+.pd-doc-delete-button:hover {
+  background-color: rgb(255, 0, 0);
+}
+
+.pd-doc-delete-button:active {
+  transform: scale(0.9);
+}
+
+.pd-doc-delete-button:hover .pd-doc-bin-garbage {
+  animation: pd-doc-bin-throw 0.4s linear;
+}
+
+@keyframes pd-doc-bin-throw {
+  from {
+    transform: translate(-400%, -700%);
+    opacity: 0;
+  }
+  to {
+    transform: translate(0%, 0%);
+    opacity: 1;
+  }
 }
 
 .pd-doc-attachment a,
+.pd-doc-attachment-link,
 .pd-doc-attachment span {
   color: #355071;
   font-size: 11px;
   font-weight: 700;
   text-decoration: none;
+}
+
+.pd-doc-attachment-link {
+  all: unset;
+  display: inline-flex;
+  cursor: pointer;
+  min-width: 0;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  outline: none !important;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.pd-doc-attachment-link:focus,
+.pd-doc-attachment-link:focus-visible {
+  outline: none;
+}
+
+.pd-doc-attachment-link:hover,
+.pd-doc-attachment-link:active,
+.pd-doc-attachment-link:focus,
+.pd-doc-attachment-link:focus-visible {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  outline: none !important;
+}
+
+.pd-doc-file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: none !important;
+  outline: none !important;
+  border-radius: 5px;
+  background: rgb(49, 49, 83) !important;
+  transition: all 0.3s ease;
+  box-shadow: none !important;
+}
+
+.pd-doc-folder-container {
+  width: 28px;
+  height: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.pd-doc-file-back,
+.pd-doc-file-page,
+.pd-doc-file-front {
+  position: absolute;
+  bottom: 0;
+  border-radius: 4px 4px 2px 2px;
+  transition: all 0.3s ease-out;
+}
+
+.pd-doc-file-back {
+  z-index: 1;
+  width: 82%;
+  height: 15px;
+  background: linear-gradient(180deg, #ffc95c 0%, #e9a72b 100%);
+}
+
+.pd-doc-file-page {
+  z-index: 2;
+  width: 46%;
+  height: 13px;
+  bottom: 4px;
+  background: linear-gradient(180deg, #ffffff 0%, #dce5ff 100%);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18);
+}
+
+.pd-doc-file-front {
+  z-index: 3;
+  width: 88%;
+  height: 17px;
+  background: linear-gradient(180deg, #ffd672 0%, #f2b33d 100%);
+  opacity: 0.96;
+  transform-origin: bottom;
+}
+
+.pd-doc-file-front::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 2px;
+  width: 10px;
+  height: 6px;
+  border-radius: 4px 4px 0 0;
+  background: #ffd672;
+}
+
+.pd-doc-attachment-link:hover {
+  text-decoration: none;
+}
+
+.pd-doc-attachment-link:hover .pd-doc-file-button {
+  background: rgb(58, 58, 94);
+}
+
+.pd-doc-attachment-link:hover .pd-doc-file-page {
+  transform: translateY(-5px);
+}
+
+.pd-doc-attachment-link:hover .pd-doc-file-front {
+  transform: rotateX(30deg);
+}
+
+.pd-doc-attachment-link:active .pd-doc-file-button {
+  transform: scale(0.95);
+}
+
+.pd-doc-attachment > button:last-child {
+  width: 26px;
+  height: 26px;
+  border: 1px solid #d6dcea;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #7c4d44;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.pd-doc-attachment > button:last-child:hover {
+  background: #fff4f2;
+  border-color: #efc7bf;
+}
+
+.pd-doc-attachment > button:last-child:active {
+  transform: scale(0.94);
 }
 
 .pd-doc-attachment button {
@@ -1046,6 +1277,7 @@
   margin-top: 2px;
   font-size: 12px;
 }
+
 
 .pd-contact-list {
   display: grid;
