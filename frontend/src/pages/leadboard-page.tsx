@@ -422,7 +422,7 @@ export function LeadBoardPage() {
               <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} aria-label="Ordina lead">
                 <option value="newest">Piu recenti</option>
                 <option value="name">Nome cliente</option>
-                <option value="lightest-load">Owner suggerito</option>
+                <option value="lightest-load">Operatore suggerito</option>
               </select>
             </label>
           </div>
@@ -444,8 +444,7 @@ export function LeadBoardPage() {
             <span>Contatti</span>
             <span>Origine</span>
             <span>Stato dati</span>
-            <span>Owner suggerito</span>
-            <span>Apri</span>
+            <span>Operatore suggerito</span>
           </div>
 
           <div className="ops-grid-body" role="list" aria-label="Lead senza assegnazione">
@@ -494,11 +493,6 @@ export function LeadBoardPage() {
                     </small>
                   </div>
 
-                  <div className="ops-row-cell action">
-                    <button type="button" className="ops-open-btn">
-                      Apri
-                    </button>
-                  </div>
                 </article>
               );
             })}
