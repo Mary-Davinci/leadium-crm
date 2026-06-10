@@ -1,7 +1,14 @@
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-const B2_ENDPOINT = String(process.env.BACKBLAZE_B2_ENDPOINT || "").trim();
+function normalizeEndpoint(value: string) {
+  const trimmed = String(value || "").trim().replace(/\/+$/g, "");
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+const B2_ENDPOINT = normalizeEndpoint(process.env.BACKBLAZE_B2_ENDPOINT || "");
 const B2_REGION = String(process.env.BACKBLAZE_B2_REGION || "").trim();
 const B2_BUCKET = String(process.env.BACKBLAZE_B2_BUCKET || "").trim();
 const B2_KEY_ID = String(process.env.BACKBLAZE_B2_KEY_ID || "").trim();
