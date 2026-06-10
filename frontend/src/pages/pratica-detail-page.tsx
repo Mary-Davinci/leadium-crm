@@ -611,6 +611,7 @@ export function PraticaDetailPage() {
   const [uploadedDocuments] = useState<Record<string, boolean>>({});
   const [showOnlyMissingDocuments, setShowOnlyMissingDocuments] = useState(false);
   const [highlightSection, setHighlightSection] = useState<PracticeFocusSection | null>(null);
+  const [reopenedPaymentId, setReopenedPaymentId] = useState<string | null>(null);
 
   async function load() {
     if (!id) return;
@@ -935,6 +936,10 @@ export function PraticaDetailPage() {
   function updatePaymentStatus(item: PracticePaymentItem, status: PaymentStatus) {
     const now = new Date().toISOString();
     if (status === "pending") {
+      setReopenedPaymentId(item.id);
+      window.setTimeout(() => {
+        setReopenedPaymentId((current) => (current === item.id ? null : current));
+      }, 1400);
       updatePaymentItem(item.id, { status, receivedAt: undefined, verifiedAt: undefined });
       return;
     }
@@ -1057,6 +1062,10 @@ export function PraticaDetailPage() {
   );
   const totalRemainingPayments = Math.max(0, totalRequiredPayments - totalPaidPayments);
   const paymentProgress = totalRequiredPayments > 0 ? Math.min(100, Math.round((totalPaidPayments / totalRequiredPayments) * 100)) : 0;
+  const showPaymentsOk = useMemo(
+    () => paymentsState.items.some((item) => item.required) && paymentsState.items.every((item) => !item.required || item.status !== "pending"),
+    [paymentsState]
+  );
   const visibleDocuments = useMemo(
     () =>
       showOnlyMissingDocuments
@@ -1210,11 +1219,18 @@ export function PraticaDetailPage() {
                     <div className="pd-doc-row-actions">
                       {item.attachments?.length ? (
                         <button type="button" className="pd-doc-attachment-link" onClick={() => void openDocumentAttachment(item.attachments[0])}>
-                          <span className="pd-doc-file-button">
-                            <span className="pd-doc-folder-container" aria-hidden="true">
-                              <span className="pd-doc-file-back" />
-                              <span className="pd-doc-file-page" />
-                              <span className="pd-doc-file-front" />
+                          <span className="pd-doc-download-button">
+                            <span className="pd-doc-download-surface pd-doc-download-docs" aria-hidden="true">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M3 7.5a1.5 1.5 0 0 1 1.5-1.5h4.1l1.3 1.7H19.5A1.5 1.5 0 0 1 21 9.2v7.3A1.5 1.5 0 0 1 19.5 18H4.5A1.5 1.5 0 0 1 3 16.5z" />
+                                <path d="M3.8 9.5h16.4" />
+                              </svg>
+                            </span>
+                            <span className="pd-doc-download-surface pd-doc-download-action" aria-hidden="true">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="4" x2="12" y2="15" />
+                              </svg>
                             </span>
                           </span>
                         </button>
@@ -1320,36 +1336,48 @@ export function PraticaDetailPage() {
                 <div>
                   <h5>Pagamenti pratica</h5>
                   <p className="pd-payments-subtitle">
-                    {pendingPayments.length
+                    {showPaymentsOk
+                      ? "Tutti i pagamenti sono in ordine."
+                      : pendingPayments.length
                       ? `${pendingPayments.length} rate mancanti - ${paymentsBadge.amountText}`
                       : `${paymentsBadge.amountText}`}
                   </p>
                 </div>
               </div>
-              <div className="pd-payments-summary-card">
-                <div className="pd-payments-summary">
-                  <article>
-                    <span>Totale pratica</span>
-                    <strong>{formatCurrency(totalRequiredPayments)}</strong>
-                  </article>
-                  <article>
-                    <span>Pagato</span>
-                    <strong>{formatCurrency(totalPaidPayments)}</strong>
-                    <small>{paymentProgress}%</small>
-                  </article>
-                  <article>
-                    <span>Residuo</span>
-                    <strong className={totalRemainingPayments > 0 ? "is-warning" : "is-ok"}>{formatCurrency(totalRemainingPayments)}</strong>
-                  </article>
-                </div>
-                <div className="pd-payments-progress">
-                  <div className="pd-payments-progress-bar" aria-hidden="true">
-                    <span style={{ width: `${paymentProgress}%` }} />
+              <div className={`pd-payments-summary-card ${reopenedPaymentId ? "is-reopened" : ""}`}>
+                {showPaymentsOk ? (
+                  <div className="pd-payments-ok" aria-live="polite">
+                    <span className="pd-payments-ok-ring" aria-hidden="true" />
+                    <strong>OK!!</strong>
+                    <small>Tutti i pagamenti risultano registrati.</small>
                   </div>
-                  <div className="pd-payments-progress-foot">
-                    <span>{paymentProgress}%</span>
-                  </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="pd-payments-summary">
+                      <article>
+                        <span>Totale pratica</span>
+                        <strong>{formatCurrency(totalRequiredPayments)}</strong>
+                      </article>
+                      <article>
+                        <span>Pagato</span>
+                        <strong>{formatCurrency(totalPaidPayments)}</strong>
+                        <small>{paymentProgress}%</small>
+                      </article>
+                      <article>
+                        <span>Residuo</span>
+                        <strong className={totalRemainingPayments > 0 ? "is-warning" : "is-ok"}>{formatCurrency(totalRemainingPayments)}</strong>
+                      </article>
+                    </div>
+                    <div className="pd-payments-progress">
+                      <div className="pd-payments-progress-bar" aria-hidden="true">
+                        <span style={{ width: `${paymentProgress}%` }} />
+                      </div>
+                      <div className="pd-payments-progress-foot">
+                        <span>{paymentProgress}%</span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
               {pendingPayments.length ? (
                 <div className={`pd-payments-alert ${paymentsBadge.className}`}>
@@ -1364,7 +1392,6 @@ export function PraticaDetailPage() {
               )}
               <div className="pd-payments-table-head" aria-hidden="true">
                 <span>Voce</span>
-                <span>Importo</span>
                 <span>Scadenza</span>
                 <span>Stato</span>
                 <span>Azioni</span>
@@ -1373,11 +1400,18 @@ export function PraticaDetailPage() {
                 {paymentsState.items.map((item) => {
                   const due = formatDateParts(item.dueAt);
                   return (
-                    <article key={item.id} className={`pd-payment-row pd-payment-${item.status} ${paymentKey === item.id ? "pd-focus-target-row" : ""}`}>
+                    <article
+                      key={item.id}
+                      className={`pd-payment-row pd-payment-${item.status} ${paymentKey === item.id ? "pd-focus-target-row" : ""} ${
+                        reopenedPaymentId === item.id ? "is-reopened" : ""
+                      }`}
+                    >
                       <div className="pd-payment-main">
-                        <strong>{item.label}</strong>
+                        <div className="pd-payment-title-row">
+                          <strong>{item.label}</strong>
+                          <span className="pd-payment-amount">{formatCurrency(item.amount)}</span>
+                        </div>
                       </div>
-                      <span className="pd-payment-amount">{formatCurrency(item.amount)}</span>
                       <div className="pd-payment-meta">
                         <small>
                           <span>{due.date}</span>
@@ -1390,27 +1424,27 @@ export function PraticaDetailPage() {
                           <summary className="pd-payment-menu-trigger">Azioni</summary>
                           <div className="pd-payment-menu-list">
                             {item.status === "pending" ? (
-                              <button type="button" disabled={busy} onClick={() => updatePaymentStatus(item, "received")}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => updatePaymentStatus(item, "received")}>
                                 Segna ricevuto
                               </button>
                             ) : null}
                             {item.status === "pending" ? (
-                              <button type="button" disabled={busy} onClick={() => postponePayment(item, 1)}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => postponePayment(item, 1)}>
                                 Posticipa +1 giorno
                               </button>
                             ) : null}
                             {item.status === "pending" ? (
-                              <button type="button" disabled={busy} onClick={startCall}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={startCall}>
                                 Chiama cliente
                               </button>
                             ) : null}
                             {item.status !== "verified" ? (
-                              <button type="button" disabled={busy} onClick={() => updatePaymentStatus(item, "verified")}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => updatePaymentStatus(item, "verified")}>
                                 Verifica
                               </button>
                             ) : null}
                             {item.status !== "pending" ? (
-                              <button type="button" disabled={busy} onClick={() => updatePaymentStatus(item, "pending")}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => updatePaymentStatus(item, "pending")}>
                                 Riapri pagamento
                               </button>
                             ) : null}
