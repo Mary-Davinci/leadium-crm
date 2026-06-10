@@ -165,6 +165,164 @@
   color: #335277;
 }
 
+.pd-closure-band {
+  border: 1px solid #dce5f2;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.2fr) auto;
+  gap: 16px;
+  align-items: start;
+  box-shadow: 0 10px 24px rgba(31, 53, 88, 0.06);
+}
+
+.pd-closure-band.is-ready {
+  background: linear-gradient(180deg, #fbfdff 0%, #f7fbff 100%);
+  border-color: #cfe0f6;
+}
+
+.pd-closure-band.is-closed {
+  background: linear-gradient(180deg, #f7fcf8 0%, #f2fbf5 100%);
+  border-color: #cde6d7;
+}
+
+.pd-closure-band.is-blocked {
+  background: linear-gradient(180deg, #fffdfa 0%, #fff9f0 100%);
+  border-color: #ecdab7;
+}
+
+.pd-closure-band.is-reopened {
+  animation: pd-closure-reopen-pulse 0.9s ease;
+}
+
+.pd-closure-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.pd-closure-eyebrow {
+  color: #6a83a4;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pd-closure-copy h5 {
+  margin: 0;
+  color: #244063;
+  font-size: 24px;
+  line-height: 1.05;
+}
+
+.pd-closure-copy p {
+  margin: 0;
+  color: #617a9a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.pd-closure-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.pd-closure-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #e6edf7;
+  background: #fbfdff;
+}
+
+.pd-closure-check.done {
+  border-color: #cde6d7;
+  background: #f5fbf7;
+}
+
+.pd-closure-check.pending {
+  border-color: #efd9b1;
+  background: #fffaf1;
+}
+
+.pd-closure-check-icon {
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 900;
+  color: #2e7849;
+  background: #e8f6ed;
+  border: 1px solid #cce6d5;
+}
+
+.pd-closure-check.pending .pd-closure-check-icon {
+  color: #9a6623;
+  background: #fff1d8;
+  border-color: #efd8ae;
+}
+
+.pd-closure-check strong {
+  display: block;
+  color: #284668;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.pd-closure-check span:last-child {
+  display: block;
+  margin-top: 2px;
+  color: #66809f;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pd-closure-actions {
+  display: grid;
+  align-content: start;
+  justify-items: end;
+  gap: 10px;
+  min-width: 168px;
+}
+
+.pd-closure-actions button {
+  min-width: 154px;
+  min-height: 38px;
+}
+
+.pd-closure-hint {
+  max-width: 220px;
+  color: #7b8ea8;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: right;
+}
+
+@keyframes pd-closure-reopen-pulse {
+  0% {
+    transform: scale(0.995);
+    box-shadow: 0 0 0 rgba(212, 154, 61, 0);
+  }
+
+  45% {
+    transform: scale(1);
+    box-shadow: 0 0 0 4px rgba(212, 154, 61, 0.12);
+  }
+
+  100% {
+    transform: scale(1);
+    box-shadow: 0 10px 24px rgba(31, 53, 88, 0.06);
+  }
+}
+
 .pd-hero-more {
   position: relative;
 }
@@ -279,6 +437,18 @@
   color: var(--status-converted-text);
   background: var(--status-converted-bg);
   border-color: var(--status-converted-border);
+}
+
+.pd-status-ready {
+  color: #285a9a;
+  background: #eef4ff;
+  border-color: #c9daf8;
+}
+
+.pd-status-closed {
+  color: #1f7a49;
+  background: #e7f8ee;
+  border-color: #b8e0c6;
 }
 
 .pd-status-lost {
@@ -664,6 +834,28 @@
   gap: 3px;
   margin-bottom: 10px;
   text-align: left;
+  transition:
+    background-color 0.28s ease,
+    border-color 0.28s ease,
+    box-shadow 0.28s ease,
+    transform 0.28s ease;
+}
+
+.pd-payments-alert strong,
+.pd-payments-alert span {
+  transition: color 0.24s ease, opacity 0.24s ease, transform 0.24s ease;
+}
+
+.pd-payments-alert.is-complete {
+  box-shadow: 0 10px 24px -18px rgba(76, 165, 110, 0.42);
+}
+
+.pd-payments-alert.is-pending {
+  box-shadow: 0 10px 24px -18px rgba(212, 154, 61, 0.24);
+}
+
+.pd-payments-alert.is-reopened {
+  animation: pd-payments-alert-reopen 0.9s ease;
 }
 
 .pd-payments-badge-warning {
@@ -690,6 +882,23 @@
 
 .pd-payments-badge-complete span {
   color: #456b53;
+}
+
+@keyframes pd-payments-alert-reopen {
+  0% {
+    transform: translateY(-1px) scale(0.995);
+    box-shadow: 0 0 0 0 rgba(212, 154, 61, 0);
+  }
+
+  45% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 4px rgba(212, 154, 61, 0.14);
+  }
+
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 10px 24px -18px rgba(212, 154, 61, 0.24);
+  }
 }
 
 .pd-payments-list {
@@ -1865,6 +2074,20 @@
       "timeline timeline";
   }
 
+  .pd-closure-band {
+    grid-template-columns: 1fr;
+  }
+
+  .pd-closure-actions {
+    justify-items: start;
+    min-width: 0;
+  }
+
+  .pd-closure-hint {
+    text-align: left;
+    max-width: none;
+  }
+
   .pd-payments-table-head,
   .pd-payment-row {
     grid-template-columns: minmax(0, 1.4fr) 118px 108px 92px;
@@ -1928,6 +2151,10 @@
     width: 100%;
   }
 
+  .pd-closure-copy h5 {
+    font-size: 21px;
+  }
+
   .pd-hero-more {
     width: 100%;
   }
@@ -1968,6 +2195,19 @@
   .pd-doc-row,
   .pd-payment-row {
     grid-template-columns: 1fr;
+  }
+
+  .pd-closure-band {
+    padding: 14px;
+  }
+
+  .pd-closure-actions {
+    width: 100%;
+  }
+
+  .pd-closure-actions button {
+    width: 100%;
+    min-width: 0;
   }
 
   .pd-payments-summary {

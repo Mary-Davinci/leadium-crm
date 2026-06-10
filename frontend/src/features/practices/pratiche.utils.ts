@@ -34,6 +34,8 @@ export function includesAny(value: string, terms: string[]) {
 export function getPriority(lead: Lead): Priority {
   const status = String(lead.status || "").toLowerCase();
   const notes = String(lead.notes || "").toLowerCase();
+  if (status.includes("chiusa 100")) return "bassa";
+  if (status.includes("pronta per chiusura")) return "media";
   if (!lead.nextActionAt || includesAny(status + notes, ["document", "saldo", "pagament", "scad", "urg"])) return "alta";
   if (includesAny(status + notes, ["contatt", "trattativa", "preventivo", "richiam"])) return "media";
   return "bassa";
@@ -41,6 +43,8 @@ export function getPriority(lead: Lead): Priority {
 
 export function getStatusLabel(status: string) {
   const normalized = String(status || "").toLowerCase();
+  if (normalized.includes("chiusa 100")) return "Chiusa 100%";
+  if (normalized.includes("pronta per chiusura")) return "Pronta chiusura";
   if (normalized.includes("venduta") || normalized.includes("invio biglietti") || normalized.includes("saldo effettuato")) return "Convertito";
   if (normalized.includes("document")) return "Documenti mancanti";
   if (normalized.includes("saldo") || normalized.includes("pagament") || normalized.includes("rata")) return "Pagamento in attesa";
@@ -53,6 +57,8 @@ export function getStatusLabel(status: string) {
 
 export function getStatusClass(status: string) {
   const normalized = String(status || "").toLowerCase();
+  if (normalized.includes("chiusa 100")) return "pr-status-closed";
+  if (normalized.includes("pronta per chiusura")) return "pr-status-ready";
   if (normalized.includes("venduta") || normalized.includes("invio biglietti") || normalized.includes("saldo effettuato")) return "pr-status-converted";
   if (normalized.includes("document") || normalized.includes("saldo") || normalized.includes("pagament") || normalized.includes("rata")) return "pr-status-warning";
   if (normalized.includes("interess") || normalized.includes("trattativa") || normalized.includes("preventivo")) return "pr-status-negotiation";
@@ -143,6 +149,14 @@ export function getPriorityScore(lead: Lead) {
 export function getSuggestedAction(lead: Lead): { label: string; kind: "call" | "open" | "task" } {
   const status = String(lead.status || "").toLowerCase();
   const notes = String(lead.notes || "").toLowerCase();
+
+  if (status.includes("chiusa 100")) {
+    return { label: "Archivio pratica", kind: "open" };
+  }
+
+  if (status.includes("pronta per chiusura")) {
+    return { label: "Chiudi pratica", kind: "open" };
+  }
 
   if (!lead.nextActionAt) {
     return { label: "Pianifica follow-up", kind: "task" };

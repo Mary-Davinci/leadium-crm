@@ -560,6 +560,18 @@
   border-color: #bfe3cb;
 }
 
+.pr-status-ready {
+  color: #285a9a;
+  background: #eef4ff;
+  border-color: #c9daf8;
+}
+
+.pr-status-closed {
+  color: #1f7a49;
+  background: #e7f8ee;
+  border-color: #b8e0c6;
+}
+
 .pr-status-lost {
   color: #8a3e3e;
   background: #fce9ea;

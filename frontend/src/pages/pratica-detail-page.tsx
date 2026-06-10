@@ -134,6 +134,10 @@ const DEFAULT_PAYMENTS: PracticePaymentItem[] = [
   { id: "payment_balance", label: "Saldo", amount: 900, status: "pending", required: true, note: "" }
 ];
 
+const PRACTICE_READY_STATUS = "Pronta per chiusura";
+const PRACTICE_CLOSED_STATUS = "Chiusa 100%";
+const PRACTICE_REOPEN_STATUS = "Invio biglietti";
+
 function normalizeDocuments(input?: PracticeDocumentsState | null): PracticeDocumentsState {
   const byKey = new Map<string, PracticeDocumentItem>();
   (input?.items || []).forEach((item) => {
@@ -352,6 +356,8 @@ async function uploadDocumentToStorage(leadId: string, documentKey: PracticeDocu
 
 function getStatusLabel(status: string) {
   const s = String(status || "").toLowerCase();
+  if (s.includes("chiusa 100")) return "Chiusa 100%";
+  if (s.includes("pronta per chiusura")) return "Pronta chiusura";
   if (s.includes("venduta") || s.includes("invio biglietti") || s.includes("saldo effettuato")) return "Convertito";
   if (s.includes("document")) return "Documenti mancanti";
   if (s.includes("saldo") || s.includes("pagament") || s.includes("rata")) return "Pagamento in attesa";
@@ -364,6 +370,8 @@ function getStatusLabel(status: string) {
 
 function getStatusClass(status: string) {
   const s = String(status || "").toLowerCase();
+  if (s.includes("chiusa 100")) return "pd-status-closed";
+  if (s.includes("pronta per chiusura")) return "pd-status-ready";
   if (s.includes("venduta") || s.includes("invio biglietti") || s.includes("saldo effettuato")) return "pd-status-converted";
   if (s.includes("document") || s.includes("saldo") || s.includes("pagament") || s.includes("rata")) return "pd-status-warning";
   if (s.includes("interess") || s.includes("trattativa") || s.includes("preventivo")) return "pd-status-negotiation";
@@ -375,6 +383,8 @@ function getStatusClass(status: string) {
 function getPriority(lead: Lead): Priority {
   const status = String(lead.status || "").toLowerCase();
   const notes = String(lead.notes || "").toLowerCase();
+  if (status.includes("chiusa 100")) return "bassa";
+  if (status.includes("pronta per chiusura")) return "media";
   if (!lead.nextActionAt || includesAny(status + notes, ["document", "saldo", "pagament", "scad", "urg"])) return "alta";
   if (includesAny(status + notes, ["contatt", "trattativa", "preventivo", "richiam"])) return "media";
   return "bassa";
@@ -389,6 +399,17 @@ function getPriorityLabel(priority: Priority) {
 function includesAny(value: string, terms: string[]) {
   const normalized = String(value || "").toLowerCase();
   return terms.some((term) => normalized.includes(term));
+}
+
+function isPostSalePracticeStatus(status?: string | null) {
+  const normalized = String(status || "").toLowerCase();
+  return (
+    normalized === PRACTICE_READY_STATUS.toLowerCase() ||
+    normalized === PRACTICE_CLOSED_STATUS.toLowerCase() ||
+    normalized.includes("venduta") ||
+    normalized.includes("invio gadget") ||
+    normalized.includes("invio biglietti")
+  );
 }
 
 function getTimelineLabel(type: string) {
@@ -676,6 +697,9 @@ export function PraticaDetailPage() {
       setTaskModalOpen(false);
       setTaskDraft(null);
       await load();
+      if (detail?.lead.status === PRACTICE_CLOSED_STATUS || detail?.lead.status === PRACTICE_READY_STATUS) {
+        await changeLeadStatus(PRACTICE_REOPEN_STATUS, "riapertura pratica da task");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore creazione task.");
     } finally {
@@ -712,21 +736,47 @@ export function PraticaDetailPage() {
     window.location.href = uri;
   }
 
-  async function updateStatus() {
-    if (!detail?.lead.id || !statusDraft) return;
+  async function changeLeadStatus(toStatus: string, actor = "operatore pratica") {
+    if (!detail?.lead.id || !toStatus) return;
     setBusy(true);
     setError("");
     try {
       await api(`/api/leads/${detail.lead.id}/status`, {
         method: "POST",
-        body: JSON.stringify({ toStatus: statusDraft, actor: "operatore pratica" })
+        body: JSON.stringify({ toStatus, actor })
       });
+      setStatusDraft("");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore cambio stato.");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function updateStatus() {
+    if (!statusDraft) return;
+    await changeLeadStatus(statusDraft);
+  }
+
+  async function markPracticeReady() {
+    if (!closureReady) {
+      setError("Completa documenti, pagamenti e task aperti prima di portare la pratica in chiusura.");
+      return;
+    }
+    await changeLeadStatus(PRACTICE_READY_STATUS, "pratica pronta per chiusura");
+  }
+
+  async function closePracticeFully() {
+    if (!closureReady) {
+      setError("La pratica non è ancora pronta per la chiusura finale.");
+      return;
+    }
+    await changeLeadStatus(PRACTICE_CLOSED_STATUS, "pratica chiusa al 100%");
+  }
+
+  async function reopenClosedPractice() {
+    await changeLeadStatus(PRACTICE_REOPEN_STATUS, "riapertura pratica manuale");
   }
 
   async function updateAssignee() {
@@ -915,6 +965,9 @@ export function PraticaDetailPage() {
     };
     setDocumentsDraft(nextDocuments);
     await saveDocuments(nextDocuments);
+    if (detail?.lead.status === PRACTICE_CLOSED_STATUS || detail?.lead.status === PRACTICE_READY_STATUS) {
+      await changeLeadStatus(PRACTICE_REOPEN_STATUS, "riapertura pratica da documenti");
+    }
   }
 
   function updatePaymentItem(id: string, updates: Partial<PracticePaymentItem>) {
@@ -933,14 +986,31 @@ export function PraticaDetailPage() {
     void savePayments(nextPayments);
   }
 
-  function updatePaymentStatus(item: PracticePaymentItem, status: PaymentStatus) {
+  async function updatePaymentStatus(item: PracticePaymentItem, status: PaymentStatus) {
     const now = new Date().toISOString();
     if (status === "pending") {
       setReopenedPaymentId(item.id);
       window.setTimeout(() => {
         setReopenedPaymentId((current) => (current === item.id ? null : current));
       }, 1400);
-      updatePaymentItem(item.id, { status, receivedAt: undefined, verifiedAt: undefined });
+      const nextPayments = {
+        items: paymentsDraft.items.map((current) =>
+          current.id === item.id
+            ? {
+                ...current,
+                status,
+                receivedAt: undefined,
+                verifiedAt: undefined,
+                updatedAt: new Date().toISOString()
+              }
+            : current
+        )
+      };
+      setPaymentsDraft(nextPayments);
+      await savePayments(nextPayments);
+      if (detail?.lead.status === PRACTICE_CLOSED_STATUS || detail?.lead.status === PRACTICE_READY_STATUS) {
+        await changeLeadStatus(PRACTICE_REOPEN_STATUS, "riapertura pratica da pagamenti");
+      }
       return;
     }
     if (status === "received") {
@@ -1040,12 +1110,25 @@ export function PraticaDetailPage() {
   const statusClass = detail ? getStatusClass(detail.lead.status) : "pd-status-new";
   const nextStatuses = detail ? workflow?.flow[detail.lead.status] || [] : [];
   const compactTimeline = useMemo(() => timeline.slice(0, 8), [timeline]);
+  const practiceTasks = useMemo(
+    () => (detail?.lead.id ? taskBoardTasks.filter((task) => task.leadId === detail.lead.id) : []),
+    [detail?.lead.id, taskBoardTasks]
+  );
+  const openPracticeTasks = useMemo(() => practiceTasks.filter((task) => task.status === "open"), [practiceTasks]);
   const documentsState = useMemo(() => normalizeDocuments(detail?.lead.documents || documentsDraft), [detail?.lead.documents, documentsDraft]);
   const documentsBadge = useMemo(() => getDocumentsBadge(documentsState), [documentsState]);
   const missingDocumentsCount = useMemo(() => getMissingDocumentsCount(documentsState), [documentsState]);
+  const documentsReady = useMemo(
+    () => documentsState.items.every((item) => !item.required || (item.received && item.verified)),
+    [documentsState]
+  );
   const paymentsState = useMemo(() => normalizePayments(detail?.lead.payments || paymentsDraft), [detail?.lead.payments, paymentsDraft]);
   const pendingPayments = useMemo(
     () => paymentsState.items.filter((item) => item.required && item.status !== "verified"),
+    [paymentsState]
+  );
+  const verifiedPaymentsReady = useMemo(
+    () => paymentsState.items.every((item) => !item.required || item.status === "verified"),
     [paymentsState]
   );
   const paymentsBadge = useMemo(() => getPaymentsBadge(paymentsState), [paymentsState]);
@@ -1065,6 +1148,36 @@ export function PraticaDetailPage() {
   const showPaymentsOk = useMemo(
     () => paymentsState.items.some((item) => item.required) && paymentsState.items.every((item) => !item.required || item.status !== "pending"),
     [paymentsState]
+  );
+  const isReadyToCloseStatus = detail?.lead.status === PRACTICE_READY_STATUS;
+  const isClosedPracticeStatus = detail?.lead.status === PRACTICE_CLOSED_STATUS;
+  const closureReady = documentsReady && verifiedPaymentsReady && openPracticeTasks.length === 0;
+  const closureEligible = isPostSalePracticeStatus(detail?.lead.status) || closureReady;
+  const canMarkReady = Boolean(detail && closureReady && !isReadyToCloseStatus && !isClosedPracticeStatus && nextStatuses.includes(PRACTICE_READY_STATUS));
+  const canClosePractice = Boolean(detail && closureReady && isReadyToCloseStatus && nextStatuses.includes(PRACTICE_CLOSED_STATUS));
+  const canReopenPractice = Boolean(detail && isClosedPracticeStatus && nextStatuses.includes(PRACTICE_REOPEN_STATUS));
+  const closureChecks = useMemo(
+    () => [
+      {
+        key: "documents",
+        label: "Documenti verificati",
+        detail: documentsReady ? "Tutti i documenti richiesti sono caricati e verificati." : `${missingDocumentsCount} documenti ancora incompleti.`,
+        done: documentsReady
+      },
+      {
+        key: "payments",
+        label: "Pagamenti verificati",
+        detail: verifiedPaymentsReady ? "Le rate richieste risultano verificate." : `${pendingPayments.length} pagamenti ancora da chiudere.`,
+        done: verifiedPaymentsReady
+      },
+      {
+        key: "tasks",
+        label: "Nessun task aperto",
+        detail: openPracticeTasks.length ? `${openPracticeTasks.length} task operativi ancora aperti.` : "La pratica non ha task pendenti.",
+        done: openPracticeTasks.length === 0
+      }
+    ],
+    [documentsReady, missingDocumentsCount, openPracticeTasks.length, pendingPayments.length, verifiedPaymentsReady]
   );
   const visibleDocuments = useMemo(
     () =>
@@ -1116,6 +1229,71 @@ export function PraticaDetailPage() {
               </div>
             </div>
           </section>
+
+          {closureEligible ? (
+            <section
+              className={`pd-closure-band ${
+                isClosedPracticeStatus ? "is-closed" : closureReady ? "is-ready" : "is-blocked"
+              } ${reopenedPaymentId ? "is-reopened" : ""}`}
+            >
+              <div className="pd-closure-copy">
+                <span className="pd-closure-eyebrow">Chiusura pratica</span>
+                <h5>
+                  {isClosedPracticeStatus
+                    ? "Pratica chiusa al 100%"
+                    : isReadyToCloseStatus
+                      ? "Pronta da chiudere"
+                      : closureReady
+                        ? "Checklist completata"
+                        : "Ultimi passaggi prima della chiusura"}
+                </h5>
+                <p>
+                  {isClosedPracticeStatus
+                    ? "La pratica è stata completata e archiviata. Puoi riaprirla se torna un pagamento, un documento o una nuova attività."
+                    : isReadyToCloseStatus
+                      ? "Tutto è in ordine: fai l’ultimo passaggio e portala tra le pratiche chiuse."
+                      : closureReady
+                        ? "Documenti, pagamenti e task sono allineati. Puoi segnare la pratica pronta per la chiusura finale."
+                        : "Completa gli elementi ancora aperti. Quando la checklist è verde, la pratica potrà essere chiusa in modo pulito."}
+                </p>
+              </div>
+
+              <div className="pd-closure-checks" role="list" aria-label="Checklist chiusura pratica">
+                {closureChecks.map((item) => (
+                  <article key={item.key} className={`pd-closure-check ${item.done ? "done" : "pending"}`} role="listitem">
+                    <span className="pd-closure-check-icon" aria-hidden="true">
+                      {item.done ? "OK" : "!"}
+                    </span>
+                    <div>
+                      <strong>{item.label}</strong>
+                      <span>{item.detail}</span>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              <div className="pd-closure-actions">
+                {canMarkReady ? (
+                  <button type="button" disabled={busy} onClick={() => void markPracticeReady()}>
+                    Segna pronta
+                  </button>
+                ) : null}
+                {canClosePractice ? (
+                  <button type="button" disabled={busy} onClick={() => void closePracticeFully()}>
+                    Chiudi 100%
+                  </button>
+                ) : null}
+                {canReopenPractice ? (
+                  <button type="button" className="secondary" disabled={busy} onClick={() => void reopenClosedPractice()}>
+                    Riapri pratica
+                  </button>
+                ) : null}
+                {!closureReady && !isClosedPracticeStatus ? (
+                  <span className="pd-closure-hint">{openPracticeTasks.length ? "Chiudi i task aperti o completa i blocchi indicati." : "Completa i controlli evidenziati per proseguire."}</span>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
 
           <div className="pd-grid">
             <section
@@ -1379,17 +1557,19 @@ export function PraticaDetailPage() {
                   </>
                 )}
               </div>
-              {pendingPayments.length ? (
-                <div className={`pd-payments-alert ${paymentsBadge.className}`}>
-                  <strong>Pagamenti in sospeso ({pendingPayments.length})</strong>
-                  <span>Richiedi il pagamento o verifica quelli ricevuti per sbloccare la pratica.</span>
-                </div>
-              ) : (
-                <div className={`pd-payments-alert ${paymentsBadge.className}`}>
-                  <strong>Pagamenti completi</strong>
-                  <span>Tutti i pagamenti richiesti risultano verificati.</span>
-                </div>
-              )}
+              <div
+                className={`pd-payments-alert ${paymentsBadge.className} ${showPaymentsOk ? "is-complete" : "is-pending"} ${
+                  reopenedPaymentId ? "is-reopened" : ""
+                }`}
+                aria-live="polite"
+              >
+                <strong>{pendingPayments.length ? `Pagamenti in sospeso (${pendingPayments.length})` : "Pagamenti completi"}</strong>
+                <span>
+                  {pendingPayments.length
+                    ? "Richiedi il pagamento o verifica quelli ricevuti per sbloccare la pratica."
+                    : "Tutti i pagamenti richiesti risultano verificati."}
+                </span>
+              </div>
               <div className="pd-payments-table-head" aria-hidden="true">
                 <span>Voce</span>
                 <span>Scadenza</span>
@@ -1424,7 +1604,7 @@ export function PraticaDetailPage() {
                           <summary className="pd-payment-menu-trigger">Azioni</summary>
                           <div className="pd-payment-menu-list">
                             {item.status === "pending" ? (
-                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => updatePaymentStatus(item, "received")}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => void updatePaymentStatus(item, "received")}>
                                 Segna ricevuto
                               </button>
                             ) : null}
@@ -1439,12 +1619,12 @@ export function PraticaDetailPage() {
                               </button>
                             ) : null}
                             {item.status !== "verified" ? (
-                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => updatePaymentStatus(item, "verified")}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => void updatePaymentStatus(item, "verified")}>
                                 Verifica
                               </button>
                             ) : null}
                             {item.status !== "pending" ? (
-                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => updatePaymentStatus(item, "pending")}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => void updatePaymentStatus(item, "pending")}>
                                 Riapri pagamento
                               </button>
                             ) : null}

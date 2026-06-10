@@ -227,11 +227,25 @@ export function PracticeCard({
               ? "Aggiornamento"
               : "Task operativo"
     : "";
-  const nextActionLabel = linkedTask ? linkedTaskKindText : getFallbackActionLabel(lead, suggestedAction.kind);
-  const nextActionMeta = linkedTask ? linkedTask.title : nextMeta.dateText;
+  const isReadyToClose = String(lead.status || "").toLowerCase().includes("pronta per chiusura");
+  const isClosedPractice = String(lead.status || "").toLowerCase().includes("chiusa 100");
+  const nextActionLabel = isClosedPractice
+    ? "Pratica chiusa"
+    : isReadyToClose
+      ? "Chiudi pratica"
+      : linkedTask
+        ? linkedTaskKindText
+        : getFallbackActionLabel(lead, suggestedAction.kind);
+  const nextActionMeta = isClosedPractice
+    ? "Archivio consultabile"
+    : isReadyToClose
+      ? "Ultimo passaggio disponibile"
+      : linkedTask
+        ? linkedTask.title
+        : nextMeta.dateText;
   const dueValue = linkedTask?.dueAt || lead.nextActionAt;
-  const dueLabel = dueValue ? formatDueShort(dueValue) : "Da pianificare";
-  const dueMeta = getDueDeltaLabel(dueValue);
+  const dueLabel = isClosedPractice ? "Archiviata" : isReadyToClose ? "Chiusura finale" : dueValue ? formatDueShort(dueValue) : "Da pianificare";
+  const dueMeta = isClosedPractice ? "Nessuna azione richiesta" : isReadyToClose ? "Checklist completata" : getDueDeltaLabel(dueValue);
   const assigneeName = lead.assignedTo || "Non assegnato";
   const assigneeInitials = getAssigneeInitials(assigneeName);
   const lastContact = getLastContactVisual(lead);
