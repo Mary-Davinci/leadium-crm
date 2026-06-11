@@ -1063,6 +1063,27 @@ export const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, task);
     }
 
+    const leadNoteParams = routeMatch(pathname, "/leads/:leadId/notes");
+    if (leadNoteParams && method === "POST") {
+      const body = await parseBody(req);
+      const lead = await getLeadById(leadNoteParams.leadId);
+      if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+      const noteText = String(body.text || body.note || "").trim();
+      if (!noteText) return sendJson(res, 400, { error: "Testo nota obbligatorio." });
+      lead.notes = appendNote(String(lead.notes || ""), noteText);
+      lead.updatedAt = new Date().toISOString();
+      await saveLead(lead);
+      await appendActivities([
+        createActivity({
+          leadId: lead.id,
+          type: "note_added",
+          text: noteText,
+          actor: body.actor || "system"
+        })
+      ]);
+      return sendJson(res, 201, safeLead(lead));
+    }
+
     const leadByIdParams = routeMatch(pathname, "/leads/:leadId");
     if (leadByIdParams && method === "GET") {
       const lead = await getLeadById(leadByIdParams.leadId);
@@ -1083,9 +1104,16 @@ export const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const lead = await getLeadById(leadByIdParams.leadId);
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+      const previousNotes = String(lead.notes || "");
       for (const key of ["fullName", "phone", "email", "source", "budget", "assignedTo", "notes"]) {
         if (Object.prototype.hasOwnProperty.call(body, key)) lead[key] = body[key];
       }
+      const hasNotesUpdate = Object.prototype.hasOwnProperty.call(body, "notes");
+      const hasDocumentsUpdate = Object.prototype.hasOwnProperty.call(body, "documents");
+      const hasPaymentsUpdate = Object.prototype.hasOwnProperty.call(body, "payments");
+      const hasLeadFieldUpdate = ["fullName", "phone", "email", "source", "budget", "assignedTo"].some((key) =>
+        Object.prototype.hasOwnProperty.call(body, key)
+      );
       if (Object.prototype.hasOwnProperty.call(body, "documents")) {
         lead.documents = normalizePracticeDocuments(body.documents);
       }
@@ -1100,22 +1128,54 @@ export const server = http.createServer(async (req, res) => {
       if (Object.prototype.hasOwnProperty.call(body, "payments")) {
         await syncPaymentChecklistTask(lead);
       }
-      await appendActivities([
-        createActivity({
-          leadId: lead.id,
-          type: Object.prototype.hasOwnProperty.call(body, "payments")
-            ? "payments_updated"
-            : Object.prototype.hasOwnProperty.call(body, "documents")
-              ? "documents_updated"
-              : "lead_updated",
-          text: Object.prototype.hasOwnProperty.call(body, "payments")
-            ? "Pagamenti pratica aggiornati."
-            : Object.prototype.hasOwnProperty.call(body, "documents")
-              ? "Documenti pratica aggiornati."
-              : "Anagrafica lead aggiornata.",
-          actor: body.actor || "system"
-        })
-      ]);
+      const activities = [];
+      if (hasPaymentsUpdate) {
+        activities.push(
+          createActivity({
+            leadId: lead.id,
+            type: "payments_updated",
+            text: "Pagamenti pratica aggiornati.",
+            actor: body.actor || "system"
+          })
+        );
+      } else if (hasDocumentsUpdate) {
+        activities.push(
+          createActivity({
+            leadId: lead.id,
+            type: "documents_updated",
+            text: "Documenti pratica aggiornati.",
+            actor: body.actor || "system"
+          })
+        );
+      }
+
+      if (hasNotesUpdate) {
+        const previousNoteText = previousNotes.trim();
+        const nextNoteText = String(lead.notes || "").trim();
+        if (nextNoteText !== previousNoteText) {
+          activities.push(
+            createActivity({
+              leadId: lead.id,
+              type: nextNoteText ? (previousNoteText ? "note_updated" : "note_added") : "note_removed",
+              text: nextNoteText || "Nota pratica rimossa.",
+              actor: body.actor || "system"
+            })
+          );
+        }
+      }
+
+      if (!hasDocumentsUpdate && !hasPaymentsUpdate && hasLeadFieldUpdate) {
+        activities.push(
+          createActivity({
+            leadId: lead.id,
+            type: "lead_updated",
+            text: "Anagrafica lead aggiornata.",
+            actor: body.actor || "system"
+          })
+        );
+      }
+
+      await appendActivities(activities);
       return sendJson(res, 200, safeLead(lead));
     }
 

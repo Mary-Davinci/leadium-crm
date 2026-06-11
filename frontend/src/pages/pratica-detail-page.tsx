@@ -23,6 +23,7 @@ type Lead = {
   source?: string;
   assignedTo?: string;
   notes?: string;
+  updatedAt?: string;
   documents?: PracticeDocumentsState;
   payments?: PracticePaymentsState;
   status: string;
@@ -430,6 +431,41 @@ function getTimelineMeta(type: string) {
   return { icon: "-", className: "generic" };
 }
 
+function buildRenderableTimeline(detail: LeadDetail | null): TimelineItem[] {
+  const timeline = Array.isArray(detail?.timeline) ? [...detail.timeline] : [];
+  const noteText = String(detail?.lead?.notes || "").trim();
+  if (!noteText) return timeline;
+
+  const hasDedicatedNote = timeline.some((item) => {
+    const type = String(item.type || "").toLowerCase();
+    return type.includes("note") && String(item.text || "").trim().length > 0;
+  });
+  if (hasDedicatedNote) return timeline;
+
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const item = timeline[index];
+    const type = String(item.type || "").toLowerCase();
+    const text = String(item.text || "").trim().toLowerCase();
+    const actor = String(item.actor || "").trim().toLowerCase();
+    if (type === "lead_updated" && text === "anagrafica lead aggiornata." && actor.includes("pratic")) {
+      timeline[index] = {
+        ...item,
+        type: "note_updated",
+        text: noteText
+      };
+      return timeline;
+    }
+  }
+
+  timeline.push({
+    type: "note_updated",
+    text: noteText,
+    actor: "operatore pratiche",
+    createdAt: String(detail?.lead?.updatedAt || new Date().toISOString())
+  });
+  return timeline;
+}
+
 function getNextActionMeta(value?: string) {
   if (!value) {
     return {
@@ -634,6 +670,16 @@ export function PraticaDetailPage() {
   const [highlightSection, setHighlightSection] = useState<PracticeFocusSection | null>(null);
   const [reopenedPaymentId, setReopenedPaymentId] = useState<string | null>(null);
 
+  function openNoteModal() {
+    setNoteDraft("");
+    setNoteModalOpen(true);
+  }
+
+  function closeNoteModal() {
+    setNoteDraft("");
+    setNoteModalOpen(false);
+  }
+
   async function load() {
     if (!id) return;
     setLoading(true);
@@ -646,7 +692,6 @@ export function PraticaDetailPage() {
       ]);
       setDetail(payload);
       setWorkflow(workflowData);
-      setNoteDraft(String(payload.lead.notes || ""));
       setAssigneeDraft(String(payload.lead.assignedTo || ""));
       setDocumentsDraft(normalizeDocuments(payload.lead.documents));
       setPaymentsDraft(normalizePayments(payload.lead.payments));
@@ -798,15 +843,17 @@ export function PraticaDetailPage() {
 
   async function saveNote() {
     if (!detail?.lead.id) return;
+    const nextNote = noteDraft.trim();
+    if (!nextNote) return;
     setBusy(true);
     setError("");
     try {
-      await api(`/api/leads/${detail.lead.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ notes: noteDraft })
+      await api(`/api/leads/${detail.lead.id}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ text: nextNote, actor: "operatore pratiche" })
       });
       await load();
-      setNoteModalOpen(false);
+      closeNoteModal();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore salvataggio nota.");
     } finally {
@@ -1105,7 +1152,7 @@ export function PraticaDetailPage() {
   }, [detail, focus, documentKey, documentsDraft.items]);
 
 
-  const timeline = useMemo(() => (detail?.timeline || []).slice().reverse(), [detail]);
+  const timeline = useMemo(() => buildRenderableTimeline(detail).slice().reverse(), [detail]);
   const priority = detail ? getPriority(detail.lead) : "media";
   const statusClass = detail ? getStatusClass(detail.lead.status) : "pd-status-new";
   const nextStatuses = detail ? workflow?.flow[detail.lead.status] || [] : [];
@@ -1223,7 +1270,7 @@ export function PraticaDetailPage() {
                 <button type="button" className="secondary" disabled={busy} onClick={openTaskModal}>
                   Crea task
                 </button>
-                <button type="button" className="secondary" onClick={() => setNoteModalOpen(true)}>
+                <button type="button" className="secondary" onClick={openNoteModal}>
                   Inserisci nota
                 </button>
               </div>
@@ -1781,7 +1828,7 @@ export function PraticaDetailPage() {
           ) : null}
 
           {noteModalOpen ? (
-            <div className="pd-note-modal-backdrop" role="presentation" onClick={() => setNoteModalOpen(false)}>
+            <div className="pd-note-modal-backdrop" role="presentation" onClick={closeNoteModal}>
               <div
                 className="pd-note-modal"
                 role="dialog"
@@ -1794,7 +1841,7 @@ export function PraticaDetailPage() {
                     <h5 id="pd-note-modal-title">Inserisci nota</h5>
                     <p>Aggiungi o aggiorna il commento operativo della pratica.</p>
                   </div>
-                  <button type="button" className="secondary" onClick={() => setNoteModalOpen(false)}>
+                  <button type="button" className="secondary" onClick={closeNoteModal}>
                     Chiudi
                   </button>
                 </div>
@@ -1806,10 +1853,10 @@ export function PraticaDetailPage() {
                   placeholder="Scrivi qui la nota o il commento..."
                 />
                 <div className="pd-note-modal-actions">
-                  <button type="button" className="secondary" onClick={() => setNoteModalOpen(false)}>
+                  <button type="button" className="secondary" onClick={closeNoteModal}>
                     Annulla
                   </button>
-                  <button type="button" disabled={busy} onClick={saveNote}>
+                  <button type="button" disabled={busy || !noteDraft.trim()} onClick={saveNote}>
                     Salva nota
                   </button>
                 </div>

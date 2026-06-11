@@ -71,19 +71,35 @@ body {
 }
 
 .content button {
-  border: 1px solid #2e66b7;
-  background: linear-gradient(180deg, #3d79cf, #2e66b7);
-  color: #fff;
+  border: 1px solid #d2ddea;
+  background: #fff;
+  color: #244061;
   border-radius: 8px;
   min-height: 36px;
   padding: 7px 12px;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  box-shadow: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .content button:hover {
-  filter: brightness(1.03);
+  filter: none;
+  background: #f8fbff;
+  border-color: #c1d3ea;
+}
+
+.content button:focus,
+.content button:focus-visible {
+  outline: none;
+  border-color: #bfd2ea;
+  box-shadow: 0 0 0 3px rgba(61, 121, 207, 0.1);
+}
+
+.content button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .table {

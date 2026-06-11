@@ -35,6 +35,17 @@ const PRACTICE_WORKFLOW_CACHE_TTL_MS = 10 * 60 * 1000;
 const PRACTICE_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 let workflowCache: Workflow | null = null;
 const practiceDetailCache = new Map<string, LeadDetail>();
+const PRACTICE_READY_STATUS = "pronta per chiusura";
+const PRACTICE_CLOSED_STATUS = "chiusa 100";
+
+type PracticeView = "active" | "ready" | "closed";
+
+function getPracticeViewFromStatus(status?: string | null): PracticeView {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized.includes(PRACTICE_CLOSED_STATUS)) return "closed";
+  if (normalized.includes(PRACTICE_READY_STATUS)) return "ready";
+  return "active";
+}
 
 function dedupeTasksById(tasks: CrmTask[]) {
   const byId = new Map<string, CrmTask>();
@@ -121,7 +132,7 @@ export function PratichePage() {
   const authUser = getAuthUser();
   const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
   const [scopeFilter, setScopeFilter] = useState<"mine" | "all">("mine");
-  const [focusFilter, setFocusFilter] = useState<"" | "overdue" | "today" | "callbacks" | "documents" | "payments">("");
+  const [practiceView, setPracticeView] = useState<PracticeView>("active");
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
@@ -605,6 +616,12 @@ export function PratichePage() {
   }, [debouncedSearch, statusFilter]);
 
   useEffect(() => {
+    if (practiceView === "active") return;
+    if (documentFilter) setDocumentFilter(false);
+    if (paymentFilter) setPaymentFilter(false);
+  }, [practiceView, documentFilter, paymentFilter]);
+
+  useEffect(() => {
     const boardCache = getTaskBoardCache();
     if (boardCache?.data?.tasks?.length) {
       setTaskBoardTasks(dedupeTasksById(boardCache.data.tasks));
@@ -728,25 +745,46 @@ export function PratichePage() {
     });
 
   const scopedRows = useMemo(() => getBaseScopeRows(leads), [leads, assignedFilter, scopeFilter, currentUserKeys]);
+  const activeScopedRows = useMemo(
+    () => scopedRows.filter((lead) => getPracticeViewFromStatus(lead.status) === "active"),
+    [scopedRows]
+  );
+  const viewCounts = useMemo(
+    () => ({
+      active: activeScopedRows.length,
+      ready: scopedRows.filter((lead) => getPracticeViewFromStatus(lead.status) === "ready").length,
+      closed: scopedRows.filter((lead) => getPracticeViewFromStatus(lead.status) === "closed").length
+    }),
+    [activeScopedRows.length, scopedRows]
+  );
+  const viewScopedRows = useMemo(
+    () => scopedRows.filter((lead) => getPracticeViewFromStatus(lead.status) === practiceView),
+    [scopedRows, practiceView]
+  );
 
   const rows = useMemo(
     () =>
-      scopedRows.filter((lead) => {
+      viewScopedRows.filter((lead) => {
         const priority = getPriority(lead);
-        if (priorityFilter && priority !== priorityFilter) return false;
+        if (priorityFilter === "alta" || priorityFilter === "media" || priorityFilter === "bassa") {
+          if (priority !== priorityFilter) return false;
+        }
+        if (priorityFilter === "overdue" && getOperationalBucket(lead) !== "overdue") return false;
+        if (priorityFilter === "today" && getOperationalBucket(lead) !== "today") return false;
+        if (
+          priorityFilter === "callbacks" &&
+          !includesAny(`${lead.status} ${lead.notes} ${lead.latestCallOutcome || ""}`.toLowerCase(), ["richiam", "call_back"])
+        ) {
+          return false;
+        }
         if (callOutcomeFilter && String(lead.latestCallOutcome || "") !== callOutcomeFilter) return false;
 
         const stack = `${lead.status} ${lead.notes}`.toLowerCase();
         if (documentFilter && !includesAny(stack, ["document", "doc"])) return false;
         if (paymentFilter && !includesAny(stack, ["saldo", "pagament", "rata", "scaden"])) return false;
-        if (focusFilter === "overdue" && getOperationalBucket(lead) !== "overdue") return false;
-        if (focusFilter === "today" && getOperationalBucket(lead) !== "today") return false;
-        if (focusFilter === "callbacks" && !includesAny(`${lead.status} ${lead.notes} ${lead.latestCallOutcome || ""}`.toLowerCase(), ["richiam", "call_back"])) return false;
-        if (focusFilter === "documents" && !includesAny(stack, ["document", "doc"])) return false;
-        if (focusFilter === "payments" && !includesAny(stack, ["saldo", "pagament", "rata", "scaden"])) return false;
         return true;
       }),
-    [scopedRows, priorityFilter, callOutcomeFilter, documentFilter, paymentFilter, focusFilter, primaryTaskByLeadId]
+    [viewScopedRows, priorityFilter, callOutcomeFilter, documentFilter, paymentFilter, primaryTaskByLeadId]
   );
 
   const sortedRows = useMemo(() => {
@@ -763,6 +801,12 @@ export function PratichePage() {
     };
 
     return [...rows].sort((a, b) => {
+      if (practiceView === "closed") {
+        const aTs = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const bTs = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        return bTs - aTs;
+      }
+
       const taskA = primaryTaskByLeadId.get(a.id) || null;
       const taskB = primaryTaskByLeadId.get(b.id) || null;
 
@@ -784,23 +828,12 @@ export function PratichePage() {
       const bTs = b.nextActionAt ? new Date(b.nextActionAt).getTime() : Number.MAX_SAFE_INTEGER;
       return aTs - bTs;
     });
-  }, [rows, primaryTaskByLeadId]);
+  }, [rows, primaryTaskByLeadId, practiceView]);
 
   const scopeCounts = useMemo(() => {
     const mine = leads.filter((lead) => isLeadAssignedToCurrentUser(lead)).length;
     return { mine, all: leads.length };
   }, [leads, currentUserKeys]);
-
-  const smartCounts = useMemo(() => {
-    const overdue = scopedRows.filter((lead) => getOperationalBucket(lead) === "overdue").length;
-    const today = scopedRows.filter((lead) => getOperationalBucket(lead) === "today").length;
-    const callbacks = scopedRows.filter((lead) =>
-      includesAny(`${lead.status} ${lead.notes} ${lead.latestCallOutcome || ""}`.toLowerCase(), ["richiam", "call_back"])
-    ).length;
-    const documents = scopedRows.filter((lead) => includesAny(`${lead.status} ${lead.notes}`.toLowerCase(), ["document", "doc"])).length;
-    const payments = scopedRows.filter((lead) => includesAny(`${lead.status} ${lead.notes}`.toLowerCase(), ["saldo", "pagament", "rata", "scaden"])).length;
-    return { overdue, today, callbacks, documents, payments };
-  }, [scopedRows, primaryTaskByLeadId]);
 
   useEffect(() => {
     if (!selectedLeadId) return;
@@ -870,11 +903,28 @@ export function PratichePage() {
   const modalAutoFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
   const modalClosedOutcome = callOutcome === "not_interested";
   const isQuickDetailVisible = Boolean(selectedLeadId);
-  const pageTitle = scopeFilter === "all" && isAdmin ? "Pratiche del team" : "Il mio lavoro";
+  const pageTitle =
+    practiceView === "closed"
+      ? "Archivio pratiche"
+      : practiceView === "ready"
+        ? "Pratiche pronte alla chiusura"
+        : scopeFilter === "all" && isAdmin
+          ? "Pratiche del team"
+          : "Il mio lavoro";
   const pageSubtitle =
-    scopeFilter === "all" && isAdmin
-      ? "Monitora il carico operativo del team e intervieni dove serve."
-      : "Qui trovi le pratiche assegnate a te e le priorita su cui muoverti oggi.";
+    practiceView === "closed"
+      ? "Storico delle pratiche completate, consultabili e riapribili se serve."
+      : practiceView === "ready"
+        ? "Ultimo controllo prima della chiusura definitiva del cliente."
+        : scopeFilter === "all" && isAdmin
+          ? "Monitora il carico operativo del team e intervieni dove serve."
+          : "Qui trovi le pratiche assegnate a te e le priorita su cui muoverti oggi.";
+  const emptyStateMessage =
+    practiceView === "closed"
+      ? "Nessuna pratica chiusa trovata con i filtri attuali."
+      : practiceView === "ready"
+        ? "Nessuna pratica pronta alla chiusura con i filtri attuali."
+        : "Nessuna pratica trovata con i filtri attuali.";
 
   return (
     <div className="pr-page">
@@ -901,47 +951,50 @@ export function PratichePage() {
                   onClick={() => setScopeFilter("all")}
                 >
                   Tutte <span>{scopeCounts.all}</span>
-                </button>
-              ) : null}
+                 </button>
+               ) : null}
+             </div>
+
+            <div className="pr-view-switcher" role="tablist" aria-label="Vista pratiche">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={practiceView === "active"}
+                className={`pr-view-tile pr-view-tone-active ${practiceView === "active" ? "active" : ""}`}
+                onClick={() => setPracticeView("active")}
+              >
+                <strong>Attive</strong>
+                <span>{viewCounts.active} da lavorare</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={practiceView === "ready"}
+                className={`pr-view-tile pr-view-tone-ready ${practiceView === "ready" ? "active" : ""}`}
+                onClick={() => setPracticeView("ready")}
+              >
+                <strong>Pronte</strong>
+                <span>{viewCounts.ready} in attesa chiusura</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={practiceView === "closed"}
+                className={`pr-view-tile pr-view-tone-closed ${practiceView === "closed" ? "active" : ""}`}
+                onClick={() => setPracticeView("closed")}
+              >
+                <strong>Archivio</strong>
+                <span>{viewCounts.closed} in archivio</span>
+              </button>
             </div>
 
-            <div className="pr-smart-badges">
-              <button
-                type="button"
-                className={`pr-smart-badge overdue ${focusFilter === "overdue" ? "active" : ""}`}
-                onClick={() => setFocusFilter((current) => (current === "overdue" ? "" : "overdue"))}
-              >
-                In ritardo <span>{smartCounts.overdue}</span>
-              </button>
-              <button
-                type="button"
-                className={`pr-smart-badge today ${focusFilter === "today" ? "active" : ""}`}
-                onClick={() => setFocusFilter((current) => (current === "today" ? "" : "today"))}
-              >
-                Oggi <span>{smartCounts.today}</span>
-              </button>
-              <button
-                type="button"
-                className={`pr-smart-badge planned ${focusFilter === "callbacks" ? "active" : ""}`}
-                onClick={() => setFocusFilter((current) => (current === "callbacks" ? "" : "callbacks"))}
-              >
-                Da richiamare <span>{smartCounts.callbacks}</span>
-              </button>
-              <button
-                type="button"
-                className={`pr-smart-badge fresh ${focusFilter === "documents" ? "active" : ""}`}
-                onClick={() => setFocusFilter((current) => (current === "documents" ? "" : "documents"))}
-              >
-                Documenti <span>{smartCounts.documents}</span>
-              </button>
-              <button
-                type="button"
-                className={`pr-smart-badge fresh ${focusFilter === "payments" ? "active" : ""}`}
-                onClick={() => setFocusFilter((current) => (current === "payments" ? "" : "payments"))}
-              >
-                Pagamenti <span>{smartCounts.payments}</span>
-              </button>
-            </div>
+            {practiceView !== "active" ? (
+              <p className="pr-view-hint">
+                {practiceView === "ready"
+                  ? "Qui restano solo le pratiche che hanno completato checklist e attendono conferma finale."
+                  : "Questa vista e pensata come archivio operativo: consulta, verifica e riapri solo quando serve."}
+              </p>
+            ) : null}
           </div>
         </header>
 
@@ -978,6 +1031,13 @@ export function PratichePage() {
             <option value="alta">Alta</option>
             <option value="media">Media</option>
             <option value="bassa">Bassa</option>
+            {practiceView === "active" ? (
+              <>
+                <option value="overdue">In ritardo</option>
+                <option value="today">Da fare oggi</option>
+                <option value="callbacks">Da richiamare</option>
+              </>
+            ) : null}
           </select>
           <button
             type="button"
@@ -994,7 +1054,7 @@ export function PratichePage() {
         </div>
 
         {showExtraFilters ? (
-          <div className="pr-filters pr-filters-extra">
+          <div className={`pr-filters pr-filters-extra ${practiceView === "active" ? "" : "pr-filters-extra-compact"}`}>
             <select value={callOutcomeFilter} onChange={(e) => setCallOutcomeFilter(e.target.value)}>
               <option value="">Tutti gli esiti chiamata</option>
               <option value="completed">Completata</option>
@@ -1004,14 +1064,18 @@ export function PratichePage() {
               <option value="interested">Interessato</option>
               <option value="not_interested">Non interessato</option>
             </select>
-            <label className="pr-check">
-              <input type="checkbox" checked={documentFilter} onChange={(e) => setDocumentFilter(e.target.checked)} />
-              Documenti mancanti
-            </label>
-            <label className="pr-check">
-              <input type="checkbox" checked={paymentFilter} onChange={(e) => setPaymentFilter(e.target.checked)} />
-              Pagamenti in scadenza
-            </label>
+            {practiceView === "active" ? (
+              <>
+                <label className="pr-check">
+                  <input type="checkbox" checked={documentFilter} onChange={(e) => setDocumentFilter(e.target.checked)} />
+                  Documenti mancanti
+                </label>
+                <label className="pr-check">
+                  <input type="checkbox" checked={paymentFilter} onChange={(e) => setPaymentFilter(e.target.checked)} />
+                  Pagamenti in scadenza
+                </label>
+              </>
+            ) : null}
           </div>
         ) : null}
 
@@ -1050,7 +1114,7 @@ export function PratichePage() {
               />
             ))
           ) : (
-            <p className="muted pr-empty-list">Nessuna pratica trovata con i filtri attuali.</p>
+            <p className="muted pr-empty-list">{emptyStateMessage}</p>
           )}
         </div>
       </section>

@@ -1418,7 +1418,7 @@
   outline: none !important;
 }
 
-.pd-doc-delete-button {
+button.pd-doc-delete-button {
   display: inline-flex;
   flex-direction: column;
   align-items: center;
@@ -1426,13 +1426,16 @@
   width: 38px;
   height: 38px;
   border-radius: 50%;
+  background: rgb(255, 95, 95);
   background-color: rgb(255, 95, 95);
+  color: #fff;
   cursor: pointer;
   border: 2px solid rgb(255, 201, 201);
   transition-duration: 0.3s;
   position: relative;
   overflow: hidden;
   padding: 0;
+  box-shadow: none;
 }
 
 .pd-doc-bin-bottom {
@@ -1465,19 +1468,21 @@
   transition: all 0.3s;
 }
 
-.pd-doc-delete-button:hover .pd-doc-bin-top {
+button.pd-doc-delete-button:hover .pd-doc-bin-top {
   transform: rotate(45deg);
 }
 
-.pd-doc-delete-button:hover {
+button.pd-doc-delete-button:hover {
+  background: rgb(255, 0, 0);
   background-color: rgb(255, 0, 0);
+  border-color: rgb(255, 201, 201);
 }
 
-.pd-doc-delete-button:active {
+button.pd-doc-delete-button:active {
   transform: scale(0.9);
 }
 
-.pd-doc-delete-button:hover .pd-doc-bin-garbage {
+button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
   animation: pd-doc-bin-throw 0.4s linear;
 }
 
@@ -1926,6 +1931,16 @@
 .pd-timeline-note .pd-timeline-dot {
   background: #8b5cf6;
   box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.12);
+}
+
+.pd-timeline-note .pd-timeline-content p {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f6f1ff;
+  border: 1px solid #e4d6ff;
+  color: #4d3a78;
 }
 
 .pd-note-meta {
