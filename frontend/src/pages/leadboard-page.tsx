@@ -434,7 +434,7 @@ export function LeadBoardPage() {
             </div>
             <label className="ops-select-all">
               <input type="checkbox" checked={allVisibleSelected} onChange={toggleVisibleSelection} />
-              <span>Seleziona visibili</span>
+              <span>Seleziona tutti</span>
             </label>
           </div>
 
@@ -443,7 +443,6 @@ export function LeadBoardPage() {
             <span>Lead</span>
             <span>Contatti</span>
             <span>Origine</span>
-            <span>Stato dati</span>
             <span>Operatore suggerito</span>
           </div>
 
@@ -451,7 +450,6 @@ export function LeadBoardPage() {
             {filteredLeads.map((lead) => {
               const currentDraft = getLeadAssigneeDraft(lead.id);
               const suggestedOperator = operatorChoices.find((operator) => operator.username === currentDraft) || null;
-              const completeness = getLeadCompleteness(lead);
               return (
                 <article key={lead.id} className={`ops-row ${selectedLeadSet.has(lead.id) ? "selected" : ""}`} role="listitem">
                   <div className="ops-row-cell checkbox">
@@ -475,13 +473,6 @@ export function LeadBoardPage() {
 
                   <div className="ops-row-cell source">
                     <span className="ops-inline-badge source">{lead.source || "import"}</span>
-                  </div>
-
-                  <div className="ops-row-cell quality">
-                    {completeness === "complete" ? <span className="ops-inline-badge good">Completa</span> : null}
-                    {completeness === "missing-phone" ? <span className="ops-inline-badge warning">No telefono</span> : null}
-                    {completeness === "missing-email" ? <span className="ops-inline-badge warning">No email</span> : null}
-                    {completeness === "missing-both" ? <span className="ops-inline-badge danger">Dati minimi</span> : null}
                   </div>
 
                   <div className="ops-row-cell assignee">

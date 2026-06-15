@@ -177,7 +177,7 @@
 .ops-grid-head,
 .ops-row {
   display: grid;
-  grid-template-columns: 34px minmax(180px, 1.3fr) minmax(180px, 1.2fr) minmax(120px, 0.9fr) minmax(120px, 0.9fr) minmax(230px, 1.5fr) 92px;
+  grid-template-columns: 34px minmax(180px, 1.15fr) minmax(180px, 1.05fr) minmax(220px, 1.35fr) minmax(240px, 1.55fr);
   gap: 12px;
   align-items: center;
 }
@@ -189,6 +189,11 @@
   font-weight: 800;
   text-transform: uppercase;
   border-bottom: 1px solid #edf2f8;
+}
+
+.ops-grid-head span:last-child {
+  justify-self: end;
+  text-align: right;
 }
 
 .ops-grid-body {
@@ -236,11 +241,20 @@
 .ops-row-cell.assignee small {
   color: #7389a4;
   font-size: 12px;
+  line-height: 1.25;
 }
 
 .ops-row-cell.assignee strong {
   color: #243754;
   font-size: 13px;
+}
+
+.ops-row-cell.assignee {
+  justify-self: end;
+  justify-items: end;
+  text-align: right;
+  min-width: 220px;
+  gap: 2px;
 }
 
 .ops-row-cell.contacts span {
@@ -277,12 +291,14 @@
 .ops-inline-badge {
   display: inline-flex;
   align-items: center;
-  width: max-content;
+  max-width: 100%;
   border-radius: 999px;
   padding: 5px 9px;
   font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ops-inline-badge.source {
@@ -431,7 +447,7 @@
 @media (max-width: 1280px) {
   .ops-grid-head,
   .ops-row {
-    grid-template-columns: 34px minmax(160px, 1.2fr) minmax(160px, 1.2fr) minmax(110px, 0.8fr) minmax(110px, 0.8fr) minmax(210px, 1.3fr) 92px;
+    grid-template-columns: 34px minmax(160px, 1.1fr) minmax(160px, 1fr) minmax(170px, 1.2fr) minmax(210px, 1.35fr);
   }
 }
 
@@ -485,14 +501,15 @@
   .ops-row-cell.lead,
   .ops-row-cell.contacts,
   .ops-row-cell.source,
-  .ops-row-cell.quality,
-  .ops-row-cell.assignee,
-  .ops-row-cell.action {
+  .ops-row-cell.assignee {
     grid-column: 2;
   }
 
-  .ops-row-cell.action {
-    justify-content: flex-start;
+  .ops-row-cell.assignee {
+    justify-self: start;
+    justify-items: start;
+    text-align: left;
+    min-width: 0;
   }
 
   .ops-assign-btn,

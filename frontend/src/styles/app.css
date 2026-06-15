@@ -70,7 +70,7 @@ body {
   resize: vertical;
 }
 
-.content button {
+.content button:not([class]) {
   border: 1px solid #d2ddea;
   background: #fff;
   color: #244061;
@@ -84,20 +84,20 @@ body {
   transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.content button:hover {
+.content button:not([class]):hover {
   filter: none;
   background: #f8fbff;
   border-color: #c1d3ea;
 }
 
-.content button:focus,
-.content button:focus-visible {
+.content button:not([class]):focus,
+.content button:not([class]):focus-visible {
   outline: none;
   border-color: #bfd2ea;
   box-shadow: 0 0 0 3px rgba(61, 121, 207, 0.1);
 }
 
-.content button:disabled {
+.content button:not([class]):disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }

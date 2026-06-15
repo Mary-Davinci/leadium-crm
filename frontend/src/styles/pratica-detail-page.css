@@ -1303,6 +1303,7 @@
   color: #38577f;
   font-size: 11px;
   font-weight: 700;
+  cursor: pointer;
 }
 
 .pd-doc-upload {
@@ -1675,17 +1676,87 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
   padding: 2px 0 0;
 }
 
-.pd-doc-note-inline {
+.pd-doc-note-editor {
   grid-column: 1 / -1;
+  position: relative;
+  min-height: 40px;
+  margin-top: 2px;
+}
+
+.pd-doc-note-editor.is-saved {
+  animation: pd-doc-note-saved-flash 0.9s ease;
+}
+
+.pd-doc-note-inline {
   width: 100%;
-  min-height: 32px;
-  border-radius: 8px;
+  height: 40px;
+  min-height: 40px;
+  border-radius: 40px;
   border: 1px solid #cfd8e7;
-  padding: 0 9px;
+  padding: 9px 74px 9px 14px;
   color: #284266;
   background: #fff;
-  margin-top: 2px;
   font-size: 12px;
+  line-height: 1.2;
+  resize: none;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, background-color 0.25s ease;
+}
+
+.pd-doc-note-status {
+  min-width: 52px;
+  height: 24px;
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  margin-top: -12px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid #dbe6f5;
+  background: #f4f8ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #5d7393;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
+}
+
+.pd-doc-note-editor.is-saved .pd-doc-note-inline {
+  border-color: #98d7b0;
+  background: #f2fff6;
+  box-shadow: 0 0 0 3px rgba(96, 191, 124, 0.12);
+}
+
+.pd-doc-note-editor.is-saved .pd-doc-note-status {
+  background: #e8fff0;
+  border-color: #9ed8b3;
+  color: #2f7a4b;
+  transform: scale(1.04);
+}
+
+@keyframes pd-doc-note-saved-flash {
+  0% {
+    transform: translateY(0);
+  }
+  35% {
+    transform: translateY(-1px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 720px) {
+  .pd-doc-note-status {
+    right: 8px;
+    top: 50%;
+    margin-top: -12px;
+  }
 }
 
 

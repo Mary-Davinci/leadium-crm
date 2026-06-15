@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { apiUrl } from "../lib/api-url";
@@ -664,11 +664,13 @@ export function PraticaDetailPage() {
   const [documentsDraft, setDocumentsDraft] = useState<PracticeDocumentsState>({ items: DEFAULT_DOCUMENTS });
   const [paymentsDraft, setPaymentsDraft] = useState<PracticePaymentsState>({ items: DEFAULT_PAYMENTS });
   const [expandedDocumentNotes, setExpandedDocumentNotes] = useState<Record<string, boolean>>({});
+  const [savedDocumentNotes, setSavedDocumentNotes] = useState<Record<string, boolean>>({});
   const [uploadingDocuments] = useState<Record<string, boolean>>({});
   const [uploadedDocuments] = useState<Record<string, boolean>>({});
   const [showOnlyMissingDocuments, setShowOnlyMissingDocuments] = useState(false);
   const [highlightSection, setHighlightSection] = useState<PracticeFocusSection | null>(null);
   const [reopenedPaymentId, setReopenedPaymentId] = useState<string | null>(null);
+  const documentNoteTimers = useRef<Record<string, number>>({});
 
   function openNoteModal() {
     setNoteDraft("");
@@ -780,6 +782,13 @@ export function PraticaDetailPage() {
     }
     window.location.href = uri;
   }
+
+  useEffect(
+    () => () => {
+      Object.values(documentNoteTimers.current).forEach((timer) => window.clearTimeout(timer));
+    },
+    []
+  );
 
   async function changeLeadStatus(toStatus: string, actor = "operatore pratica") {
     if (!detail?.lead.id || !toStatus) return;
@@ -921,6 +930,20 @@ export function PraticaDetailPage() {
     };
     setDocumentsDraft(nextDocuments);
     void saveDocuments(nextDocuments);
+  }
+
+  function saveDocumentNote(key: PracticeDocumentKey) {
+    const note = (documentsDraft.items.find((item) => item.key === key)?.note || "").trim();
+    if (!note) return;
+    updateDocumentItem(key, { note });
+    setSavedDocumentNotes((prev) => ({ ...prev, [key]: true }));
+    if (documentNoteTimers.current[key]) {
+      window.clearTimeout(documentNoteTimers.current[key]);
+    }
+    documentNoteTimers.current[key] = window.setTimeout(() => {
+      setSavedDocumentNotes((prev) => ({ ...prev, [key]: false }));
+      setExpandedDocumentNotes((prev) => ({ ...prev, [key]: false }));
+    }, 900);
   }
 
   async function handleDocumentUpload(key: PracticeDocumentKey, file?: File | null) {
@@ -1162,7 +1185,7 @@ export function PraticaDetailPage() {
     [detail?.lead.id, taskBoardTasks]
   );
   const openPracticeTasks = useMemo(() => practiceTasks.filter((task) => task.status === "open"), [practiceTasks]);
-  const documentsState = useMemo(() => normalizeDocuments(detail?.lead.documents || documentsDraft), [detail?.lead.documents, documentsDraft]);
+  const documentsState = useMemo(() => normalizeDocuments(documentsDraft), [documentsDraft]);
   const documentsBadge = useMemo(() => getDocumentsBadge(documentsState), [documentsState]);
   const missingDocumentsCount = useMemo(() => getMissingDocumentsCount(documentsState), [documentsState]);
   const documentsReady = useMemo(
@@ -1495,6 +1518,7 @@ export function PraticaDetailPage() {
                       <button
                         type="button"
                         className="pd-doc-note-toggle"
+                        aria-expanded={Boolean(expandedDocumentNotes[item.key])}
                         onClick={() =>
                           setExpandedDocumentNotes((prev) => ({
                             ...prev,
@@ -1534,18 +1558,29 @@ export function PraticaDetailPage() {
                     ) : null}
                     {item.note?.trim() && !expandedDocumentNotes[item.key] ? <p className="pd-doc-note-preview">{item.note}</p> : null}
                     {expandedDocumentNotes[item.key] ? (
-                      <input
-                        className="pd-doc-note-inline"
-                        type="text"
-                        value={item.note || ""}
-                        onChange={(event) =>
-                          setDocumentsDraft((prev) => ({
-                            items: prev.items.map((doc) => (doc.key === item.key ? { ...doc, note: event.target.value } : doc))
-                          }))
-                        }
-                        onBlur={(event) => updateDocumentItem(item.key, { note: event.target.value })}
-                        placeholder="Aggiungi una nota rapida sul documento"
-                      />
+                      <div className={`pd-doc-note-editor ${savedDocumentNotes[item.key] ? "is-saved" : ""}`}>
+                        <textarea
+                          className="pd-doc-note-inline"
+                          value={item.note || ""}
+                          onChange={(event) =>
+                            setDocumentsDraft((prev) => ({
+                              items: prev.items.map((doc) => (doc.key === item.key ? { ...doc, note: event.target.value } : doc))
+                            }))
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" && !event.shiftKey) {
+                              event.preventDefault();
+                              saveDocumentNote(item.key);
+                            }
+                          }}
+                          rows={1}
+                          autoFocus
+                          placeholder="Aggiungi una nota rapida sul documento"
+                        />
+                        <span className="pd-doc-note-status" aria-live="polite">
+                          {savedDocumentNotes[item.key] ? "Salvata" : "Invio"}
+                        </span>
+                      </div>
                     ) : null}
                   </article>
                 ))}
