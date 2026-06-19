@@ -1084,6 +1084,26 @@ export const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, safeLead(lead));
     }
 
+    const leadActivityParams = routeMatch(pathname, "/leads/:leadId/activities");
+    if (leadActivityParams && method === "POST") {
+      const body = await parseBody(req);
+      const lead = await getLeadById(leadActivityParams.leadId);
+      if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+      const type = String(body.type || "").trim();
+      const text = String(body.text || "").trim();
+      if (!type || !text) return sendJson(res, 400, { error: "type e text sono obbligatori." });
+      await appendActivities([
+        createActivity({
+          leadId: lead.id,
+          type,
+          text,
+          actor: body.actor || "system",
+          meta: body.meta && typeof body.meta === "object" ? body.meta : {}
+        })
+      ]);
+      return sendJson(res, 201, { ok: true });
+    }
+
     const leadByIdParams = routeMatch(pathname, "/leads/:leadId");
     if (leadByIdParams && method === "GET") {
       const lead = await getLeadById(leadByIdParams.leadId);
@@ -1152,12 +1172,12 @@ export const server = http.createServer(async (req, res) => {
       if (hasNotesUpdate) {
         const previousNoteText = previousNotes.trim();
         const nextNoteText = String(lead.notes || "").trim();
-        if (nextNoteText !== previousNoteText) {
+        if (nextNoteText && nextNoteText !== previousNoteText) {
           activities.push(
             createActivity({
               leadId: lead.id,
-              type: nextNoteText ? (previousNoteText ? "note_updated" : "note_added") : "note_removed",
-              text: nextNoteText || "Nota pratica rimossa.",
+              type: previousNoteText ? "note_updated" : "note_added",
+              text: nextNoteText,
               actor: body.actor || "system"
             })
           );
@@ -1312,7 +1332,7 @@ export const server = http.createServer(async (req, res) => {
         createActivity({
           leadId: lead.id,
           type: "call",
-          text: `Chiamata registrata (${disposition}).`,
+          text: note.trim() ? `Chiamata registrata (${disposition}) - ${note.trim()}` : `Chiamata registrata (${disposition}).`,
           actor: body.actor || "operator",
           meta: { durationSeconds: body.durationSeconds || 0, direction: body.direction || "outbound", phone: lead.phone, startedAt, endedAt, note }
         })

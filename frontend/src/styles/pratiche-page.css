@@ -27,6 +27,8 @@
 .pr-header-copy {
   display: grid;
   gap: 4px;
+  min-height: 62px;
+  align-content: start;
 }
 
 .pr-header-copy h2 {
@@ -38,6 +40,7 @@
 
 .pr-header-copy p {
   margin: 0;
+  min-height: 32px;
   color: #6d83a3;
   font-size: 13px;
   font-weight: 600;
@@ -126,6 +129,7 @@
 .pr-view-switcher {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
   gap: 6px;
   width: min(760px, 100%);
   padding: 6px;
@@ -139,9 +143,11 @@
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  min-height: 58px;
+  min-height: 64px;
   padding: 10px 14px;
   display: grid;
+  grid-template-rows: auto auto;
+  align-content: center;
   gap: 3px;
   text-align: left;
   color: #667d9b;
@@ -229,6 +235,8 @@
 
 .pr-view-hint {
   margin: 0;
+  min-height: 34px;
+  max-width: 760px;
   color: #6d83a3;
   font-size: 13px;
   font-weight: 600;

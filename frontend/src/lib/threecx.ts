@@ -79,6 +79,36 @@ export function build3CXCallUri(lead: Lead, pending: Pending3CXCall) {
     .replaceAll("{callbackUrl}", encodeURIComponent(callbackUrl.toString()));
 }
 
+export function launch3CXUri(uri: string) {
+  const target = String(uri || "").trim();
+  if (!target) return false;
+
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = target;
+    anchor.rel = "noopener";
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    window.setTimeout(() => {
+      if (document.visibilityState === "visible") {
+        window.location.assign(target);
+      }
+    }, 140);
+    window.setTimeout(() => {
+      anchor.remove();
+    }, 200);
+    return true;
+  } catch {
+    try {
+      window.location.assign(target);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 function mapOutcome(raw: string): CallOutcome | null {
   const normalized = String(raw || "").trim().toLowerCase();
   if (normalized === "completed" || normalized === "answered" || normalized === "success") return "completed";

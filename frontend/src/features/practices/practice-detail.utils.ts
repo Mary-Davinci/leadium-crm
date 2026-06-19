@@ -120,7 +120,7 @@ export function buildAssignees(leadsData: Lead[]): string[] {
 
 export function normalizeNoteHistoryFromTimeline(timeline: { type: string; text: string; createdAt: string; actor: string }[]) {
   return timeline
-    .filter((item) => includesAny(item.type, ["note", "lead_updated"]))
+    .filter((item) => includesAny(item.type, ["note", "lead_updated"]) && !includesAny(item.type, ["note_removed"]))
     .map((item, index) => ({
       id: `timeline-${index}-${item.createdAt}`,
       text: item.text,

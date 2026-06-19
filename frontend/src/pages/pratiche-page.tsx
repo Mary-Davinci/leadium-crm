@@ -925,6 +925,12 @@ export function PratichePage() {
       : practiceView === "ready"
         ? "Nessuna pratica pronta alla chiusura con i filtri attuali."
         : "Nessuna pratica trovata con i filtri attuali.";
+  const viewHintText =
+    practiceView === "ready"
+      ? "Qui restano solo le pratiche che hanno completato checklist e attendono conferma finale."
+      : practiceView === "closed"
+        ? "Questa vista e pensata come archivio operativo: consulta, verifica e riapri solo quando serve."
+        : "Qui lavori sulle pratiche attive, con priorita, follow-up e azioni operative ancora in corso.";
 
   return (
     <div className="pr-page">
@@ -988,13 +994,7 @@ export function PratichePage() {
               </button>
             </div>
 
-            {practiceView !== "active" ? (
-              <p className="pr-view-hint">
-                {practiceView === "ready"
-                  ? "Qui restano solo le pratiche che hanno completato checklist e attendono conferma finale."
-                  : "Questa vista e pensata come archivio operativo: consulta, verifica e riapri solo quando serve."}
-              </p>
-            ) : null}
+            <p className="pr-view-hint">{viewHintText}</p>
           </div>
         </header>
 

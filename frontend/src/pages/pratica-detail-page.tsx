@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { apiUrl } from "../lib/api-url";
 import { clearSession, getAuthToken } from "../lib/auth";
-import { build3CXCallUri, clearPending3CXCall, createPending3CXCall } from "../lib/threecx";
+import { build3CXCallUri, clearPending3CXCall, createPending3CXCall, launch3CXUri } from "../lib/threecx";
+import { buildWhatsAppUrl, WHATSAPP_TEMPLATES, WhatsAppTemplateKey } from "../lib/whatsapp";
 import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache, upsertTaskInBoard } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
-import { Lead as ThreeCXLead } from "../features/practices/pratiche.types";
+import { CallOutcome, Lead as ThreeCXLead } from "../features/practices/pratiche.types";
 import cruiseHeroImage from "../asset/cruise_chatgpt.png";
 import "../styles/pratica-detail-page.css";
 
@@ -28,6 +30,8 @@ type Lead = {
   payments?: PracticePaymentsState;
   status: string;
   nextActionAt?: string;
+  latestCallOutcome?: CallOutcome | null;
+  latestCallAt?: string | null;
 };
 
 type PracticeDocumentKey =
@@ -416,6 +420,7 @@ function isPostSalePracticeStatus(status?: string | null) {
 function getTimelineLabel(type: string) {
   const t = String(type || "").toLowerCase();
   if (t.includes("call")) return "Call";
+  if (t.includes("whatsapp")) return "WhatsApp";
   if (t.includes("status")) return "Cambio stato";
   if (t.includes("task")) return "Task";
   if (t.includes("note")) return "Nota";
@@ -425,6 +430,7 @@ function getTimelineLabel(type: string) {
 function getTimelineMeta(type: string) {
   const t = String(type || "").toLowerCase();
   if (t.includes("call")) return { icon: "Call", className: "call" };
+  if (t.includes("whatsapp")) return { icon: "WA", className: "whatsapp" };
   if (t.includes("status")) return { icon: "Stato", className: "status" };
   if (t.includes("task")) return { icon: "Task", className: "task" };
   if (t.includes("note")) return { icon: "Nota", className: "note" };
@@ -432,13 +438,16 @@ function getTimelineMeta(type: string) {
 }
 
 function buildRenderableTimeline(detail: LeadDetail | null): TimelineItem[] {
-  const timeline = Array.isArray(detail?.timeline) ? [...detail.timeline] : [];
+  const rawTimeline = Array.isArray(detail?.timeline) ? [...detail.timeline] : [];
   const noteText = String(detail?.lead?.notes || "").trim();
+  const timeline = noteText
+    ? rawTimeline.filter((item) => !String(item.type || "").toLowerCase().includes("note_removed"))
+    : rawTimeline;
   if (!noteText) return timeline;
 
   const hasDedicatedNote = timeline.some((item) => {
     const type = String(item.type || "").toLowerCase();
-    return type.includes("note") && String(item.text || "").trim().length > 0;
+    return type.includes("note") && !type.includes("removed") && String(item.text || "").trim().length > 0;
   });
   if (hasDedicatedNote) return timeline;
 
@@ -570,6 +579,18 @@ function getCallOutcomeClass(outcome: CallLog["outcome"]) {
   return "pd-calllog-neutral";
 }
 
+function toIsoDateTime(value: string) {
+  return new Date(value).toISOString();
+}
+
+function getTomorrowIso() {
+  return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+}
+
+function getDefaultFollowUpAt() {
+  return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+}
+
 function compareTasks(a: CrmTask, b: CrmTask) {
   const getLaneWeight = (task: CrmTask) => {
     if (task.status === "done") return 3;
@@ -671,6 +692,14 @@ export function PraticaDetailPage() {
   const [highlightSection, setHighlightSection] = useState<PracticeFocusSection | null>(null);
   const [reopenedPaymentId, setReopenedPaymentId] = useState<string | null>(null);
   const documentNoteTimers = useRef<Record<string, number>>({});
+  const [callModalOpen, setCallModalOpen] = useState(false);
+  const [callSubmitting, setCallSubmitting] = useState(false);
+  const [callOutcome, setCallOutcome] = useState<CallOutcome>("completed");
+  const [callNote, setCallNote] = useState("");
+  const [callCreateFollowUp, setCallCreateFollowUp] = useState(false);
+  const [callFollowUpAt, setCallFollowUpAt] = useState(getDefaultFollowUpAt());
+  const [callStartedAt, setCallStartedAt] = useState("");
+  const [callRequestKey, setCallRequestKey] = useState("");
 
   function openNoteModal() {
     setNoteDraft("");
@@ -680,6 +709,62 @@ export function PraticaDetailPage() {
   function closeNoteModal() {
     setNoteDraft("");
     setNoteModalOpen(false);
+  }
+
+  function prependTimelineItem(item: TimelineItem) {
+    setDetail((prev) => (prev ? { ...prev, timeline: [item, ...(prev.timeline || [])] } : prev));
+  }
+
+  function prependCallLog(item: CallLog) {
+    setDetail((prev) => (prev ? { ...prev, callLogs: [item, ...(prev.callLogs || [])] } : prev));
+  }
+
+  function closeCallOutcomeModal() {
+    setCallModalOpen(false);
+    setCallSubmitting(false);
+    setCallOutcome("completed");
+    setCallNote("");
+    setCallCreateFollowUp(false);
+    setCallFollowUpAt(getDefaultFollowUpAt());
+    setCallStartedAt("");
+    setCallRequestKey("");
+    clearPending3CXCall();
+  }
+
+  function openCallOutcomeModal(callMeta?: { startedAt?: string; requestKey?: string }) {
+    setCallModalOpen(true);
+    setCallOutcome("completed");
+    setCallNote("");
+    setCallCreateFollowUp(false);
+    setCallFollowUpAt(getDefaultFollowUpAt());
+    setCallStartedAt(callMeta?.startedAt || new Date().toISOString());
+    setCallRequestKey(callMeta?.requestKey || `callreq_${detail?.lead.id || "lead"}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`);
+  }
+
+  async function createAutoFollowUp(lead: Lead, dueAt: string, description: string) {
+    const created = await api<CrmTask>("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        leadId: lead.id,
+        kind: "follow_up",
+        title: `Follow-up ${lead.fullName}`,
+        description,
+        assignedTo: lead.assignedTo || "",
+        source: "pratica_detail",
+        priority: 80,
+        dueAt
+      })
+    });
+
+    upsertTaskInBoard(created);
+    setTaskBoardTasks((current) => [created, ...current.filter((task) => task.id !== created.id)]);
+    setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, nextActionAt: dueAt } } : prev));
+    prependTimelineItem({
+      type: "task",
+      text: description,
+      actor: "operatore pratiche",
+      createdAt: new Date().toISOString()
+    });
   }
 
   async function load() {
@@ -771,6 +856,114 @@ export function PraticaDetailPage() {
     }
   }
 
+  async function handleSubmitCallOutcome() {
+    if (!detail?.lead || callSubmitting) return;
+    setCallSubmitting(true);
+    setError("");
+    try {
+      const targetLead = detail.lead;
+      const endedAt = new Date().toISOString();
+      const previousStatus = targetLead.status;
+      const hasAutomaticFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
+      const closesPractice = callOutcome === "not_interested";
+      const automatedFollowUpAt =
+        callOutcome === "call_back"
+          ? callFollowUpAt
+            ? toIsoDateTime(callFollowUpAt)
+            : toIsoDateTime(getDefaultFollowUpAt())
+          : callOutcome === "no_answer"
+            ? getTomorrowIso()
+            : "";
+
+      const updatedLead = await api<Lead>(`/api/leads/${targetLead.id}/calls`, {
+        method: "POST",
+        body: JSON.stringify({
+          disposition: callOutcome,
+          actor: "operatore pratiche",
+          note: callNote.trim(),
+          endedAt,
+          startedAt: callStartedAt || undefined,
+          followUpAt: automatedFollowUpAt || undefined,
+          idempotencyKey: callRequestKey || undefined
+        })
+      });
+
+      setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, ...updatedLead } } : prev));
+      prependCallLog({
+        id: callRequestKey || `call_${Date.now()}`,
+        leadId: targetLead.id,
+        startedAt: callStartedAt || endedAt,
+        endedAt,
+        outcome: callOutcome,
+        actor: "operatore pratiche",
+        note: callNote.trim() || undefined
+      });
+      prependTimelineItem({
+        type: "call",
+        text: callNote.trim() ? `Chiamata registrata (${callOutcome}) - ${callNote.trim()}` : `Chiamata registrata (${callOutcome}).`,
+        actor: "operatore pratiche",
+        createdAt: endedAt
+      });
+
+      if (callOutcome === "call_back") {
+        prependTimelineItem({
+          type: "task",
+          text: callNote.trim()
+            ? `Richiamo automatico pianificato: ${callNote.trim()}`
+            : 'Richiamo automatico creato dopo esito "da richiamare".',
+          actor: "operatore pratiche",
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      if (callOutcome === "no_answer") {
+        prependTimelineItem({
+          type: "task",
+          text: callNote.trim()
+            ? `Richiamo automatico domani: ${callNote.trim()}`
+            : "Richiamo automatico creato per domani dopo mancata risposta.",
+          actor: "operatore pratiche",
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      if (updatedLead.status && updatedLead.status !== previousStatus) {
+        prependTimelineItem({
+          type: "status_changed",
+          text: `Stato aggiornato a "${updatedLead.status}".`,
+          actor: "operatore pratiche",
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      if (!hasAutomaticFollowUp && !closesPractice && !updatedLead.nextActionAt && callOutcome === "interested") {
+        const suggestedFollowUpAt = getTomorrowIso();
+        await createAutoFollowUp(targetLead, suggestedFollowUpAt, callNote.trim() || "Follow-up automatico creato dopo lead interessato.");
+      }
+
+      if (!automatedFollowUpAt && !closesPractice && callCreateFollowUp && callFollowUpAt) {
+        await createAutoFollowUp(
+          targetLead,
+          toIsoDateTime(callFollowUpAt),
+          callNote.trim() || `Follow-up creato dopo chiamata con esito ${callOutcome}.`
+        );
+      }
+
+      navigate(
+        {
+          pathname: location.pathname,
+          search: "?focus=timeline"
+        },
+        { replace: true }
+      );
+      closeCallOutcomeModal();
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore registrazione esito chiamata.");
+      setCallSubmitting(false);
+    }
+  }
+
   function startCall() {
     if (!detail?.lead) return;
     const pendingCall = createPending3CXCall(detail.lead as ThreeCXLead);
@@ -780,7 +973,44 @@ export function PraticaDetailPage() {
       setError("Numero cliente non disponibile per avviare la chiamata.");
       return;
     }
-    window.location.href = uri;
+    flushSync(() => {
+      openCallOutcomeModal({
+        startedAt: pendingCall.startedAt,
+        requestKey: pendingCall.requestKey
+      });
+    });
+    const launched = launch3CXUri(uri);
+    if (!launched) {
+      setError("Impossibile avviare 3CX da browser. Verifica che il protocollo 3CX sia associato al desktop app.");
+    }
+  }
+
+  async function openWhatsApp(templateKey: WhatsAppTemplateKey = "generic") {
+    if (!detail?.lead.id) return;
+    const template = WHATSAPP_TEMPLATES[templateKey];
+    const url = buildWhatsAppUrl(detail.lead.phone || "", template.message);
+    if (!url) {
+      setError("Numero cliente non disponibile per aprire WhatsApp.");
+      return;
+    }
+    const popup = window.open(url, "_blank", "noopener,noreferrer");
+    if (!popup) {
+      window.location.href = url;
+    }
+    try {
+      await api(`/api/leads/${detail.lead.id}/activities`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: "whatsapp_opened",
+          text: template.message ? `Template WhatsApp usato: ${template.label}.` : "Chat WhatsApp avviata.",
+          actor: "operatore pratiche",
+          meta: { channel: "whatsapp", template: templateKey }
+        })
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore registrazione evento WhatsApp.");
+    }
   }
 
   useEffect(
@@ -1185,6 +1415,8 @@ export function PraticaDetailPage() {
     [detail?.lead.id, taskBoardTasks]
   );
   const openPracticeTasks = useMemo(() => practiceTasks.filter((task) => task.status === "open"), [practiceTasks]);
+  const modalAutoFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
+  const modalClosedOutcome = callOutcome === "not_interested";
   const documentsState = useMemo(() => normalizeDocuments(documentsDraft), [documentsDraft]);
   const documentsBadge = useMemo(() => getDocumentsBadge(documentsState), [documentsState]);
   const missingDocumentsCount = useMemo(() => getMissingDocumentsCount(documentsState), [documentsState]);
@@ -1287,8 +1519,14 @@ export function PraticaDetailPage() {
                 <button type="button" disabled={busy} onClick={startCall}>
                   Chiama
                 </button>
-                <button type="button" className="secondary" onClick={() => navigate("/chat")}>
-                  Apri chat
+                <button type="button" className="secondary" onClick={() => void openWhatsApp("generic")}>
+                  Apri WhatsApp
+                </button>
+                <button type="button" className="secondary" onClick={() => void openWhatsApp("documents")}>
+                  Richiedi documenti
+                </button>
+                <button type="button" className="secondary" onClick={() => void openWhatsApp("payment")}>
+                  Sollecito pagamento
                 </button>
                 <button type="button" className="secondary" disabled={busy} onClick={openTaskModal}>
                   Crea task
@@ -1755,6 +1993,108 @@ export function PraticaDetailPage() {
               )}
             </section>
           </div>
+
+          {callModalOpen && detail?.lead ? (
+            <div className="pd-note-modal-backdrop" role="presentation" onClick={() => (callSubmitting ? null : closeCallOutcomeModal())}>
+              <div
+                className="pd-note-modal pd-call-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="pd-call-modal-title"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="pd-note-modal-head">
+                  <div>
+                    <h5 id="pd-call-modal-title">Esito chiamata</h5>
+                    <p>
+                      {detail.lead.fullName} - {detail.lead.phone || "-"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="pd-call-close"
+                    aria-label="Chiudi modale esito chiamata"
+                    disabled={callSubmitting}
+                    onClick={closeCallOutcomeModal}
+                  >
+                    X
+                  </button>
+                </div>
+
+                <div className="pd-call-modal-grid">
+                  <label>
+                    <span>Esito</span>
+                    <select value={callOutcome} onChange={(event) => setCallOutcome(event.target.value as CallOutcome)}>
+                      <option value="completed">Completata</option>
+                      <option value="no_answer">Nessuna risposta</option>
+                      <option value="busy">Occupato</option>
+                      <option value="call_back">Da richiamare</option>
+                      <option value="interested">Interessato</option>
+                      <option value="not_interested">Non interessato</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span>Nota breve</span>
+                    <textarea
+                      value={callNote}
+                      onChange={(event) => setCallNote(event.target.value)}
+                      rows={5}
+                      placeholder="Aggiungi un appunto operativo sulla chiamata..."
+                    />
+                  </label>
+
+                  {modalAutoFollowUp ? (
+                    <>
+                      <div className="pd-call-hint">
+                        {callOutcome === "call_back"
+                          ? "Follow-up automatico: verra impostato un richiamo con la data selezionata."
+                          : "Follow-up automatico: verra creato un richiamo per domani."}
+                      </div>
+                      {callOutcome === "call_back" ? (
+                        <label>
+                          <span>Data richiamo</span>
+                          <input type="datetime-local" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
+                        </label>
+                      ) : null}
+                    </>
+                  ) : !modalClosedOutcome ? (
+                    <>
+                      <label className="pd-call-check">
+                        <input
+                          type="checkbox"
+                          checked={callCreateFollowUp}
+                          onChange={(event) => setCallCreateFollowUp(event.target.checked)}
+                        />
+                        <span>Crea follow-up</span>
+                      </label>
+
+                      <label>
+                        <span>Data follow-up</span>
+                        <input
+                          type="datetime-local"
+                          value={callFollowUpAt}
+                          onChange={(event) => setCallFollowUpAt(event.target.value)}
+                          disabled={!callCreateFollowUp}
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <div className="pd-call-hint pd-call-hint-closed">La pratica verra chiusa senza creare una prossima azione.</div>
+                  )}
+                </div>
+
+                <div className="pd-call-modal-actions">
+                  <button type="button" className="pd-call-cancel" disabled={callSubmitting} onClick={closeCallOutcomeModal}>
+                    Annulla
+                  </button>
+                  <button type="button" disabled={callSubmitting} onClick={() => void handleSubmitCallOutcome()}>
+                    {callSubmitting ? "Salvataggio..." : "Salva esito"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {taskModalOpen && taskDraft ? (
             <div className="pd-note-modal-backdrop" role="presentation" onClick={() => setTaskModalOpen(false)}>

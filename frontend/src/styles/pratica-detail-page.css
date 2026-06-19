@@ -1848,10 +1848,137 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
   font-size: 13px;
 }
 
+.pd-call-close {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid #efc3c3;
+  background: #fff5f5;
+  color: #cf4545;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: none;
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.pd-call-close:hover:not(:disabled) {
+  background: #ffeaea;
+  border-color: #e89d9d;
+  color: #ba2e2e;
+  transform: scale(1.04);
+}
+
+.pd-call-close:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .pd-note-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.pd-call-modal {
+  width: min(100%, 560px);
+}
+
+.pd-call-modal-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.pd-call-modal-grid label {
+  display: grid;
+  gap: 7px;
+}
+
+.pd-call-modal-grid label span {
+  color: #2b4a75;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pd-call-modal-grid select,
+.pd-call-modal-grid input,
+.pd-call-modal-grid textarea {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #cfdae9;
+  border-radius: 10px;
+  background: #fbfdff;
+  color: #244164;
+  font-size: 14px;
+  padding: 9px 11px;
+}
+
+.pd-call-modal-grid textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+.pd-call-hint {
+  border: 1px solid #d7e4f4;
+  border-left: 4px solid #5c8fd6;
+  border-radius: 10px;
+  background: #f4f8ff;
+  color: #31527d;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pd-call-hint-closed {
+  border-left-color: #d6a047;
+  background: #fff6e8;
+  color: #7a5720;
+}
+
+.pd-call-check {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 10px;
+}
+
+.pd-call-check input {
+  width: auto;
+  min-height: auto;
+}
+
+.pd-call-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pd-call-modal-actions button {
+  min-width: 120px;
+  min-height: 40px;
+}
+
+.pd-call-cancel {
+  min-width: 120px;
+  min-height: 40px;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, #6d8fcb 0%, #4d74b8 100%);
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgba(61, 101, 169, 0.22);
+}
+
+.pd-call-cancel:hover:not(:disabled) {
+  background: linear-gradient(135deg, #6286c8 0%, #446bac 100%);
+  transform: translateY(-1px);
 }
 
 .pd-task-modal {
@@ -1986,6 +2113,11 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
 .pd-timeline-call .pd-timeline-dot {
   background: #3b82f6;
   box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
+}
+
+.pd-timeline-whatsapp .pd-timeline-dot {
+  background: #38a169;
+  box-shadow: 0 0 0 4px rgba(56, 161, 105, 0.12);
 }
 
 .pd-timeline-status .pd-timeline-dot {
@@ -2194,6 +2326,7 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
   .pd-practice-grid {
     grid-template-columns: 1fr;
   }
+
 }
 
 @media (max-width: 860px) {
