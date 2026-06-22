@@ -7,7 +7,7 @@ import { CallOutcome, Lead, LeadDetail, Workflow } from "../features/practices/p
 import { getPriority, getPriorityScore, getSmartBucket, includesAny, normalizeLead } from "../features/practices/pratiche.utils";
 import { api } from "../lib/api";
 import { getAuthUser } from "../lib/auth";
-import { build3CXCallUri, clearPending3CXCall, createPending3CXCall } from "../lib/threecx";
+import { build3CXCallUri, clearPending3CXCall, createPending3CXCall, launch3CXUri } from "../lib/threecx";
 import {
   CrmTask,
   getLeadDetailCacheEntry,
@@ -508,7 +508,10 @@ export function PratichePage() {
       startedAt: pendingCall.startedAt,
       requestKey: pendingCall.requestKey
     });
-    window.location.href = uri;
+    const launched = launch3CXUri(uri);
+    if (!launched) {
+      setError("Impossibile avviare il client chiamate. Verifica che 3CX sia l'app predefinita per i link telefonici.");
+    }
   }
 
   async function handleCreateTask(lead: Lead) {

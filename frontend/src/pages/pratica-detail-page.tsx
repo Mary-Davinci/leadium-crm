@@ -1516,23 +1516,40 @@ export function PraticaDetailPage() {
                 <span className={`pd-priority pd-priority-${priority}`}>{getPriorityLabel(priority)}</span>
               </div>
               <div className="pd-hero-actions">
-                <button type="button" disabled={busy} onClick={startCall}>
-                  Chiama
+                <button type="button" className="pd-hero-action pd-hero-action-call" disabled={busy} onClick={startCall}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M6.6 10.8a15.4 15.4 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.3 1.1.4 2.2.6 3.4.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.3.6 3.4.1.4 0 .8-.3 1.1l-2.2 2.3Z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                  <span>Chiama</span>
                 </button>
-                <button type="button" className="secondary" onClick={() => void openWhatsApp("generic")}>
-                  Apri WhatsApp
+                <button type="button" className="pd-hero-action pd-hero-action-whatsapp" onClick={() => void openWhatsApp("generic")}>
+                  <svg className="pd-hero-action-icon-whatsapp" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+                    <path
+                      d="M27.281 4.673A15.815 15.815 0 0 0 16.028 0C7.308 0 .215 7.093.212 15.813a15.74 15.74 0 0 0 2.124 7.923L0 32l8.47-2.221a15.814 15.814 0 0 0 7.551 1.919h.007c8.718 0 15.812-7.094 15.815-15.813A15.7 15.7 0 0 0 27.281 4.673Z"
+                      fill="#25D366"
+                    />
+                    <path
+                      d="m9.469 23.423.542.322a11.7 11.7 0 0 0 6.004 1.655h.005c6.442 0 11.685-5.241 11.687-11.683a11.6 11.6 0 0 0-3.423-8.31A11.6 11.6 0 0 0 16.017 2c-6.442 0-11.684 5.242-11.687 11.685a11.64 11.64 0 0 0 1.806 6.185l.354.564-1.356 4.95 5.079-1.961Z"
+                      fill="#25D366"
+                    />
+                    <path
+                      d="M12.506 9.144c-.263-.585-.54-.597-.79-.607-.204-.009-.438-.008-.671-.008-.232 0-.611.087-.931.437-.32.35-1.221 1.193-1.221 2.91 0 1.716 1.249 3.375 1.423 3.608.175.233 2.414 3.87 5.956 5.267 2.944 1.161 3.543.93 4.181.871.638-.059 2.057-.842 2.348-1.658.291-.816.291-1.514.204-1.658-.087-.145-.32-.233-.669-.408-.349-.175-2.058-1.017-2.378-1.133-.32-.117-.552-.175-.785.175-.233.35-.902 1.134-1.105 1.367-.204.233-.407.262-.756.087-.349-.175-1.473-.543-2.806-1.731-1.037-.925-1.737-2.065-1.94-2.414-.204-.35-.022-.539.153-.713.157-.156.349-.408.523-.612.175-.204.233-.35.349-.582.117-.233.059-.437-.029-.612-.087-.175-.768-1.851-1.082-2.549Z"
+                      fill="#ffffff"
+                    />
+                  </svg>
+                  <span>WhatsApp</span>
                 </button>
-                <button type="button" className="secondary" onClick={() => void openWhatsApp("documents")}>
-                  Richiedi documenti
-                </button>
-                <button type="button" className="secondary" onClick={() => void openWhatsApp("payment")}>
-                  Sollecito pagamento
-                </button>
-                <button type="button" className="secondary" disabled={busy} onClick={openTaskModal}>
-                  Crea task
-                </button>
-                <button type="button" className="secondary" onClick={openNoteModal}>
-                  Inserisci nota
+                <button type="button" className="pd-hero-action pd-hero-action-note" onClick={openNoteModal}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="m4 16.8 9.9-9.9 3.2 3.2-9.9 9.9L4 20l.1-3.2Zm11-10.9 1.8-1.8a1.6 1.6 0 0 1 2.3 0l.8.8a1.6 1.6 0 0 1 0 2.3L18.1 9l-3.1-3.1Z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                  <span>Nota</span>
                 </button>
               </div>
             </div>
