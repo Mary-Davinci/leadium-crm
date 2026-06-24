@@ -2,7 +2,7 @@ export type PracticeFocusSection = "overview" | "task" | "documents" | "payments
 
 export const focusSectionMap: Record<PracticeFocusSection, string> = {
   overview: "overview-section",
-  task: "task-section",
+  task: "overview-section",
   documents: "documents-section",
   payments: "payments-section",
   notes: "notes-section",
@@ -49,7 +49,7 @@ export function getPracticeFocusFromTask(task: PracticeLinkTaskLike): PracticeFo
   const kind = String(task?.kind || "").toLowerCase();
   if (includesAny(kind, ["payment", "saldo"])) return "payments";
   if (includesAny(kind, ["document"])) return "documents";
-  return "task";
+  return "overview";
 }
 
 export function getPracticeUrlOptionsFromTask(task: PracticeLinkTaskLike): BuildPracticeUrlOptions {

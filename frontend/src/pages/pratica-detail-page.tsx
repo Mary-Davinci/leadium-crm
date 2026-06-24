@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import Lottie from "lottie-react";
+import type { LottieRefCurrentProps } from "lottie-react";
 import { api } from "../lib/api";
 import { apiUrl } from "../lib/api-url";
-import { clearSession, getAuthToken } from "../lib/auth";
+import { clearSession, getAuthToken, getAuthUser } from "../lib/auth";
 import { build3CXCallUri, clearPending3CXCall, createPending3CXCall, launch3CXUri } from "../lib/threecx";
 import { buildWhatsAppUrl, WHATSAPP_TEMPLATES, WhatsAppTemplateKey } from "../lib/whatsapp";
 import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache, upsertTaskInBoard } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
 import { CallOutcome, Lead as ThreeCXLead } from "../features/practices/pratiche.types";
 import cruiseHeroImage from "../asset/cruise_chatgpt.png";
+import cruiseClosureBoatAnimation from "../asset/cruise-closure-boat.json";
+import paymentsOkConfirmationAnimation from "../asset/payments-ok-confirmation.json";
 import "../styles/pratica-detail-page.css";
 
 type Workflow = {
@@ -286,6 +290,14 @@ function getPaymentUrgencyMeta(item: PracticePaymentItem) {
 
 function getMissingDocumentsCount(documents: PracticeDocumentsState) {
   return documents.items.filter((item) => item.required && (!item.received || !item.verified)).length;
+}
+
+function isDocumentsComplete(documents: PracticeDocumentsState) {
+  return documents.items.every((item) => !item.required || (item.received && item.verified));
+}
+
+function isPaymentsComplete(payments: PracticePaymentsState) {
+  return payments.items.every((item) => !item.required || item.status === "verified");
 }
 
 function getDocumentRowIcon(item: PracticeDocumentItem) {
@@ -616,6 +628,8 @@ function getTaskKindLabel(kind: string) {
   const value = String(kind || "").toLowerCase();
   if (value.includes("payment") || value.includes("saldo")) return "Pagamento";
   if (value.includes("document")) return "Documenti";
+  if (value.includes("gadget")) return "Invio gadget";
+  if (value.includes("ticket")) return "Invio biglietti";
   if (value.includes("call") || value.includes("richiamo")) return "Richiamo";
   if (value.includes("follow")) return "Follow-up";
   if (value.includes("next_action")) return "Task principale";
@@ -668,6 +682,9 @@ export function PraticaDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const authUser = getAuthUser();
+  const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
+  const activityActor = authUser?.name?.trim() || authUser?.username || "operatore pratiche";
   const [detail, setDetail] = useState<LeadDetail | null>(null);
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [assignees, setAssignees] = useState<string[]>([]);
@@ -700,9 +717,11 @@ export function PraticaDetailPage() {
   const [callFollowUpAt, setCallFollowUpAt] = useState(getDefaultFollowUpAt());
   const [callStartedAt, setCallStartedAt] = useState("");
   const [callRequestKey, setCallRequestKey] = useState("");
+  const closureLottieRef = useRef<LottieRefCurrentProps | null>(null);
+  const paymentsOkLottieRef = useRef<LottieRefCurrentProps | null>(null);
 
   function openNoteModal() {
-    setNoteDraft("");
+    setNoteDraft(String(detail?.lead.notes || "").trim());
     setNoteModalOpen(true);
   }
 
@@ -756,15 +775,19 @@ export function PraticaDetailPage() {
       })
     });
 
-    upsertTaskInBoard(created);
-    setTaskBoardTasks((current) => [created, ...current.filter((task) => task.id !== created.id)]);
+    upsertPracticeTask(created);
     setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, nextActionAt: dueAt } } : prev));
     prependTimelineItem({
       type: "task",
       text: description,
-      actor: "operatore pratiche",
+      actor: activityActor,
       createdAt: new Date().toISOString()
     });
+  }
+
+  function upsertPracticeTask(task: CrmTask) {
+    upsertTaskInBoard(task);
+    setTaskBoardTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
   }
 
   async function load() {
@@ -772,10 +795,9 @@ export function PraticaDetailPage() {
     setLoading(true);
     setError("");
     try {
-      const [payload, workflowData, leadsData] = await Promise.all([
+      const [payload, workflowData] = await Promise.all([
         api<LeadDetail>(`/api/leads/${id}`),
-        api<Workflow>("/api/workflow"),
-        api<Lead[]>("/api/leads")
+        api<Workflow>("/api/workflow")
       ]);
       setDetail(payload);
       setWorkflow(workflowData);
@@ -783,11 +805,13 @@ export function PraticaDetailPage() {
       setDocumentsDraft(normalizeDocuments(payload.lead.documents));
       setPaymentsDraft(normalizePayments(payload.lead.payments));
       setStatusDraft("");
-      setAssignees(
-        Array.from(new Set((Array.isArray(leadsData) ? leadsData : []).map((lead) => String(lead.assignedTo || "").trim()).filter(Boolean))).sort(
-          (a, b) => a.localeCompare(b, "it")
-        )
-      );
+      setAssignees((current) => {
+        const cachedLeadAssignees = (getTaskBoardCache()?.data.leads || [])
+          .map((lead) => String(lead.assignedTo || "").trim())
+          .filter(Boolean);
+        const next = Array.from(new Set([String(payload.lead.assignedTo || "").trim(), ...cachedLeadAssignees, ...current].filter(Boolean)));
+        return next.sort((a, b) => a.localeCompare(b, "it"));
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore caricamento pratica.");
     } finally {
@@ -797,12 +821,20 @@ export function PraticaDetailPage() {
 
   function openTaskModal() {
     if (!detail?.lead) return;
+    if (detail.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono aggiungere task su una pratica chiusa.");
+      return;
+    }
     setTaskDraft(buildDefaultTaskDraft(detail.lead));
     setTaskModalOpen(true);
   }
 
   async function createTask() {
     if (!detail?.lead.id || !taskDraft) return;
+    if (detail.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono modificare una pratica gia chiusa.");
+      return;
+    }
     const title = taskDraft.title.trim();
     if (!title) {
       setError("Inserisci un titolo per il task.");
@@ -824,8 +856,7 @@ export function PraticaDetailPage() {
           dueAt: taskDraft.dueAt ? new Date(taskDraft.dueAt).toISOString() : null
         })
       });
-      upsertTaskInBoard(created);
-      setTaskBoardTasks((current) => [created, ...current.filter((task) => task.id !== created.id)]);
+      upsertPracticeTask(created);
       setTaskModalOpen(false);
       setTaskDraft(null);
       await load();
@@ -895,13 +926,13 @@ export function PraticaDetailPage() {
         startedAt: callStartedAt || endedAt,
         endedAt,
         outcome: callOutcome,
-        actor: "operatore pratiche",
+        actor: activityActor,
         note: callNote.trim() || undefined
       });
       prependTimelineItem({
         type: "call",
         text: callNote.trim() ? `Chiamata registrata (${callOutcome}) - ${callNote.trim()}` : `Chiamata registrata (${callOutcome}).`,
-        actor: "operatore pratiche",
+        actor: activityActor,
         createdAt: endedAt
       });
 
@@ -911,7 +942,7 @@ export function PraticaDetailPage() {
           text: callNote.trim()
             ? `Richiamo automatico pianificato: ${callNote.trim()}`
             : 'Richiamo automatico creato dopo esito "da richiamare".',
-          actor: "operatore pratiche",
+          actor: activityActor,
           createdAt: new Date().toISOString()
         });
       }
@@ -922,7 +953,7 @@ export function PraticaDetailPage() {
           text: callNote.trim()
             ? `Richiamo automatico domani: ${callNote.trim()}`
             : "Richiamo automatico creato per domani dopo mancata risposta.",
-          actor: "operatore pratiche",
+          actor: activityActor,
           createdAt: new Date().toISOString()
         });
       }
@@ -931,7 +962,7 @@ export function PraticaDetailPage() {
         prependTimelineItem({
           type: "status_changed",
           text: `Stato aggiornato a "${updatedLead.status}".`,
-          actor: "operatore pratiche",
+          actor: activityActor,
           createdAt: new Date().toISOString()
         });
       }
@@ -1043,17 +1074,9 @@ export function PraticaDetailPage() {
     await changeLeadStatus(statusDraft);
   }
 
-  async function markPracticeReady() {
-    if (!closureReady) {
-      setError("Completa documenti, pagamenti e task aperti prima di portare la pratica in chiusura.");
-      return;
-    }
-    await changeLeadStatus(PRACTICE_READY_STATUS, "pratica pronta per chiusura");
-  }
-
   async function closePracticeFully() {
     if (!closureReady) {
-      setError("La pratica non è ancora pronta per la chiusura finale.");
+      setError("La pratica non e ancora completa su documenti e pagamenti.");
       return;
     }
     await changeLeadStatus(PRACTICE_CLOSED_STATUS, "pratica chiusa al 100%");
@@ -1061,6 +1084,36 @@ export function PraticaDetailPage() {
 
   async function reopenClosedPractice() {
     await changeLeadStatus(PRACTICE_REOPEN_STATUS, "riapertura pratica manuale");
+  }
+
+  async function returnPracticeToOperator() {
+    if (!detail?.lead.id) return;
+    const targetAssignee = String(assigneeDraft || detail.lead.assignedTo || "").trim();
+    if (!targetAssignee) {
+      setError("Assegna prima un operatore alla pratica.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/api/leads/${detail.lead.id}/status`, {
+        method: "POST",
+        body: JSON.stringify({
+          toStatus: PRACTICE_REOPEN_STATUS,
+          actor: "supervisione admin - rimessa in lavorazione"
+        })
+      });
+      await api(`/api/leads/${detail.lead.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ assignedTo: targetAssignee })
+      });
+      setStatusDraft("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore riapertura e riassegnazione pratica.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function updateAssignee() {
@@ -1080,10 +1133,51 @@ export function PraticaDetailPage() {
     }
   }
 
+  function findStatusPath(fromStatus: string, targetStatus: string) {
+    const normalizedFrom = String(fromStatus || "").trim();
+    const normalizedTarget = String(targetStatus || "").trim();
+    if (!normalizedFrom || !normalizedTarget || normalizedFrom === normalizedTarget) return [];
+    const flow = workflow?.flow || {};
+    const queue: Array<{ status: string; path: string[] }> = [{ status: normalizedFrom, path: [] }];
+    const visited = new Set<string>([normalizedFrom]);
+
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current) break;
+      const nextStatuses = flow[current.status] || [];
+      for (const nextStatus of nextStatuses) {
+        if (visited.has(nextStatus)) continue;
+        const nextPath = [...current.path, nextStatus];
+        if (nextStatus === normalizedTarget) return nextPath;
+        visited.add(nextStatus);
+        queue.push({ status: nextStatus, path: nextPath });
+      }
+    }
+
+    return null;
+  }
+
+  async function moveLeadToStatus(targetStatus: string, actor: string, currentStatusOverride?: string) {
+    if (!detail?.lead.id) return;
+    const currentStatus = String(currentStatusOverride || detail.lead.status || "").trim();
+    if (!currentStatus || currentStatus === targetStatus) return;
+    const path = findStatusPath(currentStatus, targetStatus);
+    if (!path) {
+      throw new Error(`Nessun percorso disponibile da "${currentStatus}" a "${targetStatus}".`);
+    }
+    for (const nextStatus of path) {
+      await api(`/api/leads/${detail.lead.id}/status`, {
+        method: "POST",
+        body: JSON.stringify({ toStatus: nextStatus, actor })
+      });
+    }
+  }
+
   async function saveNote() {
     if (!detail?.lead.id) return;
     const nextNote = noteDraft.trim();
     if (!nextNote) return;
+    const shouldMoveToAdminReview = closureReady && !isClosedPracticeStatus && detail.lead.status !== PRACTICE_READY_STATUS;
     setBusy(true);
     setError("");
     try {
@@ -1091,8 +1185,15 @@ export function PraticaDetailPage() {
         method: "POST",
         body: JSON.stringify({ text: nextNote, actor: "operatore pratiche" })
       });
-      await load();
+      if (shouldMoveToAdminReview) {
+        await moveLeadToStatus(PRACTICE_READY_STATUS, "nota finale pratica completata");
+      }
       closeNoteModal();
+      if (!isAdmin && shouldMoveToAdminReview) {
+        navigate("/pratiche", { replace: true });
+        return;
+      }
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore salvataggio nota.");
     } finally {
@@ -1100,8 +1201,42 @@ export function PraticaDetailPage() {
     }
   }
 
+  async function syncPracticeCompletionState(
+    currentStatus: string,
+    nextDocuments: PracticeDocumentsState,
+    nextPayments: PracticePaymentsState
+  ) {
+    if (!detail?.lead.id) return;
+    const documentsComplete = isDocumentsComplete(nextDocuments);
+    const paymentsComplete = isPaymentsComplete(nextPayments);
+    const normalizedStatus = String(currentStatus || "").trim();
+
+    if (
+      (normalizedStatus === PRACTICE_READY_STATUS || normalizedStatus === PRACTICE_CLOSED_STATUS) &&
+      (!documentsComplete || !paymentsComplete)
+    ) {
+      await api(`/api/leads/${detail.lead.id}/status`, {
+        method: "POST",
+        body: JSON.stringify({
+          toStatus: PRACTICE_REOPEN_STATUS,
+          actor: "riapertura automatica checklist pratica"
+        })
+      });
+      return;
+    }
+
+    if (normalizedStatus === PRACTICE_READY_STATUS || normalizedStatus === PRACTICE_CLOSED_STATUS) return;
+    if (!documentsComplete || !paymentsComplete) return;
+
+    await moveLeadToStatus(PRACTICE_READY_STATUS, "checklist pratica completata automaticamente", normalizedStatus);
+  }
+
   async function saveDocuments(nextDocuments: PracticeDocumentsState) {
     if (!detail?.lead.id) return;
+    if (detail.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono modificare documenti su una pratica chiusa.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -1113,8 +1248,10 @@ export function PraticaDetailPage() {
         })
       });
       const normalized = normalizeDocuments(updatedLead.documents);
+      const relatedPayments = normalizePayments(detail?.lead.payments || paymentsDraft);
       setDocumentsDraft(normalized);
       setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, documents: normalized } } : prev));
+      await syncPracticeCompletionState(updatedLead.status || detail.lead.status, normalized, relatedPayments);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore salvataggio documenti.");
@@ -1125,6 +1262,10 @@ export function PraticaDetailPage() {
 
   async function savePayments(nextPayments: PracticePaymentsState) {
     if (!detail?.lead.id) return;
+    if (detail.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono modificare pagamenti su una pratica chiusa.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -1136,8 +1277,10 @@ export function PraticaDetailPage() {
         })
       });
       const normalized = normalizePayments(updatedLead.payments);
+      const relatedDocuments = normalizeDocuments(detail?.lead.documents || documentsDraft);
       setPaymentsDraft(normalized);
       setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, payments: normalized } } : prev));
+      await syncPracticeCompletionState(updatedLead.status || detail.lead.status, relatedDocuments, normalized);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore salvataggio pagamenti.");
@@ -1178,6 +1321,10 @@ export function PraticaDetailPage() {
 
   async function handleDocumentUpload(key: PracticeDocumentKey, file?: File | null) {
     if (!file) return;
+    if (detail?.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono caricare documenti su una pratica chiusa.");
+      return;
+    }
     if (file.size > 4 * 1024 * 1024) {
       setError("Il file supera 4MB. Riduci la dimensione prima di caricarlo.");
       return;
@@ -1235,6 +1382,10 @@ export function PraticaDetailPage() {
   }
 
   async function removeDocumentAttachment(key: PracticeDocumentKey, attachmentId: string) {
+    if (detail?.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono rimuovere documenti da una pratica chiusa.");
+      return;
+    }
     const attachmentToRemove =
       documentsDraft.items.find((item) => item.key === key)?.attachments?.find((attachment) => attachment.id === attachmentId) || null;
     if (attachmentToRemove?.storageKey) {
@@ -1265,9 +1416,6 @@ export function PraticaDetailPage() {
     };
     setDocumentsDraft(nextDocuments);
     await saveDocuments(nextDocuments);
-    if (detail?.lead.status === PRACTICE_CLOSED_STATUS || detail?.lead.status === PRACTICE_READY_STATUS) {
-      await changeLeadStatus(PRACTICE_REOPEN_STATUS, "riapertura pratica da documenti");
-    }
   }
 
   function updatePaymentItem(id: string, updates: Partial<PracticePaymentItem>) {
@@ -1287,6 +1435,10 @@ export function PraticaDetailPage() {
   }
 
   async function updatePaymentStatus(item: PracticePaymentItem, status: PaymentStatus) {
+    if (detail?.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono modificare pagamenti su una pratica chiusa.");
+      return;
+    }
     const now = new Date().toISOString();
     if (status === "pending") {
       setReopenedPaymentId(item.id);
@@ -1308,9 +1460,6 @@ export function PraticaDetailPage() {
       };
       setPaymentsDraft(nextPayments);
       await savePayments(nextPayments);
-      if (detail?.lead.status === PRACTICE_CLOSED_STATUS || detail?.lead.status === PRACTICE_READY_STATUS) {
-        await changeLeadStatus(PRACTICE_REOPEN_STATUS, "riapertura pratica da pagamenti");
-      }
       return;
     }
     if (status === "received") {
@@ -1331,11 +1480,63 @@ export function PraticaDetailPage() {
     updatePaymentItem(item.id, { dueAt: nextDue.toISOString() });
   }
 
+  function buildTaskSnoozeDate(task: CrmTask, days: number) {
+    const due = task.dueAt ? new Date(task.dueAt) : new Date();
+    if (!task.dueAt) due.setHours(9, 0, 0, 0);
+    due.setDate(due.getDate() + days);
+    return due.toISOString();
+  }
+
+  async function updatePracticeTask(
+    task: CrmTask,
+    updates: Partial<Pick<CrmTask, "status" | "dueAt" | "priority" | "assignedTo" | "title" | "description">>,
+    timelineText: string
+  ) {
+    if (!task.id) return;
+    if (detail?.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono modificare una pratica gia chiusa.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await api<CrmTask>(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(updates)
+      });
+      upsertPracticeTask(updated);
+      prependTimelineItem({
+        type: "task",
+        text: timelineText,
+        actor: activityActor,
+        createdAt: new Date().toISOString()
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore aggiornamento task.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function completePracticeTask(task: CrmTask) {
+    await updatePracticeTask(task, { status: "done" }, `Task completato: ${task.title}.`);
+  }
+
+  async function postponePracticeTask(task: CrmTask, days: number) {
+    const dueAt = buildTaskSnoozeDate(task, days);
+    await updatePracticeTask(task, { status: "open", dueAt }, `Task ripianificato: ${task.title} al ${formatDateDisplay(dueAt)}.`);
+  }
+
+  async function dismissPracticeTask(task: CrmTask) {
+    await updatePracticeTask(task, { status: "dismissed" }, `Task archiviato: ${task.title}.`);
+  }
+
   useEffect(() => {
     load().catch(() => null);
   }, [id]);
 
   useEffect(() => {
+    if (!taskModalOpen) return;
     let canceled = false;
 
     const hydrateTasks = async () => {
@@ -1359,7 +1560,7 @@ export function PraticaDetailPage() {
     return () => {
       canceled = true;
     };
-  }, []);
+  }, [taskModalOpen]);
 
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
 
@@ -1414,14 +1615,18 @@ export function PraticaDetailPage() {
     () => (detail?.lead.id ? taskBoardTasks.filter((task) => task.leadId === detail.lead.id) : []),
     [detail?.lead.id, taskBoardTasks]
   );
-  const openPracticeTasks = useMemo(() => practiceTasks.filter((task) => task.status === "open"), [practiceTasks]);
+  const sortedPracticeTasks = useMemo(() => [...practiceTasks].sort(compareTasks), [practiceTasks]);
+  const openPracticeTasks = useMemo(() => sortedPracticeTasks.filter((task) => task.status === "open"), [sortedPracticeTasks]);
+  const completedPracticeTasks = useMemo(() => sortedPracticeTasks.filter((task) => task.status === "done").slice(0, 4), [sortedPracticeTasks]);
+  const dismissedPracticeTasks = useMemo(() => sortedPracticeTasks.filter((task) => task.status === "dismissed").slice(0, 3), [sortedPracticeTasks]);
+  const nextTaskMeta = useMemo(() => (openPracticeTasks[0] ? getTaskUrgencyMeta(openPracticeTasks[0]) : null), [openPracticeTasks]);
   const modalAutoFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
   const modalClosedOutcome = callOutcome === "not_interested";
   const documentsState = useMemo(() => normalizeDocuments(documentsDraft), [documentsDraft]);
   const documentsBadge = useMemo(() => getDocumentsBadge(documentsState), [documentsState]);
   const missingDocumentsCount = useMemo(() => getMissingDocumentsCount(documentsState), [documentsState]);
   const documentsReady = useMemo(
-    () => documentsState.items.every((item) => !item.required || (item.received && item.verified)),
+    () => isDocumentsComplete(documentsState),
     [documentsState]
   );
   const paymentsState = useMemo(() => normalizePayments(detail?.lead.payments || paymentsDraft), [detail?.lead.payments, paymentsDraft]);
@@ -1430,7 +1635,7 @@ export function PraticaDetailPage() {
     [paymentsState]
   );
   const verifiedPaymentsReady = useMemo(
-    () => paymentsState.items.every((item) => !item.required || item.status === "verified"),
+    () => isPaymentsComplete(paymentsState),
     [paymentsState]
   );
   const paymentsBadge = useMemo(() => getPaymentsBadge(paymentsState), [paymentsState]);
@@ -1453,11 +1658,23 @@ export function PraticaDetailPage() {
   );
   const isReadyToCloseStatus = detail?.lead.status === PRACTICE_READY_STATUS;
   const isClosedPracticeStatus = detail?.lead.status === PRACTICE_CLOSED_STATUS;
-  const closureReady = documentsReady && verifiedPaymentsReady && openPracticeTasks.length === 0;
+  const isClosedReadOnly = Boolean(isClosedPracticeStatus && !isAdmin);
+  const closureReady = documentsReady && verifiedPaymentsReady;
   const closureEligible = isPostSalePracticeStatus(detail?.lead.status) || closureReady;
-  const canMarkReady = Boolean(detail && closureReady && !isReadyToCloseStatus && !isClosedPracticeStatus && nextStatuses.includes(PRACTICE_READY_STATUS));
-  const canClosePractice = Boolean(detail && closureReady && isReadyToCloseStatus && nextStatuses.includes(PRACTICE_CLOSED_STATUS));
-  const canReopenPractice = Boolean(detail && isClosedPracticeStatus && nextStatuses.includes(PRACTICE_REOPEN_STATUS));
+  const showClosureSuccessCard = closureReady && !isClosedPracticeStatus;
+  const showClosedPracticeSuccessCard = isClosedPracticeStatus;
+  const canClosePractice = Boolean(detail && isAdmin && closureReady && isReadyToCloseStatus && nextStatuses.includes(PRACTICE_CLOSED_STATUS));
+  const canReopenPractice = Boolean(detail && isAdmin && isClosedPracticeStatus && nextStatuses.includes(PRACTICE_REOPEN_STATUS));
+
+  useEffect(() => {
+    if (!showClosureSuccessCard) return;
+    const lottie = closureLottieRef.current;
+    if (!lottie) return;
+    lottie.setSubframe(false);
+    lottie.setSpeed(0.72);
+    lottie.play();
+  }, [showClosureSuccessCard]);
+
   const closureChecks = useMemo(
     () => [
       {
@@ -1471,15 +1688,9 @@ export function PraticaDetailPage() {
         label: "Pagamenti verificati",
         detail: verifiedPaymentsReady ? "Le rate richieste risultano verificate." : `${pendingPayments.length} pagamenti ancora da chiudere.`,
         done: verifiedPaymentsReady
-      },
-      {
-        key: "tasks",
-        label: "Nessun task aperto",
-        detail: openPracticeTasks.length ? `${openPracticeTasks.length} task operativi ancora aperti.` : "La pratica non ha task pendenti.",
-        done: openPracticeTasks.length === 0
       }
     ],
-    [documentsReady, missingDocumentsCount, openPracticeTasks.length, pendingPayments.length, verifiedPaymentsReady]
+    [documentsReady, missingDocumentsCount, pendingPayments.length, verifiedPaymentsReady]
   );
   const visibleDocuments = useMemo(
     () =>
@@ -1559,48 +1770,79 @@ export function PraticaDetailPage() {
             <section
               className={`pd-closure-band ${
                 isClosedPracticeStatus ? "is-closed" : closureReady ? "is-ready" : "is-blocked"
-              } ${reopenedPaymentId ? "is-reopened" : ""}`}
+              } ${reopenedPaymentId ? "is-reopened" : ""} ${showClosureSuccessCard ? "has-success-card" : ""}`}
             >
-              <div className="pd-closure-copy">
-                <span className="pd-closure-eyebrow">Chiusura pratica</span>
-                <h5>
-                  {isClosedPracticeStatus
-                    ? "Pratica chiusa al 100%"
-                    : isReadyToCloseStatus
-                      ? "Pronta da chiudere"
-                      : closureReady
-                        ? "Checklist completata"
+              {!showClosureSuccessCard && !showClosedPracticeSuccessCard ? (
+                <div className="pd-closure-copy">
+                  <span className="pd-closure-eyebrow">Chiusura pratica</span>
+                  <h5>
+                    {isClosedPracticeStatus
+                      ? "Pratica chiusa al 100%"
+                      : isReadyToCloseStatus
+                        ? "Pronta da chiudere"
                         : "Ultimi passaggi prima della chiusura"}
-                </h5>
-                <p>
-                  {isClosedPracticeStatus
-                    ? "La pratica è stata completata e archiviata. Puoi riaprirla se torna un pagamento, un documento o una nuova attività."
-                    : isReadyToCloseStatus
-                      ? "Tutto è in ordine: fai l’ultimo passaggio e portala tra le pratiche chiuse."
-                      : closureReady
-                        ? "Documenti, pagamenti e task sono allineati. Puoi segnare la pratica pronta per la chiusura finale."
-                        : "Completa gli elementi ancora aperti. Quando la checklist è verde, la pratica potrà essere chiusa in modo pulito."}
-                </p>
-              </div>
+                  </h5>
+                  <p>
+                    {isClosedPracticeStatus
+                      ? "La pratica e stata completata e archiviata. Puoi riaprirla se torna un pagamento o un documento."
+                      : isReadyToCloseStatus
+                        ? "Documenti e pagamenti sono completi: la pratica e gia tra le completate ed e pronta per la chiusura finale."
+                        : "Completa documenti e pagamenti richiesti. Quando entrambi sono verdi, la pratica si completa da sola."}
+                  </p>
+                </div>
+              ) : null}
 
-              <div className="pd-closure-checks" role="list" aria-label="Checklist chiusura pratica">
-                {closureChecks.map((item) => (
-                  <article key={item.key} className={`pd-closure-check ${item.done ? "done" : "pending"}`} role="listitem">
-                    <span className="pd-closure-check-icon" aria-hidden="true">
-                      {item.done ? "OK" : "!"}
-                    </span>
-                    <div>
-                      <strong>{item.label}</strong>
-                      <span>{item.detail}</span>
+              {showClosedPracticeSuccessCard ? (
+                <div className="pd-closure-closed-track" aria-live="polite">
+                  <div className="pd-closure-success is-closed-only">
+                    <div className="pd-closure-success-animation" aria-hidden="true">
+                      <Lottie
+                        className="pd-closure-success-lottie"
+                        animationData={cruiseClosureBoatAnimation}
+                        lottieRef={closureLottieRef}
+                        autoplay
+                        loop
+                        renderer="canvas"
+                      />
                     </div>
-                  </article>
-                ))}
-              </div>
+                  </div>
+                </div>
+              ) : showClosureSuccessCard ? (
+                <div className="pd-closure-success" aria-live="polite">
+                  <div className="pd-closure-success-animation" aria-hidden="true">
+                    <Lottie
+                      className="pd-closure-success-lottie"
+                      animationData={cruiseClosureBoatAnimation}
+                      lottieRef={closureLottieRef}
+                      autoplay
+                      loop
+                      renderer="canvas"
+                    />
+                  </div>
+                  <div className="pd-closure-success-copy">
+                    <strong>CHECKLIST COMPLETATA</strong>
+                  </div>
+                </div>
+              ) : (
+                <div className="pd-closure-checks" role="list" aria-label="Checklist chiusura pratica">
+                  {closureChecks.map((item) => (
+                    <article key={item.key} className={`pd-closure-check ${item.done ? "done" : "pending"}`} role="listitem">
+                      <span className="pd-closure-check-icon" aria-hidden="true">
+                        {item.done ? "OK" : "!"}
+                      </span>
+                      <div>
+                        <strong>{item.label}</strong>
+                        <span>{item.detail}</span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
 
               <div className="pd-closure-actions">
-                {canMarkReady ? (
-                  <button type="button" disabled={busy} onClick={() => void markPracticeReady()}>
-                    Segna pronta
+                {closureReady && !isClosedPracticeStatus ? (
+                  <button type="button" className="pd-closure-note-button" disabled={busy} onClick={openNoteModal}>
+                    Nota finale
                   </button>
                 ) : null}
                 {canClosePractice ? (
@@ -1609,12 +1851,20 @@ export function PraticaDetailPage() {
                   </button>
                 ) : null}
                 {canReopenPractice ? (
-                  <button type="button" className="secondary" disabled={busy} onClick={() => void reopenClosedPractice()}>
+                  <button type="button" className="pd-closure-reopen-button" disabled={busy} onClick={() => void reopenClosedPractice()}>
                     Riapri pratica
                   </button>
                 ) : null}
+                {canReopenPractice && isAdmin && detail?.lead.assignedTo ? (
+                  <button type="button" className="pd-closure-return-button" disabled={busy} onClick={() => void returnPracticeToOperator()}>
+                    Rimanda a operatore
+                  </button>
+                ) : null}
+                {isClosedReadOnly ? (
+                  <span className="pd-closure-hint">Pratica chiusa in sola lettura per operatore. Riapertura e modifiche sensibili sono riservate ad admin.</span>
+                ) : null}
                 {!closureReady && !isClosedPracticeStatus ? (
-                  <span className="pd-closure-hint">{openPracticeTasks.length ? "Chiudi i task aperti o completa i blocchi indicati." : "Completa i controlli evidenziati per proseguire."}</span>
+                  <span className="pd-closure-hint">Completa i controlli evidenziati su documenti e pagamenti per proseguire.</span>
                 ) : null}
               </div>
             </section>
@@ -1684,7 +1934,7 @@ export function PraticaDetailPage() {
                           <input
                             type="checkbox"
                             checked={item.required}
-                            disabled={busy}
+                            disabled={busy || isClosedReadOnly}
                             onChange={(event) => updateDocumentItem(item.key, { required: event.target.checked })}
                           />
                           Richiesto
@@ -1693,7 +1943,7 @@ export function PraticaDetailPage() {
                           <input
                             type="checkbox"
                             checked={item.received}
-                            disabled={busy}
+                            disabled={busy || isClosedReadOnly}
                             onChange={(event) =>
                               updateDocumentItem(item.key, {
                                 received: event.target.checked,
@@ -1707,7 +1957,7 @@ export function PraticaDetailPage() {
                           <input
                             type="checkbox"
                             checked={item.verified}
-                            disabled={busy || !item.received}
+                            disabled={busy || isClosedReadOnly || !item.received}
                             onChange={(event) =>
                               updateDocumentItem(item.key, {
                                 verified: event.target.checked,
@@ -1738,6 +1988,20 @@ export function PraticaDetailPage() {
                           </span>
                         </button>
                       ) : null}
+                      {item.attachments?.length ? (
+                        <button
+                          type="button"
+                          className="pd-doc-delete-button"
+                          disabled={isClosedReadOnly}
+                          onClick={() => void removeDocumentAttachment(item.key, item.attachments[0].id)}
+                          aria-label="Rimuovi documento"
+                          title="Rimuovi documento"
+                        >
+                          <span className="pd-doc-bin-top" aria-hidden="true" />
+                          <span className="pd-doc-bin-bottom" aria-hidden="true" />
+                          <span className="pd-doc-bin-garbage" aria-hidden="true" />
+                        </button>
+                      ) : null}
                       {!item.attachments?.length ? (
                         <label className="pd-doc-upload" title="Carica documento">
                         <span className="pd-doc-upload-shine" aria-hidden="true" />
@@ -1760,9 +2024,9 @@ export function PraticaDetailPage() {
                           </span>
                         </span>
                         <input
-                          type="file"
-                          accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
-                          disabled={busy}
+                           type="file"
+                           accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
+                           disabled={busy || isClosedReadOnly}
                           onChange={(event) => {
                             void handleDocumentUpload(item.key, event.currentTarget.files?.[0] || null);
                             event.currentTarget.value = "";
@@ -1774,28 +2038,16 @@ export function PraticaDetailPage() {
                         type="button"
                         className="pd-doc-note-toggle"
                         aria-expanded={Boolean(expandedDocumentNotes[item.key])}
+                        disabled={isClosedReadOnly}
                         onClick={() =>
-                          setExpandedDocumentNotes((prev) => ({
-                            ...prev,
-                            [item.key]: !prev[item.key]
-                          }))
-                        }
-                      >
-                        {item.note?.trim() || expandedDocumentNotes[item.key] ? "Modifica" : "+ Nota"}
-                      </button>
-                      {item.attachments?.length ? (
-                        <button
-                          type="button"
-                          className="pd-doc-delete-button"
-                          onClick={() => void removeDocumentAttachment(item.key, item.attachments[0].id)}
-                          aria-label="Rimuovi documento"
-                          title="Rimuovi documento"
-                        >
-                          <span className="pd-doc-bin-top" aria-hidden="true" />
-                          <span className="pd-doc-bin-bottom" aria-hidden="true" />
-                          <span className="pd-doc-bin-garbage" aria-hidden="true" />
-                        </button>
-                      ) : null}
+                         setExpandedDocumentNotes((prev) => ({
+                           ...prev,
+                           [item.key]: !prev[item.key]
+                         }))
+                       }
+                     >
+                       {item.note?.trim() || expandedDocumentNotes[item.key] ? "Modifica" : "+ Nota"}
+                     </button>
                     </div>
                     {item.attachments?.length ? (
                       <div className="pd-doc-attachments">
@@ -1804,9 +2056,9 @@ export function PraticaDetailPage() {
                             <span className="pd-doc-attachment-icon" aria-hidden="true">
                               ✓
                             </span>
-                            <button type="button" onClick={() => void removeDocumentAttachment(item.key, attachment.id)}>
-                              x
-                            </button>
+                             <button type="button" disabled={isClosedReadOnly} onClick={() => void removeDocumentAttachment(item.key, attachment.id)}>
+                               x
+                             </button>
                           </div>
                         ))}
                       </div>
@@ -1829,8 +2081,9 @@ export function PraticaDetailPage() {
                             }
                           }}
                           rows={1}
-                          autoFocus
-                          placeholder="Aggiungi una nota rapida sul documento"
+                           autoFocus
+                           disabled={isClosedReadOnly}
+                           placeholder="Aggiungi una nota rapida sul documento"
                         />
                         <span className="pd-doc-note-status" aria-live="polite">
                           {savedDocumentNotes[item.key] ? "Salvata" : "Invio"}
@@ -1862,8 +2115,25 @@ export function PraticaDetailPage() {
               <div className={`pd-payments-summary-card ${reopenedPaymentId ? "is-reopened" : ""}`}>
                 {showPaymentsOk ? (
                   <div className="pd-payments-ok" aria-live="polite">
-                    <span className="pd-payments-ok-ring" aria-hidden="true" />
-                    <strong>OK!!</strong>
+                    <div className="pd-payments-ok-animation" aria-hidden="true">
+                      <Lottie
+                        className="pd-payments-ok-lottie"
+                        animationData={paymentsOkConfirmationAnimation}
+                        lottieRef={paymentsOkLottieRef}
+                        autoplay={false}
+                        loop={false}
+                        renderer="svg"
+                        rendererSettings={{ preserveAspectRatio: "xMidYMid meet" }}
+                        onDOMLoaded={() => {
+                          const lottie = paymentsOkLottieRef.current;
+                          if (!lottie) return;
+                          lottie.setSubframe(false);
+                          lottie.setSpeed(1);
+                          lottie.playSegments([0, 77], true);
+                        }}
+                        onComplete={() => paymentsOkLottieRef.current?.goToAndStop(77, true)}
+                      />
+                    </div>
                     <small>Tutti i pagamenti risultano registrati.</small>
                   </div>
                 ) : (
@@ -1941,12 +2211,12 @@ export function PraticaDetailPage() {
                           <summary className="pd-payment-menu-trigger">Azioni</summary>
                           <div className="pd-payment-menu-list">
                             {item.status === "pending" ? (
-                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => void updatePaymentStatus(item, "received")}>
+                               <button type="button" className="pd-payment-menu-item" disabled={busy || isClosedReadOnly} onClick={() => void updatePaymentStatus(item, "received")}>
                                 Segna ricevuto
                               </button>
                             ) : null}
                             {item.status === "pending" ? (
-                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => postponePayment(item, 1)}>
+                               <button type="button" className="pd-payment-menu-item" disabled={busy || isClosedReadOnly} onClick={() => postponePayment(item, 1)}>
                                 Posticipa +1 giorno
                               </button>
                             ) : null}
@@ -1956,12 +2226,12 @@ export function PraticaDetailPage() {
                               </button>
                             ) : null}
                             {item.status !== "verified" ? (
-                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => void updatePaymentStatus(item, "verified")}>
+                               <button type="button" className="pd-payment-menu-item" disabled={busy || isClosedReadOnly} onClick={() => void updatePaymentStatus(item, "verified")}>
                                 Verifica
                               </button>
                             ) : null}
                             {item.status !== "pending" ? (
-                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={() => void updatePaymentStatus(item, "pending")}>
+                               <button type="button" className="pd-payment-menu-item" disabled={busy || isClosedReadOnly} onClick={() => void updatePaymentStatus(item, "pending")}>
                                 Riapri pagamento
                               </button>
                             ) : null}
@@ -2230,10 +2500,14 @@ export function PraticaDetailPage() {
               >
                 <div className="pd-note-modal-head">
                   <div>
-                    <h5 id="pd-note-modal-title">Inserisci nota</h5>
-                    <p>Aggiungi o aggiorna il commento operativo della pratica.</p>
+                    <h5 id="pd-note-modal-title">{closureReady && !isClosedPracticeStatus ? "Nota finale pratica" : "Inserisci nota"}</h5>
+                    <p>
+                      {closureReady && !isClosedPracticeStatus
+                        ? "Salvando la nota finale la pratica passa tra le completate e resta in supervisione admin."
+                        : "Aggiungi o aggiorna il commento operativo della pratica."}
+                    </p>
                   </div>
-                  <button type="button" className="secondary" onClick={closeNoteModal}>
+                  <button type="button" className="pd-note-modal-close" onClick={closeNoteModal}>
                     Chiudi
                   </button>
                 </div>
@@ -2245,11 +2519,11 @@ export function PraticaDetailPage() {
                   placeholder="Scrivi qui la nota o il commento..."
                 />
                 <div className="pd-note-modal-actions">
-                  <button type="button" className="secondary" onClick={closeNoteModal}>
+                  <button type="button" className="pd-note-modal-cancel" onClick={closeNoteModal}>
                     Annulla
                   </button>
-                  <button type="button" disabled={busy || !noteDraft.trim()} onClick={saveNote}>
-                    Salva nota
+                  <button type="button" className="pd-note-modal-submit" disabled={busy || !noteDraft.trim()} onClick={saveNote}>
+                    {closureReady && !isClosedPracticeStatus ? "Completa pratica" : "Salva nota"}
                   </button>
                 </div>
               </div>
@@ -2260,13 +2534,3 @@ export function PraticaDetailPage() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-

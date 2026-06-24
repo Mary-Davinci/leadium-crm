@@ -1,6 +1,7 @@
 import "../../loadEnv";
 import http from "http";
 import { applyStatusAutomation, createActivity } from "../common/automation";
+import { syncLeadToMetaCrm } from "../common/metaCrmSync";
 import { LEAD_STATUSES, isValidTransition } from "../common/workflow";
 import {
   appendActivities,
@@ -23,7 +24,15 @@ const PORT = Number(process.env.LEAD_SERVICE_PORT || 4301);
 const WORKFLOW_URL = process.env.WORKFLOW_SERVICE_URL || "http://localhost:4302";
 const SLA_FIRST_CONTACT_MINUTES = Number(process.env.SLA_FIRST_CONTACT_MINUTES || 5);
 const SLA_TASK_INTERVAL_MS = Number(process.env.SLA_TASK_INTERVAL_MS || 60_000);
-const AUTOMATIC_TASK_KINDS = ["next_action", "sla_first_contact", "callback_overdue", "document_checklist", "payment_checklist"] as const;
+const AUTOMATIC_TASK_KINDS = [
+  "next_action",
+  "sla_first_contact",
+  "callback_overdue",
+  "document_checklist",
+  "payment_checklist",
+  "post_sale_gadget",
+  "post_sale_tickets"
+] as const;
 type AutomaticTaskKind = (typeof AUTOMATIC_TASK_KINDS)[number];
 
 function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown) {
@@ -64,6 +73,236 @@ function routeMatch(pathname: string, pattern: string) {
   return params;
 }
 
+const CONTACT_ACTIVITY_TYPES = new Set(["call", "whatsapp_opened", "whatsapp_received", "whatsapp_sent"]);
+
+function cleanOptionalString(value: unknown) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
+function normalizeSourcePlatform(value: unknown, sourceHint = "") {
+  const normalized = String(value || sourceHint || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("instagram")) return "instagram";
+  if (normalized.includes("facebook")) return "facebook";
+  if (normalized.includes("meta")) return "meta";
+  return normalized;
+}
+
+function extractLeadSourceFields(body: any, sourceHint = "") {
+  return {
+    sourceLeadId: cleanOptionalString(body?.sourceLeadId),
+    sourcePlatform: normalizeSourcePlatform(body?.sourcePlatform, sourceHint),
+    sourceCampaignId: cleanOptionalString(body?.sourceCampaignId),
+    sourceFormId: cleanOptionalString(body?.sourceFormId)
+  };
+}
+
+function applyLeadSourceFields(lead: any, nextFields: ReturnType<typeof extractLeadSourceFields>, overwrite = false) {
+  let changed = false;
+  for (const [key, value] of Object.entries(nextFields)) {
+    if (overwrite) {
+      if ((lead[key] ?? null) !== value) {
+        lead[key] = value;
+        changed = true;
+      }
+      continue;
+    }
+    if (value !== null && !lead[key]) {
+      lead[key] = value;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function markLeadContacted(lead: any, at: string) {
+  lead.lastContactAt = at;
+  if (!lead.firstContactAt) lead.firstContactAt = at;
+  syncLeadSlaState(lead);
+}
+
+function syncLeadAssignmentState(lead: any, previousAssignedTo: string, assignedAt: string) {
+  const nextAssignedTo = String(lead.assignedTo || "").trim();
+  if (!nextAssignedTo) return;
+  if (!previousAssignedTo || previousAssignedTo !== nextAssignedTo || !lead.assignedAt) {
+    lead.assignedAt = assignedAt;
+  }
+}
+
+function getLeadSlaDueAt(lead: any) {
+  if (lead?.firstContactAt) return null;
+  if (!isToContactStatus(String(lead?.status || ""))) return null;
+  const baseline = String(lead?.assignedAt || lead?.createdAt || "").trim();
+  const baselineTs = baseline ? new Date(baseline).getTime() : 0;
+  if (!Number.isFinite(baselineTs) || baselineTs <= 0) return null;
+  return new Date(baselineTs + SLA_FIRST_CONTACT_MINUTES * 60_000).toISOString();
+}
+
+function syncLeadSlaState(lead: any) {
+  lead.slaDueAt = getLeadSlaDueAt(lead);
+}
+
+function getFallbackLossReason(status: string) {
+  switch (status) {
+    case LEAD_STATUSES.NOT_INTERESTED:
+      return "non_interessato";
+    case LEAD_STATUSES.OUT_OF_BUDGET:
+      return "fuori_budget";
+    case LEAD_STATUSES.LOST:
+      return "persa_generica";
+    default:
+      return null;
+  }
+}
+
+function isDisqualifiedStatus(status: string) {
+  return ([LEAD_STATUSES.NOT_INTERESTED, LEAD_STATUSES.OUT_OF_BUDGET] as string[]).includes(status);
+}
+
+function requiresExplicitLossReason(status: string) {
+  return status === LEAD_STATUSES.LOST;
+}
+
+function deriveClosingOutcome(status: string) {
+  if (([LEAD_STATUSES.SOLD, LEAD_STATUSES.GADGET_SENT, LEAD_STATUSES.TICKETS_SENT, LEAD_STATUSES.READY_TO_CLOSE, LEAD_STATUSES.CLOSED_FULL] as string[]).includes(status)) {
+    return "won";
+  }
+  if (status === LEAD_STATUSES.LOST) return "lost";
+  if (isDisqualifiedStatus(status)) return "disqualified";
+  return "open";
+}
+
+function syncLeadClosureState(lead: any, lossReason?: unknown, lossDetail?: unknown) {
+  lead.closingOutcome = deriveClosingOutcome(String(lead.status || ""));
+  if (lead.closingOutcome === "lost" || lead.closingOutcome === "disqualified") {
+    if (lossReason !== undefined) {
+      lead.lossReason = cleanOptionalString(lossReason);
+    } else if (!lead.lossReason) {
+      lead.lossReason = getFallbackLossReason(String(lead.status || ""));
+    }
+    if (lossDetail !== undefined) {
+      lead.lossDetail = cleanOptionalString(lossDetail);
+    }
+    return;
+  }
+  lead.lossReason = null;
+  lead.lossDetail = null;
+}
+
+function assertLossReasonForStatus(status: string, lossReason?: unknown) {
+  if (!requiresExplicitLossReason(status)) return null;
+  if (cleanOptionalString(lossReason)) return null;
+  return 'Motivo perdita obbligatorio per lo stato "Persa".';
+}
+
+function isPostSaleStatus(status: string) {
+  return ([LEAD_STATUSES.SOLD, LEAD_STATUSES.GADGET_SENT, LEAD_STATUSES.TICKETS_SENT, LEAD_STATUSES.READY_TO_CLOSE, LEAD_STATUSES.CLOSED_FULL] as string[]).includes(
+    status
+  );
+}
+
+function hasReachedPostSaleStep(status: string, kind: "post_sale_gadget" | "post_sale_tickets") {
+  if (kind === "post_sale_gadget") {
+    return ([LEAD_STATUSES.GADGET_SENT, LEAD_STATUSES.TICKETS_SENT, LEAD_STATUSES.READY_TO_CLOSE, LEAD_STATUSES.CLOSED_FULL] as string[]).includes(status);
+  }
+  return ([LEAD_STATUSES.TICKETS_SENT, LEAD_STATUSES.READY_TO_CLOSE, LEAD_STATUSES.CLOSED_FULL] as string[]).includes(status);
+}
+
+async function syncPostSaleTask(
+  lead: any,
+  kind: "post_sale_gadget" | "post_sale_tickets",
+  title: string,
+  openDescription: string,
+  doneDescription: string,
+  dedupedBy: string
+) {
+  const tasks = await listTasksByLeadAndKind(lead.id, kind);
+  const task = tasks[0] || null;
+  const shouldTrack = isPostSaleStatus(String(lead.status || ""));
+  const shouldBeDone = !shouldTrack || hasReachedPostSaleStep(String(lead.status || ""), kind);
+  const expectedStatus: TaskRecord["status"] = shouldBeDone ? "done" : "open";
+  const expectedDescription = shouldBeDone ? doneDescription : openDescription;
+  const expectedDueAt = shouldBeDone ? task?.dueAt || getEndOfTodayIso() : getEndOfTodayIso();
+  const expectedPriority = shouldBeDone ? 35 : 58;
+  const expectedMeta = {
+    ...(task?.meta || {}),
+    status: lead.status,
+    phone: lead.phone || "",
+    step: kind === "post_sale_gadget" ? "gadget" : "tickets"
+  };
+
+  if (!task) {
+    if (!shouldTrack && shouldBeDone) return;
+    await createTask({
+      leadId: lead.id,
+      assignedTo: lead.assignedTo || "",
+      kind,
+      title,
+      description: expectedDescription,
+      source: "automation",
+      status: expectedStatus,
+      priority: expectedPriority,
+      dueAt: expectedDueAt,
+      meta: expectedMeta
+    });
+    return;
+  }
+
+  const hasChanged =
+    task.assignedTo !== (lead.assignedTo || "") ||
+    task.title !== title ||
+    task.description !== expectedDescription ||
+    task.source !== "automation" ||
+    task.status !== expectedStatus ||
+    task.priority !== expectedPriority ||
+    task.dueAt !== expectedDueAt ||
+    JSON.stringify(task.meta || {}) !== JSON.stringify(expectedMeta);
+
+  if (hasChanged) {
+    task.assignedTo = lead.assignedTo || "";
+    task.title = title;
+    task.description = expectedDescription;
+    task.source = "automation";
+    task.status = expectedStatus;
+    task.priority = expectedPriority;
+    task.dueAt = expectedDueAt;
+    task.meta = expectedMeta;
+    task.updatedAt = new Date().toISOString();
+    await saveTask(task);
+  }
+
+  await dismissDuplicateTasks(tasks, kind, dedupedBy);
+}
+
+async function syncPostSaleTasks(lead: any, dedupedBy = "post_sale_sync") {
+  await syncPostSaleTask(
+    lead,
+    "post_sale_gadget",
+    `Invio gadget: ${lead.fullName || lead.phone || "lead"}`,
+    "Inviare il gadget post-vendita al cliente.",
+    "Task gadget completato o non piu richiesto nello stato attuale.",
+    dedupedBy
+  );
+  await syncPostSaleTask(
+    lead,
+    "post_sale_tickets",
+    `Invio biglietti: ${lead.fullName || lead.phone || "lead"}`,
+    "Inviare i biglietti o i documenti finali di viaggio al cliente.",
+    "Task biglietti completato o non piu richiesto nello stato attuale.",
+    dedupedBy
+  );
+}
+
+async function persistMetaSyncIfChanged(lead: any, result: { changed?: boolean } | null | undefined) {
+  if (!lead || !result?.changed) return;
+  lead.updatedAt = new Date().toISOString();
+  await saveLead(lead);
+}
+
 function safeLead(lead: any) {
   return {
     id: lead.id,
@@ -75,6 +314,18 @@ function safeLead(lead: any) {
     assignedTo: lead.assignedTo,
     status: lead.status,
     notes: lead.notes,
+    sourceLeadId: lead.sourceLeadId || null,
+    sourcePlatform: lead.sourcePlatform || null,
+    sourceCampaignId: lead.sourceCampaignId || null,
+    sourceFormId: lead.sourceFormId || null,
+    assignedAt: lead.assignedAt || null,
+    firstContactAt: lead.firstContactAt || null,
+    lastContactAt: lead.lastContactAt || null,
+    slaDueAt: lead.slaDueAt || null,
+    closingOutcome: lead.closingOutcome || "open",
+    lossReason: lead.lossReason || null,
+    lossDetail: lead.lossDetail || null,
+    metaEventSync: lead.metaEventSync || null,
     documents: lead.documents || { items: [] },
     payments: lead.payments || { items: [] },
     latestCallOutcome: lead.latestCallOutcome || null,
@@ -424,11 +675,54 @@ function getBoardLeadSummary(lead: any) {
     assignedTo: String(lead.assignedTo || ""),
     status: String(lead.status || ""),
     notes: String(lead.notes || ""),
-    documents: lead.documents || { items: [] },
-    payments: lead.payments || { items: [] },
     nextActionAt: lead.nextActionAt || null,
+    assignedAt: lead.assignedAt || null,
+    firstContactAt: lead.firstContactAt || null,
+    lastContactAt: lead.lastContactAt || null,
+    slaDueAt: lead.slaDueAt || null,
+    closingOutcome: lead.closingOutcome || "open",
+    lossReason: lead.lossReason || null,
+    lossDetail: lead.lossDetail || null,
+    documentsMissingCount: getMissingDocumentsSummaryCount(lead),
     updatedAt: String(lead.updatedAt || ""),
     createdAt: String(lead.createdAt || "")
+  };
+}
+
+function getMissingDocumentsSummaryCount(lead: any) {
+  const items = Array.isArray(lead?.documents?.items) ? lead.documents.items : [];
+  return items.filter((item: any) => item?.required && (!item?.received || !item?.verified)).length;
+}
+
+function getLeadListSummary(lead: any) {
+  return {
+    id: lead.id,
+    fullName: lead.fullName,
+    phone: lead.phone,
+    email: lead.email,
+    source: lead.source,
+    budget: lead.budget,
+    assignedTo: lead.assignedTo,
+    status: lead.status,
+    notes: lead.notes,
+    sourceLeadId: lead.sourceLeadId || null,
+    sourcePlatform: lead.sourcePlatform || null,
+    sourceCampaignId: lead.sourceCampaignId || null,
+    sourceFormId: lead.sourceFormId || null,
+    assignedAt: lead.assignedAt || null,
+    firstContactAt: lead.firstContactAt || null,
+    lastContactAt: lead.lastContactAt || null,
+    slaDueAt: lead.slaDueAt || null,
+    closingOutcome: lead.closingOutcome || "open",
+    lossReason: lead.lossReason || null,
+    lossDetail: lead.lossDetail || null,
+    latestCallOutcome: lead.latestCallOutcome || null,
+    latestCallAt: lead.latestCallAt || null,
+    callAttempts: lead.callAttempts || 0,
+    nextActionAt: lead.nextActionAt || null,
+    documentsMissingCount: getMissingDocumentsSummaryCount(lead),
+    createdAt: lead.createdAt,
+    updatedAt: lead.updatedAt
   };
 }
 
@@ -543,11 +837,13 @@ export async function ensureSlaTasks() {
       }
     }
 
-    const createdAtTs = new Date(lead.createdAt || "").getTime();
+    const firstContactDeadline = lead.slaDueAt || getLeadSlaDueAt(lead);
+    const createdAtTs = new Date(firstContactDeadline || "").getTime();
     const firstContactExpired =
+      !lead.firstContactAt &&
       isToContactStatus(lead.status) &&
       Number.isFinite(createdAtTs) &&
-      createdAtTs + SLA_FIRST_CONTACT_MINUTES * 60_000 < now;
+      createdAtTs < now;
     const firstContactTasks = automaticTaskGroups.get(getAutomaticTaskKey(lead.id, "sla_first_contact")) || [];
     const firstContactTask = firstContactTasks[0] || null;
     if (firstContactExpired && !firstContactTask) {
@@ -560,12 +856,12 @@ export async function ensureSlaTasks() {
         source: "scheduler",
         status: "open",
         priority: 95,
-        dueAt: new Date(createdAtTs + SLA_FIRST_CONTACT_MINUTES * 60_000).toISOString(),
-        meta: { status: lead.status, phone: lead.phone || "" }
+        dueAt: firstContactDeadline,
+        meta: { status: lead.status, phone: lead.phone || "", assignedAt: lead.assignedAt || null }
       });
     } else if (firstContactExpired && firstContactTask) {
-      const expectedDueAt = new Date(createdAtTs + SLA_FIRST_CONTACT_MINUTES * 60_000).toISOString();
-      const expectedMeta = { ...(firstContactTask.meta || {}), status: lead.status, phone: lead.phone || "" };
+      const expectedDueAt = firstContactDeadline;
+      const expectedMeta = { ...(firstContactTask.meta || {}), status: lead.status, phone: lead.phone || "", assignedAt: lead.assignedAt || null };
       const hasChanged =
         firstContactTask.assignedTo !== (lead.assignedTo || "") ||
         firstContactTask.dueAt !== expectedDueAt ||
@@ -771,6 +1067,7 @@ export async function ensureSlaTasks() {
       }
     }
     await dismissDuplicateTasks(paymentTasks, "payment_checklist", "scheduler");
+    await syncPostSaleTasks(lead, "scheduler");
   }
 }
 
@@ -795,7 +1092,7 @@ async function handleCallEvent(body: any) {
   const eventType = body.eventType || "call_event";
   const disposition = body.disposition || "completed";
   lead.updatedAt = new Date().toISOString();
-  lead.lastContactAt = lead.updatedAt;
+  markLeadContacted(lead, lead.updatedAt);
   const activities = [
     createActivity({
       leadId: lead.id,
@@ -828,11 +1125,12 @@ export const server = http.createServer(async (req, res) => {
       if (method === "GET" && pathname === "/leads") {
         const rows = compactLeadsByContact(await listLeads(query));
         const callMap = await getLatestCallMapByLeadIds(rows.map((lead: any) => String(lead.id || "")));
+        const isSummaryView = String(query.view || "").toLowerCase() === "summary";
         return sendJson(
           res,
           200,
           rows.map((lead: any) =>
-            safeLead({
+            (isSummaryView ? getLeadListSummary : safeLead)({
               ...lead,
               latestCallOutcome: callMap.get(String(lead.id || ""))?.outcome || null,
               latestCallAt: callMap.get(String(lead.id || ""))?.startedAt || null
@@ -884,6 +1182,7 @@ export const server = http.createServer(async (req, res) => {
       if (!body.fullName || !body.phone) return sendJson(res, 400, { error: "fullName e phone sono obbligatori." });
       const existing = await findLeadByContact(String(body.phone || ""), String(body.email || ""));
       if (existing) {
+        const now = new Date().toISOString();
         let changed = false;
         if (!isMissing(body.fullName) && isMissing(existing.fullName)) {
           existing.fullName = String(body.fullName).trim();
@@ -903,6 +1202,11 @@ export const server = http.createServer(async (req, res) => {
         }
         if (!isMissing(body.assignedTo) && isMissing(existing.assignedTo)) {
           existing.assignedTo = String(body.assignedTo).trim();
+          syncLeadAssignmentState(existing, "", now);
+          syncLeadSlaState(existing);
+          changed = true;
+        }
+        if (applyLeadSourceFields(existing, extractLeadSourceFields(body, body.source ? String(body.source) : ""), false)) {
           changed = true;
         }
         const mergedNotes = appendNote(existing.notes || "", String(body.notes || ""));
@@ -910,9 +1214,11 @@ export const server = http.createServer(async (req, res) => {
           existing.notes = mergedNotes;
           changed = true;
         }
-        existing.updatedAt = new Date().toISOString();
+        existing.updatedAt = now;
         existing.lastContactAt = existing.lastContactAt || null;
         await saveLead(existing);
+        const metaSync = await syncLeadToMetaCrm(existing, { stage: "initial", eventTime: existing.createdAt || now });
+        await persistMetaSyncIfChanged(existing, metaSync);
         if (changed) {
           await appendActivities([
             createActivity({
@@ -926,6 +1232,8 @@ export const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { mode: "deduplicated", lead: safeLead(existing) });
       }
       const now = new Date().toISOString();
+      const assignedTo = body.assignedTo ? String(body.assignedTo).trim() : "";
+      const sourceFields = extractLeadSourceFields(body, body.source ? String(body.source) : "");
       const lead = {
         id: newId("lead"),
         fullName: String(body.fullName).trim(),
@@ -933,9 +1241,17 @@ export const server = http.createServer(async (req, res) => {
         email: body.email ? String(body.email).trim() : "",
         source: body.source ? String(body.source).trim() : "manuale",
         budget: body.budget || "",
-        assignedTo: body.assignedTo || "",
+        assignedTo,
         status: LEAD_STATUSES.TO_CONTACT,
         notes: body.notes || "",
+        ...sourceFields,
+        assignedAt: assignedTo ? now : null,
+        firstContactAt: null,
+        lastContactAt: null,
+        slaDueAt: null,
+        closingOutcome: "open",
+        lossReason: null,
+        lossDetail: null,
         documents: normalizePracticeDocuments(body.documents),
         payments: normalizePracticePayments(body.payments),
         callAttempts: 0,
@@ -943,9 +1259,12 @@ export const server = http.createServer(async (req, res) => {
         createdAt: now,
         updatedAt: now
       };
+      syncLeadSlaState(lead);
       await createLead(lead, [createActivity({ leadId: lead.id, type: "lead_created", text: "Lead creato.", actor: body.actor || "system" })]);
       await syncDocumentChecklistTask(lead);
       await syncPaymentChecklistTask(lead);
+      const metaSync = await syncLeadToMetaCrm(lead, { stage: "initial", eventTime: lead.createdAt || now });
+      await persistMetaSyncIfChanged(lead, metaSync);
       return sendJson(res, 201, safeLead(lead));
     }
 
@@ -959,14 +1278,17 @@ export const server = http.createServer(async (req, res) => {
       const existing = await findLeadByContact(phone, email);
       const actor = source;
       const now = new Date().toISOString();
+      const sourceFields = extractLeadSourceFields(body, source);
       if (existing) {
         if (fullName && !existing.fullName) existing.fullName = fullName;
         if (phone && !existing.phone) existing.phone = phone;
         if (email && !existing.email) existing.email = email;
+        applyLeadSourceFields(existing, sourceFields, false);
         existing.notes = appendNote(existing.notes, body.notes);
         existing.updatedAt = now;
-        existing.lastContactAt = now;
         await saveLead(existing);
+        const metaSync = await syncLeadToMetaCrm(existing, { stage: "initial", eventTime: existing.createdAt || now });
+        await persistMetaSyncIfChanged(existing, metaSync);
         await appendActivities([
           createActivity({
             leadId: existing.id,
@@ -988,6 +1310,14 @@ export const server = http.createServer(async (req, res) => {
         assignedTo: body.assignedTo || "",
         status: LEAD_STATUSES.TO_CONTACT,
         notes: body.notes || "",
+        ...sourceFields,
+        assignedAt: body.assignedTo ? now : null,
+        firstContactAt: null,
+        lastContactAt: null,
+        slaDueAt: null,
+        closingOutcome: "open",
+        lossReason: null,
+        lossDetail: null,
         documents: normalizePracticeDocuments(body.documents),
         payments: normalizePracticePayments(body.payments),
         callAttempts: 0,
@@ -995,6 +1325,7 @@ export const server = http.createServer(async (req, res) => {
         createdAt: now,
         updatedAt: now
       };
+      syncLeadSlaState(lead);
       await createLead(lead, [
         createActivity({ leadId: lead.id, type: "lead_created", text: "Lead creato.", actor }),
         createActivity({
@@ -1007,6 +1338,8 @@ export const server = http.createServer(async (req, res) => {
       ]);
       await syncDocumentChecklistTask(lead);
       await syncPaymentChecklistTask(lead);
+      const metaSync = await syncLeadToMetaCrm(lead, { stage: "initial", eventTime: lead.createdAt || now });
+      await persistMetaSyncIfChanged(lead, metaSync);
       return sendJson(res, 201, { mode: "created", lead: safeLead(lead) });
     }
 
@@ -1092,6 +1425,11 @@ export const server = http.createServer(async (req, res) => {
       const type = String(body.type || "").trim();
       const text = String(body.text || "").trim();
       if (!type || !text) return sendJson(res, 400, { error: "type e text sono obbligatori." });
+      if (CONTACT_ACTIVITY_TYPES.has(type)) {
+        lead.updatedAt = new Date().toISOString();
+        markLeadContacted(lead, lead.updatedAt);
+        await saveLead(lead);
+      }
       await appendActivities([
         createActivity({
           leadId: lead.id,
@@ -1124,16 +1462,39 @@ export const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const lead = await getLeadById(leadByIdParams.leadId);
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+      const previousAssignedTo = String(lead.assignedTo || "").trim();
       const previousNotes = String(lead.notes || "");
       for (const key of ["fullName", "phone", "email", "source", "budget", "assignedTo", "notes"]) {
         if (Object.prototype.hasOwnProperty.call(body, key)) lead[key] = body[key];
       }
+      if (Object.prototype.hasOwnProperty.call(body, "sourceLeadId")) lead.sourceLeadId = cleanOptionalString(body.sourceLeadId);
+      if (Object.prototype.hasOwnProperty.call(body, "sourcePlatform")) lead.sourcePlatform = normalizeSourcePlatform(body.sourcePlatform);
+      if (Object.prototype.hasOwnProperty.call(body, "sourceCampaignId")) lead.sourceCampaignId = cleanOptionalString(body.sourceCampaignId);
+      if (Object.prototype.hasOwnProperty.call(body, "sourceFormId")) lead.sourceFormId = cleanOptionalString(body.sourceFormId);
+      if (Object.prototype.hasOwnProperty.call(body, "assignedAt")) lead.assignedAt = cleanOptionalString(body.assignedAt);
+      if (Object.prototype.hasOwnProperty.call(body, "firstContactAt")) lead.firstContactAt = cleanOptionalString(body.firstContactAt);
+      if (Object.prototype.hasOwnProperty.call(body, "lastContactAt")) lead.lastContactAt = cleanOptionalString(body.lastContactAt);
+      if (Object.prototype.hasOwnProperty.call(body, "slaDueAt")) lead.slaDueAt = cleanOptionalString(body.slaDueAt);
+        if (Object.prototype.hasOwnProperty.call(body, "closingOutcome")) {
+          const nextOutcome = String(body.closingOutcome || "").trim();
+          if (["open", "won", "lost", "disqualified"].includes(nextOutcome)) lead.closingOutcome = nextOutcome;
+        }
+        if (Object.prototype.hasOwnProperty.call(body, "lossReason")) lead.lossReason = cleanOptionalString(body.lossReason);
+        if (Object.prototype.hasOwnProperty.call(body, "lossDetail")) lead.lossDetail = cleanOptionalString(body.lossDetail);
+        syncLeadAssignmentState(lead, previousAssignedTo, new Date().toISOString());
+        syncLeadSlaState(lead);
+        if (!["lost", "disqualified"].includes(String(lead.closingOutcome || ""))) {
+          lead.lossReason = null;
+          lead.lossDetail = null;
+        }
       const hasNotesUpdate = Object.prototype.hasOwnProperty.call(body, "notes");
       const hasDocumentsUpdate = Object.prototype.hasOwnProperty.call(body, "documents");
       const hasPaymentsUpdate = Object.prototype.hasOwnProperty.call(body, "payments");
-      const hasLeadFieldUpdate = ["fullName", "phone", "email", "source", "budget", "assignedTo"].some((key) =>
-        Object.prototype.hasOwnProperty.call(body, key)
-      );
+      const hasLeadFieldUpdate =
+        ["fullName", "phone", "email", "source", "budget", "assignedTo"].some((key) => Object.prototype.hasOwnProperty.call(body, key)) ||
+        ["sourceLeadId", "sourcePlatform", "sourceCampaignId", "sourceFormId", "assignedAt", "firstContactAt", "lastContactAt", "slaDueAt", "closingOutcome", "lossReason", "lossDetail"].some((key) =>
+          Object.prototype.hasOwnProperty.call(body, key)
+        );
       if (Object.prototype.hasOwnProperty.call(body, "documents")) {
         lead.documents = normalizePracticeDocuments(body.documents);
       }
@@ -1147,6 +1508,9 @@ export const server = http.createServer(async (req, res) => {
       }
       if (Object.prototype.hasOwnProperty.call(body, "payments")) {
         await syncPaymentChecklistTask(lead);
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "assignedTo")) {
+        await syncPostSaleTasks(lead, "lead_patch");
       }
       const activities = [];
       if (hasPaymentsUpdate) {
@@ -1284,21 +1648,34 @@ export const server = http.createServer(async (req, res) => {
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
       const valid = await validateTransition(lead.status, toStatus);
       if (!valid) return sendJson(res, 400, { error: `Transizione non valida da "${lead.status}" a "${toStatus}".` });
+      const lossReasonError = assertLossReasonForStatus(toStatus, body.lossReason);
+      if (lossReasonError) return sendJson(res, 400, { error: lossReasonError });
       const previous = lead.status;
       lead.status = toStatus;
       lead.updatedAt = new Date().toISOString();
+      syncLeadClosureState(lead, body.lossReason, body.lossDetail);
+      syncLeadSlaState(lead);
       const activities = [
         createActivity({
           leadId: lead.id,
           type: "status_changed",
           text: `Stato aggiornato da "${previous}" a "${toStatus}".`,
           actor: body.actor || "system",
-          meta: { fromStatus: previous, toStatus }
+          meta: {
+            fromStatus: previous,
+            toStatus,
+            closingOutcome: lead.closingOutcome,
+            lossReason: lead.lossReason || null,
+            lossDetail: lead.lossDetail || null
+          }
         })
       ];
       activities.push(...applyStatusAutomation(lead, toStatus, body.actor || "system"));
       await saveLead(lead);
+      await syncPostSaleTasks(lead, "status_change");
       await appendActivities(activities);
+      const metaSync = await syncLeadToMetaCrm(lead, { stage: "status", eventTime: lead.updatedAt });
+      await persistMetaSyncIfChanged(lead, metaSync);
       return sendJson(res, 200, safeLead(lead));
     }
 
@@ -1323,9 +1700,9 @@ export const server = http.createServer(async (req, res) => {
       const disposition = body.disposition || "completed";
       const previousStatus = lead.status;
       lead.updatedAt = new Date().toISOString();
-      lead.lastContactAt = lead.updatedAt;
-      const startedAt = body.startedAt ? String(body.startedAt) : lead.lastContactAt || lead.updatedAt;
+      const startedAt = body.startedAt ? String(body.startedAt) : lead.updatedAt;
       const endedAt = body.endedAt ? String(body.endedAt) : lead.updatedAt;
+      markLeadContacted(lead, endedAt);
       const note = body.note ? String(body.note) : "";
       if (body.followUpAt) lead.nextActionAt = String(body.followUpAt);
       const activities = [
@@ -1342,6 +1719,8 @@ export const server = http.createServer(async (req, res) => {
         const valid = await validateTransition(lead.status, nextStatus);
         if (valid) {
           lead.status = nextStatus;
+          syncLeadClosureState(lead, body.lossReason, body.lossDetail);
+          syncLeadSlaState(lead);
           if (previousStatus !== nextStatus) {
             activities.push(
               createActivity({
@@ -1349,7 +1728,14 @@ export const server = http.createServer(async (req, res) => {
                 type: "status_changed",
                 text: `Stato aggiornato da "${previousStatus}" a "${nextStatus}".`,
                 actor: body.actor || "system",
-                meta: { fromStatus: previousStatus, toStatus: nextStatus, source: "call_disposition" }
+                meta: {
+                  fromStatus: previousStatus,
+                  toStatus: nextStatus,
+                  source: "call_disposition",
+                  closingOutcome: lead.closingOutcome,
+                  lossReason: lead.lossReason || null,
+                  lossDetail: lead.lossDetail || null
+                }
               })
             );
           }
@@ -1368,7 +1754,12 @@ export const server = http.createServer(async (req, res) => {
       lead.latestCallOutcome = disposition;
       lead.latestCallAt = startedAt;
       await saveLead(lead);
+      await syncPostSaleTasks(lead, "call_status");
       await appendActivities(activities);
+      if (nextStatus && previousStatus !== lead.status) {
+        const metaSync = await syncLeadToMetaCrm(lead, { stage: "status", eventTime: endedAt });
+        await persistMetaSyncIfChanged(lead, metaSync);
+      }
       return sendJson(res, 200, safeLead(lead));
     }
 

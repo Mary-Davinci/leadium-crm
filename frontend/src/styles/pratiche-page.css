@@ -110,6 +110,10 @@
   color: inherit;
 }
 
+.pr-smart-badges > .pr-smart-badge {
+  cursor: default;
+}
+
 .content .pr-smart-badge.overdue {
   color: #c54b4b;
 }
@@ -136,6 +140,11 @@
   border: 1px solid #d9e3f0;
   border-radius: 10px;
   background: linear-gradient(180deg, #fbfcfe 0%, #f4f7fb 100%);
+}
+
+.pr-view-switcher-operator {
+  grid-template-columns: minmax(0, 1fr);
+  width: min(280px, 100%);
 }
 
 .pr-view-tile {
@@ -425,7 +434,11 @@
   align-items: center;
   padding: 9px 14px;
   border-bottom: 1px solid #edf2f7;
-  background: #fbfcfe;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: rgba(251, 252, 254, 0.96);
+  backdrop-filter: blur(8px);
   color: #7e93ae;
   font-size: 11px;
   font-weight: 800;
@@ -446,6 +459,10 @@
 
 .pr-row-card:hover {
   background: #fcfdff;
+}
+
+.pr-row-card:hover .pr-client-link {
+  color: #1f4f87;
 }
 
 .pr-row-card.active {
@@ -617,6 +634,12 @@
   min-height: 16px;
 }
 
+.pr-admin-meta-line {
+  color: #8a9ab0;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .pr-status,
 .pr-priority,
 .pr-urgent-tag,
@@ -650,6 +673,17 @@
   border: 1px solid #d9e4f2;
   color: #5f7492;
   background: #f8fbff;
+  display: inline-block;
+}
+
+.pr-admin-outcome-badge {
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border: 1px solid #cfe0f6;
+  color: #34557f;
+  background: #f3f8ff;
   display: inline-block;
 }
 
@@ -774,6 +808,10 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.pr-assignee-admin {
+  align-items: flex-start;
 }
 
 .pr-assignee-avatar {

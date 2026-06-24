@@ -15,6 +15,7 @@ import {
 export type PracticeCardProps = {
   lead: Lead;
   linkedTask?: CrmTask | null;
+  isAdminView?: boolean;
   isSelected: boolean;
   isBusy: boolean;
   onSelect: (id: string) => void;
@@ -123,6 +124,18 @@ function getDueDeltaLabel(value?: string) {
   return `${prefix}${days}g`;
 }
 
+function formatCompactDateTime(value?: string | null) {
+  if (!value) return "Non disponibile";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Non disponibile";
+  return date.toLocaleString("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 function getAssigneeInitials(value?: string) {
   const source = String(value || "NA")
     .split(" ")
@@ -195,6 +208,7 @@ function getDueVisual(label: string, meta: string): MetaVisual {
 export function PracticeCard({
   lead,
   linkedTask,
+  isAdminView = false,
   isSelected,
   isBusy: _isBusy,
   onSelect,
@@ -223,6 +237,10 @@ export function PracticeCard({
           ? "Richiamare"
           : linkedTask.kind.includes("follow")
             ? "Follow up"
+            : linkedTask.kind.includes("gadget")
+              ? "Invio gadget"
+              : linkedTask.kind.includes("ticket")
+                ? "Invio biglietti"
             : linkedTask.kind.includes("next_action")
               ? "Aggiornamento"
               : "Task operativo"
@@ -253,13 +271,39 @@ export function PracticeCard({
   const dueInfo = getDueVisual(dueLabel, dueMeta);
   const statusLabel = getStatusLabel(lead.status);
   const statusClass = getStatusClass(lead.status);
-  const sourceLabel = getSourceLabel(lead.source);
+  const sourceLabel = getSourceLabel(lead.sourcePlatform || lead.source);
   const travelLabel = getTravelLabel(lead);
   const documentsMissing = getMissingDocumentsCount(lead);
   const isUrgent = String(lead.notes || "").toLowerCase().includes("urgente");
   const primaryContact = lead.phone || lead.email || "-";
   const secondaryContact = lead.phone && lead.email ? lead.email : `${lastContact.label} - ${lastContact.meta}`;
   const priorityMeta = hasHighPriorityTask ? "Task urgente" : documentsMissing ? `${documentsMissing} doc. da ricevere` : "In coda";
+  const firstContactLabel = formatCompactDateTime(lead.firstContactAt);
+  const lastContactLabel = formatCompactDateTime(lead.lastContactAt || lead.latestCallAt);
+  const assignedAtLabel = formatCompactDateTime(lead.assignedAt);
+  const slaLabel = formatCompactDateTime(lead.slaDueAt || dueValue);
+  const ownerMeta = lead.lossReason
+    ? lead.lossDetail
+      ? `Motivo: ${lead.lossReason} • ${lead.lossDetail}`
+      : `Motivo: ${lead.lossReason}`
+    : lead.closingOutcome === "won"
+      ? "Esito: venduta"
+      : lead.closingOutcome === "lost"
+        ? "Esito: persa"
+        : lead.closingOutcome === "disqualified"
+          ? "Esito: esclusa"
+          : "Owner attuale";
+  const adminContactPrimary = lead.email || lead.phone || "-";
+  const adminContactSecondary = `Ultimo contatto ${lastContactLabel}`;
+  const actionMetaText = isAdminView
+    ? linkedTask
+      ? `${linkedTask.title} • ${nextMeta.dateText}`
+      : lead.nextActionAt
+        ? `Scadenza operativa ${nextMeta.dateText}`
+        : "Nessuna prossima azione pianificata"
+    : nextAction.meta;
+  const duePrimaryText = isAdminView ? `SLA ${slaLabel}` : dueInfo.label;
+  const dueSecondaryText = isAdminView ? `Assegnata ${assignedAtLabel}` : dueInfo.meta;
   const clickTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -308,12 +352,24 @@ export function PracticeCard({
           <span className="pr-client-link">{lead.fullName}</span>
           <div className="pr-cell-stack">
             <span className="pr-client-travel">{travelLabel}</span>
+            {isAdminView && lead.sourceCampaignId ? (
+              <span className="pr-admin-meta-line">Campagna {lead.sourceCampaignId}</span>
+            ) : null}
           </div>
           <div className="pr-inline-tags">
             <span className={`pr-status ${statusClass}`}>{statusLabel}</span>
             <span className="pr-source-badge">{sourceLabel}</span>
             {documentsMissing ? <span className="pr-documents-badge">{documentsMissing} doc</span> : null}
             {isUrgent ? <span className="pr-urgent-tag">Urgente</span> : null}
+            {isAdminView && lead.closingOutcome && lead.closingOutcome !== "open" ? (
+              <span className="pr-admin-outcome-badge">
+                {lead.closingOutcome === "won"
+                  ? "Venduta"
+                  : lead.closingOutcome === "lost"
+                    ? "Persa"
+                    : "Esclusa"}
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -322,31 +378,40 @@ export function PracticeCard({
             <CellIcon kind={lastContact.icon} />
           </span>
           <div className="pr-cell-stack">
-            <strong>{primaryContact}</strong>
-            <span>{secondaryContact}</span>
+            <strong>{isAdminView ? adminContactPrimary : primaryContact}</strong>
+            <span>{isAdminView ? adminContactSecondary : secondaryContact}</span>
+            {isAdminView ? <span className="pr-admin-meta-line">Primo contatto {firstContactLabel}</span> : null}
           </div>
         </div>
 
         <div className={`pr-cell pr-cell-text pr-cell-tone-${nextAction.tone}`}>
           <div className="pr-cell-stack">
             <strong>{nextAction.label}</strong>
-            <span>{nextAction.meta}</span>
+            <span>{actionMetaText}</span>
+            {isAdminView ? (
+              <span className="pr-admin-meta-line">
+                {linkedTask ? `Task ${linkedTask.status === "done" ? "chiuso" : "aperto"}` : "Nessun task collegato"}
+              </span>
+            ) : null}
           </div>
         </div>
 
         <div className={`pr-cell pr-cell-text pr-cell-tone-${dueInfo.tone}`}>
           <div className="pr-cell-stack">
-            <strong>{dueInfo.label}</strong>
-            <span className="pr-due-meta">{dueInfo.meta}</span>
+            <strong>{duePrimaryText}</strong>
+            <span className="pr-due-meta">{dueSecondaryText}</span>
           </div>
         </div>
 
         <div className="pr-cell pr-cell-assigned">
-          <div className="pr-assignee">
+          <div className={`pr-assignee ${isAdminView ? "pr-assignee-admin" : ""}`}>
             <span className="pr-assignee-avatar" aria-hidden="true">
               {assigneeInitials}
             </span>
-            <span className="pr-assignee-name">{getAssigneeShortName(assigneeName)}</span>
+            <div className="pr-cell-stack">
+              <strong className="pr-assignee-name">{getAssigneeShortName(assigneeName)}</strong>
+              {isAdminView ? <span className="pr-admin-meta-line">{ownerMeta}</span> : null}
+            </div>
           </div>
         </div>
       </div>

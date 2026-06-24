@@ -19,10 +19,24 @@ export function normalizeLead(input: Lead): Lead {
     cruiseName: String(input?.cruiseName || ""),
     destination: String(input?.destination || ""),
     company: String(input?.company || ""),
+    documentsMissingCount: Number(input?.documentsMissingCount || 0),
     status: String(input?.status || "Da contattare"),
+    assignedAt: input?.assignedAt ? String(input.assignedAt) : null,
+    sourceLeadId: input?.sourceLeadId ? String(input.sourceLeadId) : null,
+    sourcePlatform: input?.sourcePlatform ? String(input.sourcePlatform) : null,
+    sourceCampaignId: input?.sourceCampaignId ? String(input.sourceCampaignId) : null,
+    sourceFormId: input?.sourceFormId ? String(input.sourceFormId) : null,
+    firstContactAt: input?.firstContactAt ? String(input.firstContactAt) : null,
+    lastContactAt: input?.lastContactAt ? String(input.lastContactAt) : null,
+    slaDueAt: input?.slaDueAt ? String(input.slaDueAt) : null,
+    closingOutcome: input?.closingOutcome || "open",
+    lossReason: input?.lossReason ? String(input.lossReason) : null,
+    lossDetail: input?.lossDetail ? String(input.lossDetail) : null,
     nextActionAt: input?.nextActionAt ? String(input.nextActionAt) : undefined,
     latestCallOutcome: input?.latestCallOutcome || null,
-    latestCallAt: input?.latestCallAt ? String(input.latestCallAt) : null
+    latestCallAt: input?.latestCallAt ? String(input.latestCallAt) : null,
+    createdAt: input?.createdAt ? String(input.createdAt) : undefined,
+    updatedAt: input?.updatedAt ? String(input.updatedAt) : undefined
   };
 }
 
@@ -208,6 +222,7 @@ export function getCallOutcomeClass(outcome?: string | null) {
 }
 
 export function getMissingDocumentsCount(lead: Lead) {
+  if (typeof lead.documentsMissingCount === "number" && lead.documentsMissingCount > 0) return lead.documentsMissingCount;
   const items = Array.isArray(lead.documents?.items) ? lead.documents?.items : [];
   return items.filter((item) => item.required && (!item.received || !item.verified)).length;
 }

@@ -139,6 +139,8 @@ function getTaskKindLabel(kind: string) {
   const value = String(kind || "").toLowerCase();
   if (value.includes("payment") || value.includes("saldo")) return "Sollecito pagamento";
   if (value.includes("document")) return "Documenti";
+  if (value.includes("gadget")) return "Invio gadget";
+  if (value.includes("ticket")) return "Invio biglietti";
   if (value.includes("call") || value.includes("richiamo")) return "Richiamo cliente";
   if (value.includes("follow")) return "Follow-up commerciale";
   if (value.includes("next_action")) return "Prossimo task operativo";

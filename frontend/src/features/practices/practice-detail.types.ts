@@ -10,7 +10,26 @@ export type Lead = {
   email?: string;
   source?: string;
   assignedTo?: string;
+  assignedAt?: string | null;
   notes?: string;
+  sourceLeadId?: string | null;
+  sourcePlatform?: string | null;
+  sourceCampaignId?: string | null;
+  sourceFormId?: string | null;
+  firstContactAt?: string | null;
+  lastContactAt?: string | null;
+  slaDueAt?: string | null;
+  closingOutcome?: "open" | "won" | "lost" | "disqualified";
+  lossReason?: string | null;
+  lossDetail?: string | null;
+  metaEventSync?: {
+    lastEventName?: string | null;
+    lastStatus?: string | null;
+    lastSyncedAt?: string | null;
+    lastAttemptAt?: string | null;
+    lastError?: string | null;
+    attemptCount?: number;
+  } | null;
   status: string;
   nextActionAt?: string;
 };

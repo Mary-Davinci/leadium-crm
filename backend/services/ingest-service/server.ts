@@ -127,6 +127,10 @@ function buildMetaLeadPayload(event, details = null) {
     phone,
     email,
     budget,
+    sourceLeadId: leadgenId || null,
+    sourcePlatform: platform.includes("instagram") ? "instagram" : "facebook",
+    sourceCampaignId: merged.campaign_id || null,
+    sourceFormId: merged.form_id || event.form_id || null,
     notes: `Meta leadgen_id=${leadgenId}; form_id=${merged.form_id || event.form_id || ""}; ad_id=${
       merged.ad_id || event.ad_id || ""
     }; campaign_id=${merged.campaign_id || ""}; platform=${merged.platform || "unknown"}; city=${city}`,

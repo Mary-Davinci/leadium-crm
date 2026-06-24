@@ -131,7 +131,7 @@ export function PratichePage() {
   const navigate = useNavigate();
   const authUser = getAuthUser();
   const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
-  const [scopeFilter, setScopeFilter] = useState<"mine" | "all">("mine");
+  const [scopeFilter, setScopeFilter] = useState<"mine" | "all">(isAdmin ? "all" : "mine");
   const [practiceView, setPracticeView] = useState<PracticeView>("active");
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -327,7 +327,7 @@ export function PratichePage() {
 
       const [workflowData, leadsData] = await Promise.all([
         cachedWorkflow ? Promise.resolve(cachedWorkflow) : api<Workflow>("/api/workflow"),
-        api<Lead[]>(`/api/leads?${params.toString()}`)
+        api<Lead[]>(`/api/leads?${params.toString()}${params.toString() ? "&" : ""}view=summary`)
       ]);
 
       if (!isValidWorkflow(workflowData)) {
@@ -615,6 +615,16 @@ export function PratichePage() {
   }, [search]);
 
   useEffect(() => {
+    setScopeFilter(isAdmin ? "all" : "mine");
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin && practiceView !== "active") {
+      setPracticeView("active");
+    }
+  }, [isAdmin, practiceView]);
+
+  useEffect(() => {
     loadPratiche().catch(() => null);
   }, [debouncedSearch, statusFilter]);
 
@@ -743,6 +753,7 @@ export function PratichePage() {
   const getBaseScopeRows = (input: Lead[]) =>
     input.filter((lead) => {
       if (assignedFilter && String(lead.assignedTo || "") !== assignedFilter) return false;
+      if (!isAdmin && !isLeadAssignedToCurrentUser(lead)) return false;
       if (scopeFilter === "mine" && !isLeadAssignedToCurrentUser(lead)) return false;
       return true;
     });
@@ -911,7 +922,7 @@ export function PratichePage() {
       ? "Archivio pratiche"
       : practiceView === "ready"
         ? "Pratiche pronte alla chiusura"
-        : scopeFilter === "all" && isAdmin
+        : isAdmin
           ? "Pratiche del team"
           : "Il mio lavoro";
   const pageSubtitle =
@@ -919,9 +930,9 @@ export function PratichePage() {
       ? "Storico delle pratiche completate, consultabili e riapribili se serve."
       : practiceView === "ready"
         ? "Ultimo controllo prima della chiusura definitiva del cliente."
-        : scopeFilter === "all" && isAdmin
-          ? "Monitora il carico operativo del team e intervieni dove serve."
-          : "Qui trovi le pratiche assegnate a te e le priorita su cui muoverti oggi.";
+        : isAdmin
+          ? "Vista universale per controllare owner, contatti, SLA e prossime azioni del team."
+          : "Qui trovi solo le pratiche assegnate a te e le priorita su cui muoverti oggi.";
   const emptyStateMessage =
     practiceView === "closed"
       ? "Nessuna pratica chiusa trovata con i filtri attuali."
@@ -946,25 +957,23 @@ export function PratichePage() {
             </div>
 
             <div className="pr-smart-badges">
-              <button
-                type="button"
-                className={`pr-smart-badge all ${scopeFilter === "mine" ? "active" : ""}`}
-                onClick={() => setScopeFilter("mine")}
-              >
-                Le mie <span>{scopeCounts.mine}</span>
-              </button>
               {isAdmin ? (
-                <button
-                  type="button"
-                  className={`pr-smart-badge all ${scopeFilter === "all" ? "active" : ""}`}
-                  onClick={() => setScopeFilter("all")}
-                >
-                  Tutte <span>{scopeCounts.all}</span>
-                 </button>
-               ) : null}
-             </div>
+                <>
+                  <span className="pr-smart-badge active">
+                    Tutte le pratiche <span>{scopeCounts.all}</span>
+                  </span>
+                  <span className="pr-smart-badge">
+                    Assegnate a me <span>{scopeCounts.mine}</span>
+                  </span>
+                </>
+              ) : (
+                <span className="pr-smart-badge active">
+                  Assegnate a te <span>{scopeCounts.mine}</span>
+                </span>
+              )}
+            </div>
 
-            <div className="pr-view-switcher" role="tablist" aria-label="Vista pratiche">
+            <div className={`pr-view-switcher ${isAdmin ? "" : "pr-view-switcher-operator"}`} role="tablist" aria-label="Vista pratiche">
               <button
                 type="button"
                 role="tab"
@@ -975,26 +984,30 @@ export function PratichePage() {
                 <strong>Attive</strong>
                 <span>{viewCounts.active} da lavorare</span>
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={practiceView === "ready"}
-                className={`pr-view-tile pr-view-tone-ready ${practiceView === "ready" ? "active" : ""}`}
-                onClick={() => setPracticeView("ready")}
-              >
-                <strong>Pronte</strong>
-                <span>{viewCounts.ready} in attesa chiusura</span>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={practiceView === "closed"}
-                className={`pr-view-tile pr-view-tone-closed ${practiceView === "closed" ? "active" : ""}`}
-                onClick={() => setPracticeView("closed")}
-              >
-                <strong>Archivio</strong>
-                <span>{viewCounts.closed} in archivio</span>
-              </button>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={practiceView === "ready"}
+                  className={`pr-view-tile pr-view-tone-ready ${practiceView === "ready" ? "active" : ""}`}
+                  onClick={() => setPracticeView("ready")}
+                >
+                  <strong>Pronte</strong>
+                  <span>{viewCounts.ready} in attesa chiusura</span>
+                </button>
+              ) : null}
+              {isAdmin ? (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={practiceView === "closed"}
+                  className={`pr-view-tile pr-view-tone-closed ${practiceView === "closed" ? "active" : ""}`}
+                  onClick={() => setPracticeView("closed")}
+                >
+                  <strong>Archivio</strong>
+                  <span>{viewCounts.closed} in archivio</span>
+                </button>
+              ) : null}
             </div>
 
             <p className="pr-view-hint">{viewHintText}</p>
@@ -1100,6 +1113,7 @@ export function PratichePage() {
                 key={lead.id}
                 lead={lead}
                 linkedTask={primaryTaskByLeadId.get(lead.id) || null}
+                isAdminView={isAdmin}
                 isSelected={selectedLeadId === lead.id}
                 isBusy={loading}
                 availableStatuses={workflow?.flow[lead.status] || []}

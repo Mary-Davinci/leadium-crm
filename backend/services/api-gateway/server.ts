@@ -26,6 +26,9 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5179";
 const SLA_FIRST_CONTACT_MINUTES = Number(process.env.SLA_FIRST_CONTACT_MINUTES || 5);
 const AUTH_SESSION_TTL_HOURS = Number(process.env.AUTH_SESSION_TTL_HOURS || 12);
 const DOCUMENT_UPLOAD_MAX_BYTES = Number(process.env.DOCUMENT_UPLOAD_MAX_BYTES || 8 * 1024 * 1024);
+const PRACTICE_READY_STATUS = "Pronta per chiusura";
+const PRACTICE_CLOSED_STATUS = "Chiusa 100%";
+const PRACTICE_REOPEN_STATUS = "Invio biglietti";
 const ALLOWED_ORIGINS = new Set(
   [FRONTEND_URL, ...(process.env.CORS_ORIGINS || "").split(",")]
     .map((origin) => origin.trim().replace(/\/+$/, ""))
@@ -100,6 +103,15 @@ function isSuperAdmin(user?: AuthPublicUser | null) {
   return Boolean(user && user.role === "super_admin");
 }
 
+async function fetchLeadStatus(leadId: string) {
+  const response = await fetch(`${LEAD_URL}/leads/${leadId}`);
+  if (!response.ok) {
+    throw new Error("Impossibile verificare lo stato attuale della pratica.");
+  }
+  const payload = (await response.json()) as { lead?: { status?: string } };
+  return String(payload?.lead?.status || "").trim();
+}
+
 async function parseJsonBody(req: http.IncomingMessage) {
   const body = await readBody(req);
   if (!body || !body.length) return {};
@@ -117,6 +129,12 @@ type InboxLead = {
   status?: string;
   source?: string;
   assignedTo?: string;
+  assignedAt?: string | null;
+  firstContactAt?: string | null;
+  lastContactAt?: string | null;
+  slaDueAt?: string | null;
+  closingOutcome?: string | null;
+  lossReason?: string | null;
   createdAt?: string;
   updatedAt?: string;
   nextActionAt?: string | null;
@@ -154,10 +172,10 @@ function toMs(value?: string | null) {
 
 function leadPriority(lead: InboxLead) {
   const now = Date.now();
-  const firstContactDeadline = toMs(lead.createdAt) + SLA_FIRST_CONTACT_MINUTES * 60_000;
+  const firstContactDeadline = toMs(lead.slaDueAt || lead.createdAt) + (lead.slaDueAt ? 0 : SLA_FIRST_CONTACT_MINUTES * 60_000);
   const status = String(lead.status || "").toLowerCase();
   const callbackOverdue = Boolean(lead.nextActionAt && toMs(lead.nextActionAt) > 0 && toMs(lead.nextActionAt) < now);
-  const firstContactBreach = Boolean(firstContactDeadline > 0 && firstContactDeadline < now && status.includes("contattare"));
+  const firstContactBreach = Boolean(!lead.firstContactAt && firstContactDeadline > 0 && firstContactDeadline < now && status.includes("contattare"));
   if (callbackOverdue) return 100;
   if (firstContactBreach) return 95;
   if (status.includes("non risponde")) return 80;
@@ -194,9 +212,11 @@ async function buildInbox() {
 
   const leadItems = leads.map((lead) => {
     const createdAtMs = toMs(lead.createdAt);
-    const firstContactDeadline = createdAtMs > 0 ? new Date(createdAtMs + SLA_FIRST_CONTACT_MINUTES * 60_000).toISOString() : null;
+    const firstContactDeadline =
+      lead.slaDueAt || (createdAtMs > 0 ? new Date(createdAtMs + SLA_FIRST_CONTACT_MINUTES * 60_000).toISOString() : null);
     const nextActionOverdue = Boolean(lead.nextActionAt && toMs(lead.nextActionAt) > 0 && toMs(lead.nextActionAt) < now);
     const firstContactBreached = Boolean(
+      !lead.firstContactAt &&
       firstContactDeadline &&
         toMs(firstContactDeadline) < now &&
         String(lead.status || "").toLowerCase().includes("contattare")
@@ -321,6 +341,16 @@ async function proxyRequest(
       // Fall through and proxy the original response if it is not valid JSON.
     }
   }
+  res.writeHead(upstream.status, responseHeaders);
+  res.end(content);
+}
+
+async function relayUpstreamResponse(res: http.ServerResponse, upstream: Response) {
+  const responseHeaders: Record<string, string> = {};
+  upstream.headers.forEach((value, key) => {
+    if (key !== "transfer-encoding" && key !== "connection") responseHeaders[key] = value;
+  });
+  const content = Buffer.from(await upstream.arrayBuffer());
   res.writeHead(upstream.status, responseHeaders);
   res.end(content);
 }
@@ -722,6 +752,45 @@ const server = http.createServer(async (req, res) => {
     const session = getSessionFromRequest(req);
     if (!session) {
       sendJson(res, 401, { error: "Non autorizzato." });
+      return;
+    }
+    const leadScopedMatch = pathname.match(/^\/api\/leads\/([^/]+)(?:\/(notes|activities|calls))?$/);
+    if (leadScopedMatch && !isAdmin(session.user)) {
+      const leadId = decodeURIComponent(leadScopedMatch[1] || "").trim();
+      const currentStatus = leadId ? await fetchLeadStatus(leadId).catch(() => "") : "";
+      if (currentStatus === PRACTICE_READY_STATUS || currentStatus === PRACTICE_CLOSED_STATUS) {
+        sendJson(res, 403, { error: "Questa pratica e riservata alla supervisione admin." });
+        return;
+      }
+    }
+    const leadStatusMatch = pathname.match(/^\/api\/leads\/([^/]+)\/status$/);
+    if (leadStatusMatch && method === "POST") {
+      const leadId = decodeURIComponent(leadStatusMatch[1] || "").trim();
+      const body = (await parseJsonBody(req)) as { toStatus?: string };
+      const toStatus = String(body.toStatus || "").trim();
+      if (!isAdmin(session.user)) {
+        if (toStatus === PRACTICE_CLOSED_STATUS) {
+          sendJson(res, 403, { error: "Solo admin e super admin possono chiudere definitivamente una pratica." });
+          return;
+        }
+        if (toStatus === PRACTICE_REOPEN_STATUS) {
+          const currentStatus = await fetchLeadStatus(leadId).catch(() => "");
+          if (!currentStatus) {
+            sendJson(res, 502, { error: "Impossibile verificare lo stato attuale della pratica." });
+            return;
+          }
+          if (currentStatus === PRACTICE_CLOSED_STATUS) {
+            sendJson(res, 403, { error: "Solo admin e super admin possono riaprire una pratica gia chiusa." });
+            return;
+          }
+        }
+      }
+      const upstream = await fetch(`${route.base}${route.path}${url.search}`, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      await relayUpstreamResponse(res, upstream);
       return;
     }
     await proxyRequest(req, res, route.base, `${route.path}${url.search}`);
