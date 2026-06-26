@@ -29,11 +29,29 @@ const DOCUMENT_UPLOAD_MAX_BYTES = Number(process.env.DOCUMENT_UPLOAD_MAX_BYTES |
 const PRACTICE_READY_STATUS = "Pronta per chiusura";
 const PRACTICE_CLOSED_STATUS = "Chiusa 100%";
 const PRACTICE_REOPEN_STATUS = "Invio biglietti";
-const ALLOWED_ORIGINS = new Set(
-  [FRONTEND_URL, ...(process.env.CORS_ORIGINS || "").split(",")]
-    .map((origin) => origin.trim().replace(/\/+$/, ""))
-    .filter(Boolean)
-);
+function normalizeOrigin(value: string) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function isWildcardOriginRule(rule: string) {
+  return rule.includes("*");
+}
+
+function wildcardOriginToRegExp(rule: string) {
+  const escaped = rule.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
+const CORS_ORIGIN_RULES = [FRONTEND_URL, ...(process.env.CORS_ORIGINS || "").split(",")]
+  .map(normalizeOrigin)
+  .filter(Boolean);
+
+const ALLOWED_ORIGINS = new Set(CORS_ORIGIN_RULES.filter((rule) => !isWildcardOriginRule(rule)));
+const ALLOWED_ORIGIN_PATTERNS = CORS_ORIGIN_RULES.filter(isWildcardOriginRule).map(wildcardOriginToRegExp);
+
+function isOriginAllowed(origin: string) {
+  return ALLOWED_ORIGINS.has(origin) || ALLOWED_ORIGIN_PATTERNS.some((pattern) => pattern.test(origin));
+}
 
 function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
@@ -41,8 +59,8 @@ function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown
 }
 
 function applyCors(req: http.IncomingMessage, res: http.ServerResponse) {
-  const origin = String(req.headers.origin || "").replace(/\/+$/, "");
-  if (!origin || !ALLOWED_ORIGINS.has(origin)) return;
+  const origin = normalizeOrigin(String(req.headers.origin || ""));
+  if (!origin || !isOriginAllowed(origin)) return;
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");

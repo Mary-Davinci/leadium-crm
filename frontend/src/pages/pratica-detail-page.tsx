@@ -148,7 +148,18 @@ const PRACTICE_READY_STATUS = "Pronta per chiusura";
 const PRACTICE_CLOSED_STATUS = "Chiusa 100%";
 const PRACTICE_REOPEN_STATUS = "Invio biglietti";
 const PAYMENTS_OK_STOP_FRAME = 77;
-const PAYMENTS_OK_SEGMENT: [number, number] = [0, PAYMENTS_OK_STOP_FRAME];
+
+const PAYMENTS_OK_SINGLE_RUN_ANIMATION = (() => {
+  const cloned = JSON.parse(JSON.stringify(paymentsOkConfirmationAnimation)) as typeof paymentsOkConfirmationAnimation;
+  cloned.op = PAYMENTS_OK_STOP_FRAME;
+  if (Array.isArray(cloned.layers)) {
+    cloned.layers = cloned.layers.map((layer) => ({
+      ...layer,
+      op: Math.min(Number(layer.op ?? PAYMENTS_OK_STOP_FRAME), PAYMENTS_OK_STOP_FRAME)
+    }));
+  }
+  return cloned;
+})();
 
 function normalizeDocuments(input?: PracticeDocumentsState | null): PracticeDocumentsState {
   const byKey = new Map<string, PracticeDocumentItem>();
@@ -2134,14 +2145,13 @@ export function PraticaDetailPage() {
                       {shouldRenderPaymentsAnimation ? (
                         <LightweightLottie
                           className="pd-payments-ok-lottie"
-                          animationData={paymentsOkConfirmationAnimation}
+                          animationData={PAYMENTS_OK_SINGLE_RUN_ANIMATION}
                           active={shouldRenderPaymentsAnimation}
-                          autoplay={false}
+                          autoplay
                           loop={false}
-                          playSegment={PAYMENTS_OK_SEGMENT}
                           renderer="svg"
                           speed={1}
-                          stopFrame={PAYMENTS_OK_STOP_FRAME}
+                          suspendWhenHidden={false}
                         />
                       ) : (
                         <div className="pd-lottie-placeholder pd-lottie-placeholder-ok">OK</div>
