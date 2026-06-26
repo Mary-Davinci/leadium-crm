@@ -18,6 +18,23 @@ type LoginResponse = {
 const AUTH_TOKEN_KEY = "crm.auth.token";
 const AUTH_USER_KEY = "crm.auth.user";
 
+function normalizeAuthRole(role: unknown): AuthUser["role"] {
+  const normalized = String(role || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (normalized === "super_admin" || normalized === "superadmin") return "super_admin";
+  if (normalized === "admin") return "admin";
+  return "operatore";
+}
+
+function normalizeAuthUser(user: AuthUser): AuthUser {
+  return {
+    ...user,
+    role: normalizeAuthRole(user?.role)
+  };
+}
+
 async function readPayload(response: Response): Promise<any> {
   const raw = await response.text();
   if (!raw) return {};
@@ -36,7 +53,7 @@ export function getAuthUser(): AuthUser | null {
   const raw = localStorage.getItem(AUTH_USER_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as AuthUser;
+    return normalizeAuthUser(JSON.parse(raw) as AuthUser);
   } catch {
     return null;
   }
@@ -44,7 +61,7 @@ export function getAuthUser(): AuthUser | null {
 
 function saveSession(payload: LoginResponse) {
   localStorage.setItem(AUTH_TOKEN_KEY, payload.token);
-  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(payload.user));
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(normalizeAuthUser(payload.user)));
 }
 
 export function clearSession() {
@@ -93,6 +110,7 @@ export async function fetchMe() {
     clearSession();
     return null;
   }
-  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(payload.user));
-  return payload.user;
+  const normalizedUser = normalizeAuthUser(payload.user);
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(normalizedUser));
+  return normalizedUser;
 }

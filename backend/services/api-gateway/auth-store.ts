@@ -80,8 +80,11 @@ function isSha256Hash(value: unknown) {
 }
 
 function normalizeRole(value: unknown): AuthRole {
-  const role = String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
-  if (role === "super_admin") return "super_admin";
+  const role = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (role === "super_admin" || role === "superadmin") return "super_admin";
   if (role === "admin") return "admin";
   return "operatore";
 }
