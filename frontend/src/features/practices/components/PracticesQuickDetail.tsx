@@ -1,8 +1,7 @@
-import { LeadDetail } from "../pratiche.types";
+import { Lead } from "../pratiche.types";
 
 export type PracticesQuickDetailProps = {
-  detail: LeadDetail | null;
-  loading: boolean;
+  lead: Lead | null;
 };
 
 function getPhoneHref(phone?: string) {
@@ -15,39 +14,21 @@ function getWhatsAppHref(phone?: string) {
   return cleaned ? `https://wa.me/${cleaned}` : "#";
 }
 
-function getDocumentPendingCount(detail: LeadDetail) {
-  const items = detail.lead.documents?.items || [];
-  return items.filter((item) => item.required && (!item.received || !item.verified)).length;
-}
-
-function getPaymentPendingCount(detail: LeadDetail) {
-  const items = detail.lead.payments?.items || [];
-  return items.filter((item) => item.required && item.status !== "verified").length;
-}
-
-export function PracticesQuickDetail({ detail, loading }: PracticesQuickDetailProps) {
-  if (loading) {
-    return (
-      <div className="pr-drawer-shell">
-        <p className="muted">Caricamento dettaglio...</p>
-      </div>
-    );
-  }
-
-  if (!detail) {
+export function PracticesQuickDetail({ lead }: PracticesQuickDetailProps) {
+  if (!lead) {
     return null;
   }
 
-  const documentsPending = getDocumentPendingCount(detail);
-  const paymentsPending = getPaymentPendingCount(detail);
+  const documentsPending = Number(lead.documentsMissingCount || 0);
+  const paymentsPending = Number(lead.pendingPaymentsCount || 0);
   const hasBlockers = documentsPending > 0 || paymentsPending > 0;
 
   return (
     <div className="pr-drawer-shell">
       <header className="pr-drawer-head">
         <div className="pr-drawer-identity">
-          <h3>{detail.lead.fullName}</h3>
-          <p>{detail.lead.phone}</p>
+          <h3>{lead.fullName}</h3>
+          <p>{lead.phone}</p>
         </div>
       </header>
 
@@ -67,10 +48,10 @@ export function PracticesQuickDetail({ detail, loading }: PracticesQuickDetailPr
       </section>
 
       <footer className="pr-drawer-actions">
-        <a className="pr-drawer-action pr-drawer-action-primary" href={getPhoneHref(detail.lead.phone)}>
+        <a className="pr-drawer-action pr-drawer-action-primary" href={getPhoneHref(lead.phone)}>
           Chiama
         </a>
-        <a className="pr-drawer-action" href={getWhatsAppHref(detail.lead.phone)} target="_blank" rel="noreferrer">
+        <a className="pr-drawer-action" href={getWhatsAppHref(lead.phone)} target="_blank" rel="noreferrer">
           WhatsApp
         </a>
       </footer>

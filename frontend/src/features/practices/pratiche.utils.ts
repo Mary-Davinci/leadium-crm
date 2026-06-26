@@ -20,6 +20,7 @@ export function normalizeLead(input: Lead): Lead {
     destination: String(input?.destination || ""),
     company: String(input?.company || ""),
     documentsMissingCount: Number(input?.documentsMissingCount || 0),
+    pendingPaymentsCount: Number(input?.pendingPaymentsCount || 0),
     status: String(input?.status || "Da contattare"),
     assignedAt: input?.assignedAt ? String(input.assignedAt) : null,
     sourceLeadId: input?.sourceLeadId ? String(input.sourceLeadId) : null,

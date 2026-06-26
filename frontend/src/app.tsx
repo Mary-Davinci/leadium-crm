@@ -1,21 +1,27 @@
-import { ReactElement, useEffect, useState } from "react";
+import { ReactElement, Suspense, lazy, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "./layout/app-layout";
 import { fetchMe, getAuthToken, getAuthUser } from "./lib/auth";
-import { AnalyticsPage } from "./pages/analytics-page";
 import { CallsPage } from "./pages/calls-page";
 import { CallBridgePage } from "./pages/call-bridge-page";
 import { CallBridgeTestPage } from "./pages/call-bridge-test-page";
-import { ChatPage } from "./pages/chat-page";
-import { ChangePasswordPage } from "./pages/change-password-page";
-import { DashboardPage } from "./pages/dashboard-page";
-import { LeadBoardPage, LegacyLeadBoardRedirect } from "./pages/leadboard-page";
 import { LoginPage } from "./pages/login-page";
-import { LeadImportPage } from "./pages/lead-import-page";
-import { PraticaDetailPage } from "./pages/pratica-detail-page";
-import { PratichePage } from "./pages/pratiche-page";
-import { ProfilePage } from "./pages/profile-page";
-import { UsersPage } from "./pages/users-page";
+
+const DashboardPage = lazy(() => import("./pages/dashboard-page").then((module) => ({ default: module.DashboardPage })));
+const PratichePage = lazy(() => import("./pages/pratiche-page").then((module) => ({ default: module.PratichePage })));
+const PraticaDetailPage = lazy(() => import("./pages/pratica-detail-page").then((module) => ({ default: module.PraticaDetailPage })));
+const LeadImportPage = lazy(() => import("./pages/lead-import-page").then((module) => ({ default: module.LeadImportPage })));
+const LeadBoardPage = lazy(() => import("./pages/leadboard-page").then((module) => ({ default: module.LeadBoardPage })));
+const LegacyLeadBoardRedirect = lazy(() =>
+  import("./pages/leadboard-page").then((module) => ({ default: module.LegacyLeadBoardRedirect }))
+);
+const ChatPage = lazy(() => import("./pages/chat-page").then((module) => ({ default: module.ChatPage })));
+const AnalyticsPage = lazy(() => import("./pages/analytics-page").then((module) => ({ default: module.AnalyticsPage })));
+const ProfilePage = lazy(() => import("./pages/profile-page").then((module) => ({ default: module.ProfilePage })));
+const ChangePasswordPage = lazy(() =>
+  import("./pages/change-password-page").then((module) => ({ default: module.ChangePasswordPage }))
+);
+const UsersPage = lazy(() => import("./pages/users-page").then((module) => ({ default: module.UsersPage })));
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const token = getAuthToken();
@@ -62,54 +68,56 @@ function RequireAdmin({ children }: { children: ReactElement }) {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/calls/bridge" element={<CallBridgePage />} />
-      <Route path="/calls/bridge/test" element={<CallBridgeTestPage />} />
-      <Route
-        element={
-          <RequireAuth>
-            <AppLayout />
-          </RequireAuth>
-        }
-      >
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/pratiche" element={<PratichePage />} />
-        <Route path="/pratiche/:id" element={<PraticaDetailPage />} />
+    <Suspense fallback={<div className="muted">Caricamento...</div>}>
+      <Routes>
+        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/calls/bridge" element={<CallBridgePage />} />
+        <Route path="/calls/bridge/test" element={<CallBridgeTestPage />} />
         <Route
-          path="/tasks/import"
           element={
-            <RequireAdmin>
-              <LeadImportPage />
-            </RequireAdmin>
+            <RequireAuth>
+              <AppLayout />
+            </RequireAuth>
           }
-        />
-        <Route
-          path="/tasks"
-          element={
-            <RequireAdmin>
-              <LeadBoardPage />
-            </RequireAdmin>
-          }
-        />
-        <Route path="/leadboard" element={<LegacyLeadBoardRedirect />} />
-        <Route path="/chat" element={<ChatPage />} />
-        <Route path="/calls" element={<CallsPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/change-password" element={<ChangePasswordPage />} />
-        <Route
-          path="/users"
-          element={
-            <RequireAdmin>
-              <UsersPage />
-            </RequireAdmin>
-          }
-        />
-      </Route>
-      <Route path="*" element={<Navigate to="/login" replace />} />
-    </Routes>
+        >
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/pratiche" element={<PratichePage />} />
+          <Route path="/pratiche/:id" element={<PraticaDetailPage />} />
+          <Route
+            path="/tasks/import"
+            element={
+              <RequireAdmin>
+                <LeadImportPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/tasks"
+            element={
+              <RequireAdmin>
+                <LeadBoardPage />
+              </RequireAdmin>
+            }
+          />
+          <Route path="/leadboard" element={<LegacyLeadBoardRedirect />} />
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/calls" element={<CallsPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/change-password" element={<ChangePasswordPage />} />
+          <Route
+            path="/users"
+            element={
+              <RequireAdmin>
+                <UsersPage />
+              </RequireAdmin>
+            }
+          />
+        </Route>
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    </Suspense>
   );
 }

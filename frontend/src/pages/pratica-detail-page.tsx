@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import Lottie from "lottie-react";
-import type { LottieRefCurrentProps } from "lottie-react";
 import { api } from "../lib/api";
 import { apiUrl } from "../lib/api-url";
 import { clearSession, getAuthToken, getAuthUser } from "../lib/auth";
@@ -11,10 +9,13 @@ import { buildWhatsAppUrl, WHATSAPP_TEMPLATES, WhatsAppTemplateKey } from "../li
 import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache, upsertTaskInBoard } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
 import { CallOutcome, Lead as ThreeCXLead } from "../features/practices/pratiche.types";
+import { LightweightLottie } from "../features/practices/components/lightweight-lottie";
+import { DotLottieEmbedFrame } from "../features/practices/components/dotlottie-embed-frame";
 import cruiseHeroImage from "../asset/cruise_chatgpt.png";
-import cruiseClosureBoatAnimation from "../asset/cruise-closure-boat.json";
 import paymentsOkConfirmationAnimation from "../asset/payments-ok-confirmation.json";
 import "../styles/pratica-detail-page.css";
+
+const CLOSURE_CRUISE_DOTLOTTIE_SRC = "https://lottie.host/4aeb2c3a-e53d-4c66-ad0b-f34ab7bf5c1f/6RjYuCRPkV.lottie";
 
 type Workflow = {
   statuses: string[];
@@ -146,6 +147,8 @@ const DEFAULT_PAYMENTS: PracticePaymentItem[] = [
 const PRACTICE_READY_STATUS = "Pronta per chiusura";
 const PRACTICE_CLOSED_STATUS = "Chiusa 100%";
 const PRACTICE_REOPEN_STATUS = "Invio biglietti";
+const PAYMENTS_OK_STOP_FRAME = 77;
+const PAYMENTS_OK_SEGMENT: [number, number] = [0, PAYMENTS_OK_STOP_FRAME];
 
 function normalizeDocuments(input?: PracticeDocumentsState | null): PracticeDocumentsState {
   const byKey = new Map<string, PracticeDocumentItem>();
@@ -717,8 +720,7 @@ export function PraticaDetailPage() {
   const [callFollowUpAt, setCallFollowUpAt] = useState(getDefaultFollowUpAt());
   const [callStartedAt, setCallStartedAt] = useState("");
   const [callRequestKey, setCallRequestKey] = useState("");
-  const closureLottieRef = useRef<LottieRefCurrentProps | null>(null);
-  const paymentsOkLottieRef = useRef<LottieRefCurrentProps | null>(null);
+  const [animationsReady, setAnimationsReady] = useState(false);
 
   function openNoteModal() {
     setNoteDraft(String(detail?.lead.notes || "").trim());
@@ -790,15 +792,16 @@ export function PraticaDetailPage() {
     setTaskBoardTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
   }
 
-  async function load() {
+  async function load(signal?: AbortSignal) {
     if (!id) return;
     setLoading(true);
     setError("");
     try {
       const [payload, workflowData] = await Promise.all([
-        api<LeadDetail>(`/api/leads/${id}`),
-        api<Workflow>("/api/workflow")
+        api<LeadDetail>(`/api/leads/${id}`, { signal }),
+        api<Workflow>("/api/workflow", { signal })
       ]);
+      if (signal?.aborted) return;
       setDetail(payload);
       setWorkflow(workflowData);
       setAssigneeDraft(String(payload.lead.assignedTo || ""));
@@ -813,8 +816,10 @@ export function PraticaDetailPage() {
         return next.sort((a, b) => a.localeCompare(b, "it"));
       });
     } catch (e) {
+      if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) return;
       setError(e instanceof Error ? e.message : "Errore caricamento pratica.");
     } finally {
+      if (signal?.aborted) return;
       setLoading(false);
     }
   }
@@ -1532,8 +1537,19 @@ export function PraticaDetailPage() {
   }
 
   useEffect(() => {
-    load().catch(() => null);
+    const controller = new AbortController();
+    setAnimationsReady(false);
+    load(controller.signal).catch(() => null);
+    return () => controller.abort();
   }, [id]);
+
+  useEffect(() => {
+    if (loading || !detail?.lead?.id) return;
+    const timer = window.setTimeout(() => {
+      setAnimationsReady(true);
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [loading, detail?.lead?.id]);
 
   useEffect(() => {
     if (!taskModalOpen) return;
@@ -1665,15 +1681,8 @@ export function PraticaDetailPage() {
   const showClosedPracticeSuccessCard = isClosedPracticeStatus;
   const canClosePractice = Boolean(detail && isAdmin && closureReady && isReadyToCloseStatus && nextStatuses.includes(PRACTICE_CLOSED_STATUS));
   const canReopenPractice = Boolean(detail && isAdmin && isClosedPracticeStatus && nextStatuses.includes(PRACTICE_REOPEN_STATUS));
-
-  useEffect(() => {
-    if (!showClosureSuccessCard) return;
-    const lottie = closureLottieRef.current;
-    if (!lottie) return;
-    lottie.setSubframe(false);
-    lottie.setSpeed(0.72);
-    lottie.play();
-  }, [showClosureSuccessCard]);
+  const shouldRenderClosureAnimation = animationsReady && (showClosureSuccessCard || showClosedPracticeSuccessCard);
+  const shouldRenderPaymentsAnimation = animationsReady && showPaymentsOk;
 
   const closureChecks = useMemo(
     () => [
@@ -1796,28 +1805,34 @@ export function PraticaDetailPage() {
                 <div className="pd-closure-closed-track" aria-live="polite">
                   <div className="pd-closure-success is-closed-only">
                     <div className="pd-closure-success-animation" aria-hidden="true">
-                      <Lottie
-                        className="pd-closure-success-lottie"
-                        animationData={cruiseClosureBoatAnimation}
-                        lottieRef={closureLottieRef}
-                        autoplay
-                        loop
-                        renderer="canvas"
-                      />
+                      {shouldRenderClosureAnimation ? (
+                        <DotLottieEmbedFrame
+                          className="pd-closure-success-lottie"
+                          active={shouldRenderClosureAnimation}
+                          src={CLOSURE_CRUISE_DOTLOTTIE_SRC}
+                          loop
+                          title="Animazione chiusura pratica"
+                        />
+                      ) : (
+                        <div className="pd-lottie-placeholder pd-lottie-placeholder-boat">Caricamento...</div>
+                      )}
                     </div>
                   </div>
                 </div>
               ) : showClosureSuccessCard ? (
                 <div className="pd-closure-success" aria-live="polite">
                   <div className="pd-closure-success-animation" aria-hidden="true">
-                    <Lottie
-                      className="pd-closure-success-lottie"
-                      animationData={cruiseClosureBoatAnimation}
-                      lottieRef={closureLottieRef}
-                      autoplay
-                      loop
-                      renderer="canvas"
-                    />
+                    {shouldRenderClosureAnimation ? (
+                      <DotLottieEmbedFrame
+                        className="pd-closure-success-lottie"
+                        active={shouldRenderClosureAnimation}
+                        src={CLOSURE_CRUISE_DOTLOTTIE_SRC}
+                        loop
+                        title="Animazione checklist completata"
+                      />
+                    ) : (
+                      <div className="pd-lottie-placeholder pd-lottie-placeholder-boat">Checklist</div>
+                    )}
                   </div>
                   <div className="pd-closure-success-copy">
                     <strong>CHECKLIST COMPLETATA</strong>
@@ -2116,23 +2131,21 @@ export function PraticaDetailPage() {
                 {showPaymentsOk ? (
                   <div className="pd-payments-ok" aria-live="polite">
                     <div className="pd-payments-ok-animation" aria-hidden="true">
-                      <Lottie
-                        className="pd-payments-ok-lottie"
-                        animationData={paymentsOkConfirmationAnimation}
-                        lottieRef={paymentsOkLottieRef}
-                        autoplay={false}
-                        loop={false}
-                        renderer="svg"
-                        rendererSettings={{ preserveAspectRatio: "xMidYMid meet" }}
-                        onDOMLoaded={() => {
-                          const lottie = paymentsOkLottieRef.current;
-                          if (!lottie) return;
-                          lottie.setSubframe(false);
-                          lottie.setSpeed(1);
-                          lottie.playSegments([0, 77], true);
-                        }}
-                        onComplete={() => paymentsOkLottieRef.current?.goToAndStop(77, true)}
-                      />
+                      {shouldRenderPaymentsAnimation ? (
+                        <LightweightLottie
+                          className="pd-payments-ok-lottie"
+                          animationData={paymentsOkConfirmationAnimation}
+                          active={shouldRenderPaymentsAnimation}
+                          autoplay={false}
+                          loop={false}
+                          playSegment={PAYMENTS_OK_SEGMENT}
+                          renderer="svg"
+                          speed={1}
+                          stopFrame={PAYMENTS_OK_STOP_FRAME}
+                        />
+                      ) : (
+                        <div className="pd-lottie-placeholder pd-lottie-placeholder-ok">OK</div>
+                      )}
                     </div>
                     <small>Tutti i pagamenti risultano registrati.</small>
                   </div>

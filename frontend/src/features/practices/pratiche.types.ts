@@ -34,6 +34,7 @@ export type Lead = {
   destination?: string;
   company?: string;
   documentsMissingCount?: number;
+  pendingPaymentsCount?: number;
   documents?: PracticeDocumentsState;
   payments?: PracticePaymentsState;
   status: string;

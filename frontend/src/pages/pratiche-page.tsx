@@ -33,6 +33,7 @@ import "../styles/pratiche-page.css";
 const PRACTICE_WORKFLOW_CACHE_KEY = "leadium_pratiche_workflow_cache";
 const PRACTICE_WORKFLOW_CACHE_TTL_MS = 10 * 60 * 1000;
 const PRACTICE_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_PRACTICE_DETAIL_CACHE_ENTRIES = 4;
 let workflowCache: Workflow | null = null;
 const practiceDetailCache = new Map<string, LeadDetail>();
 const PRACTICE_READY_STATUS = "pronta per chiusura";
@@ -66,6 +67,45 @@ function isValidLeadDetail(value: unknown): value is LeadDetail {
   if (!value || typeof value !== "object") return false;
   const candidate = value as LeadDetail;
   return Boolean(candidate.lead && typeof candidate.lead === "object") && Array.isArray(candidate.timeline);
+}
+
+function compactLeadDetailForCache(detail: LeadDetail): LeadDetail {
+  return {
+    ...detail,
+    lead: {
+      ...detail.lead,
+      documents: detail.lead.documents
+        ? {
+            ...detail.lead.documents,
+            items: (detail.lead.documents.items || []).map((item) => ({
+              ...item,
+              attachments: (item.attachments || []).map((attachment) => ({
+                ...attachment,
+                dataUrl: attachment.storageKey ? "" : attachment.dataUrl
+              }))
+            }))
+          }
+        : detail.lead.documents
+    },
+    timeline: Array.isArray(detail.timeline) ? detail.timeline.slice(-24) : [],
+    callLogs: Array.isArray(detail.callLogs) ? detail.callLogs.slice(-12) : []
+  };
+}
+
+function rememberPracticeDetailCache(leadId: string, detail: LeadDetail) {
+  const compacted = compactLeadDetailForCache(detail);
+  if (practiceDetailCache.has(leadId)) {
+    practiceDetailCache.delete(leadId);
+  }
+  practiceDetailCache.set(leadId, compacted);
+  while (practiceDetailCache.size > MAX_PRACTICE_DETAIL_CACHE_ENTRIES) {
+    const oldestKey = practiceDetailCache.keys().next().value;
+    if (!oldestKey) break;
+    practiceDetailCache.delete(oldestKey);
+  }
+  writePracticeDetailCacheStorage(leadId, compacted);
+  setLeadDetailCacheEntry(leadId, compacted);
+  return compacted;
 }
 
 function readWorkflowCacheStorage() {
@@ -164,6 +204,10 @@ export function PratichePage() {
     () => `search=${debouncedSearch.trim().toLowerCase()}|status=${String(statusFilter || "").toLowerCase()}`,
     [debouncedSearch, statusFilter]
   );
+  const selectedLeadSummary = useMemo(
+    () => leads.find((lead) => lead.id === selectedLeadId) || null,
+    [leads, selectedLeadId]
+  );
 
   function normalizeIdentity(value?: string | null) {
     return String(value || "").trim().toLocaleLowerCase("it");
@@ -206,9 +250,6 @@ export function PratichePage() {
   function patchLeadState(leadId: string, updates: Partial<Lead>) {
     patchLeadAcrossStore(leadId, updates);
     setLeads((prev) => prev.map((lead) => (lead.id === leadId ? { ...lead, ...updates } : lead)));
-    setSelectedDetail((prev) =>
-      prev && prev.lead.id === leadId ? { ...prev, lead: { ...prev.lead, ...updates } } : prev
-    );
   }
 
   async function prefetchLeadDetail(leadId: string) {
@@ -217,9 +258,7 @@ export function PratichePage() {
     if (practiceDetailCache.has(leadId)) return;
     try {
       const payload = await api<LeadDetail>(`/api/leads/${leadId}`);
-      practiceDetailCache.set(leadId, payload);
-      writePracticeDetailCacheStorage(leadId, payload);
-      setLeadDetailCacheEntry(leadId, payload);
+      rememberPracticeDetailCache(leadId, payload);
     } catch {}
   }
 
@@ -228,28 +267,16 @@ export function PratichePage() {
   }
 
   function prependTimelineItem(leadId: string, item: { type: string; text: string; actor: string; createdAt: string }) {
-    setSelectedDetail((prev) =>
-      prev && prev.lead.id === leadId
-        ? {
-            ...prev,
-            timeline: [item, ...(prev.timeline || [])]
-          }
-        : prev
-    );
+    void leadId;
+    void item;
   }
 
   function prependCallLog(
     leadId: string,
     item: { id: string; leadId: string; startedAt: string; endedAt?: string; outcome: CallOutcome; actor: string; note?: string }
   ) {
-    setSelectedDetail((prev) =>
-      prev && prev.lead.id === leadId
-        ? {
-            ...prev,
-            callLogs: [item, ...(prev.callLogs || [])]
-          }
-        : prev
-    );
+    void leadId;
+    void item;
   }
 
   function toIsoDateTime(value: string) {
@@ -545,10 +572,8 @@ export function PratichePage() {
 
   async function handleInlineStatusChange(leadId: string, toStatus: string) {
     const prevLeads = leads;
-    const prevDetail = selectedDetail;
 
     setLeads((prev) => prev.map((lead) => (lead.id === leadId ? { ...lead, status: toStatus } : lead)));
-    setSelectedDetail((prev) => (prev && prev.lead.id === leadId ? { ...prev, lead: { ...prev.lead, status: toStatus } } : prev));
 
     try {
       await api(`/api/leads/${leadId}/status`, {
@@ -565,7 +590,6 @@ export function PratichePage() {
       invalidateDashboardCache();
     } catch (e) {
       setLeads(prevLeads);
-      setSelectedDetail(prevDetail);
       setError(e instanceof Error ? e.message : "Errore aggiornamento stato.");
     }
   }
@@ -582,7 +606,6 @@ export function PratichePage() {
       });
       invalidateLeadDetailCache(lead.id);
       setLeads((prev) => prev.map((item) => (item.id === lead.id ? { ...item, assignedTo } : item)));
-      setSelectedDetail((prev) => (prev && prev.lead.id === lead.id ? { ...prev, lead: { ...prev.lead, assignedTo } } : prev));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore assegnazione pratica.");
     }
@@ -600,7 +623,6 @@ export function PratichePage() {
       invalidateLeadDetailCache(lead.id);
       invalidateDashboardCache();
       setLeads((prev) => prev.map((item) => (item.id === lead.id ? { ...item, notes } : item)));
-      setSelectedDetail((prev) => (prev && prev.lead.id === lead.id ? { ...prev, lead: { ...prev.lead, notes } } : prev));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore aggiornamento priorita.");
     }
@@ -650,65 +672,6 @@ export function PratichePage() {
       })
       .catch(() => null);
   }, []);
-
-  useEffect(() => {
-    if (!selectedLeadId) {
-      setSelectedDetail(null);
-      setDetailError("");
-      return;
-    }
-
-    let canceled = false;
-    const globalCached = getLeadDetailCacheEntry(selectedLeadId);
-    if (globalCached && isLeadDetailCacheFresh(selectedLeadId)) {
-      practiceDetailCache.set(selectedLeadId, globalCached.data);
-      setSelectedDetail(globalCached.data);
-      setDetailLoading(false);
-      setDetailError("");
-      return;
-    }
-    const memoryCached = practiceDetailCache.get(selectedLeadId);
-    if (memoryCached && isValidLeadDetail(memoryCached)) {
-      setLeadDetailCacheEntry(selectedLeadId, memoryCached);
-      setSelectedDetail(memoryCached);
-      setDetailLoading(false);
-      setDetailError("");
-      return;
-    }
-    const storageCached = readPracticeDetailCacheStorage(selectedLeadId);
-    if (storageCached) {
-      practiceDetailCache.set(selectedLeadId, storageCached);
-      setLeadDetailCacheEntry(selectedLeadId, storageCached);
-      setSelectedDetail(storageCached);
-      setDetailLoading(false);
-      setDetailError("");
-      return;
-    }
-
-    setDetailLoading(true);
-    setDetailError("");
-    api<LeadDetail>(`/api/leads/${selectedLeadId}`)
-      .then((payload) => {
-        if (canceled) return;
-        practiceDetailCache.set(selectedLeadId, payload);
-        writePracticeDetailCacheStorage(selectedLeadId, payload);
-        setLeadDetailCacheEntry(selectedLeadId, payload);
-        setSelectedDetail(payload);
-      })
-      .catch((e) => {
-        if (canceled) return;
-        setDetailError(e instanceof Error ? e.message : "Errore caricamento dettaglio pratica.");
-        setSelectedDetail(null);
-      })
-      .finally(() => {
-        if (canceled) return;
-        setDetailLoading(false);
-      });
-
-    return () => {
-      canceled = true;
-    };
-  }, [selectedLeadId]);
 
   const assignees = useMemo(
     () =>
@@ -1118,7 +1081,6 @@ export function PratichePage() {
                 isBusy={loading}
                 availableStatuses={workflow?.flow[lead.status] || []}
                 onSelect={handleSelectLead}
-                onPrefetchDetail={prefetchLeadDetail}
                 onOpen={(id) => navigate(buildPracticeUrl(id))}
                 onStartCall={handleStartCall}
                 onRegisterCall={(item) => handleRegisterCall(item.id)}
@@ -1139,8 +1101,7 @@ export function PratichePage() {
       {isQuickDetailVisible ? <div className="pr-drawer-backdrop" onClick={handleCloseQuickDetail} /> : null}
       {isQuickDetailVisible ? (
         <aside className={`pr-sidebar ${selectedLeadId ? "open" : "closed"}`}>
-          {detailError ? <p className="pr-error">{detailError}</p> : null}
-          <PracticesQuickDetail detail={selectedDetail} loading={detailLoading} />
+          <PracticesQuickDetail lead={selectedLeadSummary} />
         </aside>
       ) : null}
 

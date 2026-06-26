@@ -303,7 +303,27 @@ async function persistMetaSyncIfChanged(lead: any, result: { changed?: boolean }
   await saveLead(lead);
 }
 
-function safeLead(lead: any) {
+const DETAIL_TIMELINE_LIMIT = 40;
+const DETAIL_CALL_LOG_LIMIT = 20;
+
+function compactLeadDocumentsForResponse(documents: any, options?: { stripAttachmentDataUrls?: boolean }) {
+  if (!documents || !Array.isArray(documents.items)) return documents || { items: [] };
+  if (!options?.stripAttachmentDataUrls) return documents;
+  return {
+    ...documents,
+    items: documents.items.map((item: any) => ({
+      ...item,
+      attachments: Array.isArray(item?.attachments)
+        ? item.attachments.map((attachment: any) => ({
+            ...attachment,
+            dataUrl: attachment?.storageKey ? "" : String(attachment?.dataUrl || "")
+          }))
+        : []
+    }))
+  };
+}
+
+function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
   return {
     id: lead.id,
     fullName: lead.fullName,
@@ -326,7 +346,7 @@ function safeLead(lead: any) {
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
     metaEventSync: lead.metaEventSync || null,
-    documents: lead.documents || { items: [] },
+    documents: compactLeadDocumentsForResponse(lead.documents, options),
     payments: lead.payments || { items: [] },
     latestCallOutcome: lead.latestCallOutcome || null,
     latestCallAt: lead.latestCallAt || null,
@@ -694,6 +714,11 @@ function getMissingDocumentsSummaryCount(lead: any) {
   return items.filter((item: any) => item?.required && (!item?.received || !item?.verified)).length;
 }
 
+function getPendingPaymentsSummaryCount(lead: any) {
+  const items = Array.isArray(lead?.payments?.items) ? lead.payments.items : [];
+  return items.filter((item: any) => item?.required && item?.status !== "verified").length;
+}
+
 function getLeadListSummary(lead: any) {
   return {
     id: lead.id,
@@ -721,6 +746,7 @@ function getLeadListSummary(lead: any) {
     callAttempts: lead.callAttempts || 0,
     nextActionAt: lead.nextActionAt || null,
     documentsMissingCount: getMissingDocumentsSummaryCount(lead),
+    pendingPaymentsCount: getPendingPaymentsSummaryCount(lead),
     createdAt: lead.createdAt,
     updatedAt: lead.updatedAt
   };
@@ -1447,14 +1473,16 @@ export const server = http.createServer(async (req, res) => {
       const lead = await getLeadById(leadByIdParams.leadId);
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
       const [timeline, callLogs] = await Promise.all([getTimelineByLeadId(lead.id), listCallLogsByLeadId(lead.id)]);
+      const compactTimeline = Array.isArray(timeline) ? timeline.slice(-DETAIL_TIMELINE_LIMIT) : [];
+      const compactCallLogs = Array.isArray(callLogs) ? callLogs.slice(0, DETAIL_CALL_LOG_LIMIT) : [];
       return sendJson(res, 200, {
         lead: safeLead({
           ...lead,
-          latestCallOutcome: callLogs[0]?.outcome || null,
-          latestCallAt: callLogs[0]?.startedAt || null
-        }),
-        timeline,
-        callLogs
+          latestCallOutcome: compactCallLogs[0]?.outcome || null,
+          latestCallAt: compactCallLogs[0]?.startedAt || null
+        }, { stripAttachmentDataUrls: true }),
+        timeline: compactTimeline,
+        callLogs: compactCallLogs
       });
     }
 

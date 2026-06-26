@@ -419,6 +419,8 @@
   border: 0;
   box-shadow: none;
   pointer-events: none;
+  contain: layout paint;
+  isolation: isolate;
 }
 
 .pd-closure-success-lottie {
@@ -427,12 +429,39 @@
   margin: -46px auto 0;
   transform: scale(1);
   transform-origin: center top;
+  display: block;
+  border: 0;
+  background: transparent;
 }
 
 .pd-closure-success-lottie svg,
-.pd-closure-success-lottie canvas {
+.pd-closure-success-lottie canvas,
+.pd-closure-success-lottie iframe {
   width: 100% !important;
   height: 100% !important;
+}
+
+.pd-lottie-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(241, 247, 255, 0.98) 0%, rgba(227, 239, 252, 0.94) 100%);
+  border: 1px solid rgba(179, 204, 231, 0.72);
+  color: #2f5b86;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pd-lottie-placeholder-boat {
+  min-height: 96px;
+}
+
+.pd-lottie-placeholder-ok {
+  border-radius: 999px;
 }
 
 .pd-closure-success-copy {
@@ -443,14 +472,14 @@
 
 .pd-closure-success.is-closed-only {
   position: absolute;
-  left: 0;
+  left: 24px;
   top: 50%;
   width: 172px;
   grid-template-columns: auto;
   gap: 0;
-  transform: translateY(-50%);
-  animation: pd-closure-boat-sail 7.6s ease-in-out infinite alternate;
-  will-change: left;
+  transform: translate3d(0, -50%, 0);
+  will-change: left, transform;
+  animation: pd-closure-boat-sail 12.4s cubic-bezier(0.4, 0.08, 0.6, 0.92) infinite alternate;
 }
 
 .pd-closure-success.is-closed-only .pd-closure-success-animation {
@@ -462,6 +491,11 @@
   width: 206px;
   height: 206px;
   margin: -50px auto 0;
+}
+
+.pd-closure-success:not(.is-closed-only) .pd-closure-success-animation {
+  animation: pd-closure-boat-float 4.8s ease-in-out infinite;
+  will-change: transform;
 }
 
 .pd-closure-band.is-closed .pd-closure-closed-track::before {
@@ -893,6 +927,18 @@
   box-shadow: 0 2px 6px rgba(31, 53, 88, 0.06);
 }
 
+@keyframes pd-closure-boat-sail {
+  0% {
+    left: 24px;
+    transform: translate3d(0, -50%, 0);
+  }
+
+  100% {
+    left: calc(100% - 214px);
+    transform: translate3d(0, -50%, 0);
+  }
+}
+
 .pd-card h5 {
   margin: 0 0 7px;
   font-size: 15px;
@@ -1190,13 +1236,17 @@
   }
 }
 
-@keyframes pd-closure-boat-sail {
+@keyframes pd-closure-boat-float {
   0% {
-    left: 0;
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-4px);
   }
 
   100% {
-    left: calc(100% - 172px);
+    transform: translateY(0);
   }
 }
 
@@ -1209,10 +1259,6 @@
   .pd-tasks-head-actions {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .pd-closure-success.is-closed-only {
-    animation-duration: 5.8s;
   }
 }
 
@@ -1314,6 +1360,8 @@
   gap: 6px;
   overflow: hidden;
   text-align: center;
+  contain: layout paint;
+  isolation: isolate;
 }
 
 .pd-payments-ok small {
@@ -1331,6 +1379,8 @@
   display: grid;
   place-items: center;
   margin-top: 0;
+  contain: layout paint;
+  isolation: isolate;
 }
 
 .pd-payments-ok-lottie {

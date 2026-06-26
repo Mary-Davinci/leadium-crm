@@ -305,11 +305,15 @@ export function PracticeCard({
   const duePrimaryText = isAdminView ? `SLA ${slaLabel}` : dueInfo.label;
   const dueSecondaryText = isAdminView ? `Assegnata ${assignedAtLabel}` : dueInfo.meta;
   const clickTimerRef = useRef<number | null>(null);
+  const prefetchTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
       if (clickTimerRef.current) {
         window.clearTimeout(clickTimerRef.current);
+      }
+      if (prefetchTimerRef.current) {
+        window.clearTimeout(prefetchTimerRef.current);
       }
     };
   }, []);
@@ -332,12 +336,31 @@ export function PracticeCard({
     onOpen(lead.id);
   }
 
+  function handlePrefetchStart() {
+    if (!onPrefetchDetail) return;
+    if (prefetchTimerRef.current) {
+      window.clearTimeout(prefetchTimerRef.current);
+    }
+    prefetchTimerRef.current = window.setTimeout(() => {
+      onPrefetchDetail(lead.id);
+      prefetchTimerRef.current = null;
+    }, 180);
+  }
+
+  function handlePrefetchCancel() {
+    if (prefetchTimerRef.current) {
+      window.clearTimeout(prefetchTimerRef.current);
+      prefetchTimerRef.current = null;
+    }
+  }
+
   return (
     <article
       className={`pr-row-card ${isSelected ? "active" : ""} ${hasHighPriorityTask ? "priority-glow" : ""}`}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
-      onMouseEnter={() => onPrefetchDetail?.(lead.id)}
+      onMouseEnter={handlePrefetchStart}
+      onMouseLeave={handlePrefetchCancel}
     >
       <div className="pr-row-grid">
         <div className="pr-cell pr-cell-priority">
