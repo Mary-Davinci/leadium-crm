@@ -31,12 +31,33 @@ type Lead = {
   assignedTo?: string;
   notes?: string;
   updatedAt?: string;
+  practiceReview?: PracticeReviewState | null;
   documents?: PracticeDocumentsState;
   payments?: PracticePaymentsState;
   status: string;
   nextActionAt?: string;
   latestCallOutcome?: CallOutcome | null;
   latestCallAt?: string | null;
+};
+
+type PracticeReviewDecision = "pending_admin" | "approved" | "returned_to_operator";
+
+type PracticeReviewState = {
+  finalNote?: string | null;
+  finalNoteAt?: string | null;
+  finalNoteBy?: string | null;
+  sentToReviewAt?: string | null;
+  sentToReviewBy?: string | null;
+  reviewDecision?: PracticeReviewDecision | null;
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
+  reviewNote?: string | null;
+  returnedAt?: string | null;
+  returnedBy?: string | null;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  reopenedAt?: string | null;
+  reopenedBy?: string | null;
 };
 
 type PracticeDocumentKey =
@@ -227,6 +248,28 @@ function normalizePayments(input?: PracticePaymentsState | null): PracticePaymen
       };
     })
   };
+}
+
+function normalizePracticeReview(input?: PracticeReviewState | null): PracticeReviewState | null {
+  if (!input) return null;
+  const normalized = {
+    finalNote: input.finalNote ? String(input.finalNote) : null,
+    finalNoteAt: input.finalNoteAt ? String(input.finalNoteAt) : null,
+    finalNoteBy: input.finalNoteBy ? String(input.finalNoteBy) : null,
+    sentToReviewAt: input.sentToReviewAt ? String(input.sentToReviewAt) : null,
+    sentToReviewBy: input.sentToReviewBy ? String(input.sentToReviewBy) : null,
+    reviewDecision: (input.reviewDecision as PracticeReviewDecision | null) || null,
+    reviewedAt: input.reviewedAt ? String(input.reviewedAt) : null,
+    reviewedBy: input.reviewedBy ? String(input.reviewedBy) : null,
+    reviewNote: input.reviewNote ? String(input.reviewNote) : null,
+    returnedAt: input.returnedAt ? String(input.returnedAt) : null,
+    returnedBy: input.returnedBy ? String(input.returnedBy) : null,
+    closedAt: input.closedAt ? String(input.closedAt) : null,
+    closedBy: input.closedBy ? String(input.closedBy) : null,
+    reopenedAt: input.reopenedAt ? String(input.reopenedAt) : null,
+    reopenedBy: input.reopenedBy ? String(input.reopenedBy) : null
+  };
+  return Object.values(normalized).some(Boolean) ? normalized : null;
 }
 
 function formatCurrency(value: number) {
@@ -707,6 +750,8 @@ export function PraticaDetailPage() {
   const [error, setError] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [noteModalOpen, setNoteModalOpen] = useState(false);
+  const [returnModalOpen, setReturnModalOpen] = useState(false);
+  const [returnReasonDraft, setReturnReasonDraft] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
   const [noteHistory, setNoteHistory] = useState<NoteEntry[]>([]);
@@ -734,13 +779,31 @@ export function PraticaDetailPage() {
   const [animationsReady, setAnimationsReady] = useState(false);
 
   function openNoteModal() {
-    setNoteDraft(String(detail?.lead.notes || "").trim());
+    const finalReviewNote = String(detail?.lead.practiceReview?.finalNote || "").trim();
+    setNoteDraft(closureReady && !isClosedPracticeStatus ? finalReviewNote : String(detail?.lead.notes || "").trim());
     setNoteModalOpen(true);
   }
 
   function closeNoteModal() {
     setNoteDraft("");
     setNoteModalOpen(false);
+  }
+
+  function openReturnToOperatorModal() {
+    setReturnReasonDraft(
+      detail?.lead.practiceReview?.reviewDecision === "returned_to_operator" ? String(detail.lead.practiceReview?.reviewNote || "").trim() : ""
+    );
+    setReturnModalOpen(true);
+  }
+
+  function resetReturnToOperatorModal() {
+    setReturnReasonDraft("");
+    setReturnModalOpen(false);
+  }
+
+  function closeReturnToOperatorModal() {
+    if (busy) return;
+    resetReturnToOperatorModal();
   }
 
   function prependTimelineItem(item: TimelineItem) {
@@ -813,7 +876,13 @@ export function PraticaDetailPage() {
         api<Workflow>("/api/workflow", { signal })
       ]);
       if (signal?.aborted) return;
-      setDetail(payload);
+      setDetail({
+        ...payload,
+        lead: {
+          ...payload.lead,
+          practiceReview: normalizePracticeReview(payload.lead.practiceReview)
+        }
+      });
       setWorkflow(workflowData);
       setAssigneeDraft(String(payload.lead.assignedTo || ""));
       setDocumentsDraft(normalizeDocuments(payload.lead.documents));
@@ -935,7 +1004,18 @@ export function PraticaDetailPage() {
         })
       });
 
-      setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, ...updatedLead } } : prev));
+      setDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              lead: {
+                ...prev.lead,
+                ...updatedLead,
+                practiceReview: normalizePracticeReview(updatedLead.practiceReview)
+              }
+            }
+          : prev
+      );
       prependCallLog({
         id: callRequestKey || `call_${Date.now()}`,
         leadId: targetLead.id,
@@ -1095,34 +1175,91 @@ export function PraticaDetailPage() {
       setError("La pratica non e ancora completa su documenti e pagamenti.");
       return;
     }
+    if (!detail?.lead.id) return;
+    const now = new Date().toISOString();
+    await api<Lead>(`/api/leads/${detail.lead.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        practiceReview: {
+          reviewDecision: "approved",
+          reviewedAt: now,
+          reviewedBy: "admin pratiche",
+          reviewNote: "Pratica verificata e approvata in chiusura finale.",
+          closedAt: now,
+          closedBy: "admin pratiche"
+        },
+        actor: "admin pratiche"
+      })
+    });
     await changeLeadStatus(PRACTICE_CLOSED_STATUS, "pratica chiusa al 100%");
   }
 
   async function reopenClosedPractice() {
+    if (!detail?.lead.id) return;
+    const now = new Date().toISOString();
+    await api<Lead>(`/api/leads/${detail.lead.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        practiceReview: {
+          reviewDecision: "pending_admin",
+          reviewNote: "Pratica riaperta manualmente per ulteriori verifiche.",
+          reopenedAt: now,
+          reopenedBy: "admin pratiche",
+          reviewedAt: null,
+          reviewedBy: null,
+          closedAt: null,
+          closedBy: null
+        },
+        actor: "admin pratiche"
+      })
+    });
     await changeLeadStatus(PRACTICE_REOPEN_STATUS, "riapertura pratica manuale");
   }
 
   async function returnPracticeToOperator() {
     if (!detail?.lead.id) return;
     const targetAssignee = String(assigneeDraft || detail.lead.assignedTo || "").trim();
+    const returnReason = returnReasonDraft.trim();
     if (!targetAssignee) {
       setError("Assegna prima un operatore alla pratica.");
+      return;
+    }
+    if (!returnReason) {
+      setError("Inserisci la motivazione prima di rimandare la pratica all'operatore.");
       return;
     }
     setBusy(true);
     setError("");
     try {
+      const now = new Date().toISOString();
+      await api(`/api/leads/${detail.lead.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          practiceReview: {
+            reviewDecision: "returned_to_operator",
+            reviewedAt: now,
+            reviewedBy: activityActor,
+            reviewNote: returnReason,
+            returnedAt: now,
+            returnedBy: activityActor,
+            closedAt: null,
+            closedBy: null
+          },
+          actor: activityActor
+        })
+      });
       await api(`/api/leads/${detail.lead.id}/status`, {
         method: "POST",
         body: JSON.stringify({
           toStatus: PRACTICE_REOPEN_STATUS,
-          actor: "supervisione admin - rimessa in lavorazione"
+          actor: `${activityActor} - rimessa in lavorazione`
         })
       });
       await api(`/api/leads/${detail.lead.id}`, {
         method: "PATCH",
         body: JSON.stringify({ assignedTo: targetAssignee })
       });
+      resetReturnToOperatorModal();
       setStatusDraft("");
       await load();
     } catch (e) {
@@ -1197,10 +1334,34 @@ export function PraticaDetailPage() {
     setBusy(true);
     setError("");
     try {
+      const now = new Date().toISOString();
       await api(`/api/leads/${detail.lead.id}/notes`, {
         method: "POST",
         body: JSON.stringify({ text: nextNote, actor: "operatore pratiche" })
       });
+      if (closureReady) {
+        await api(`/api/leads/${detail.lead.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            practiceReview: {
+              finalNote: nextNote,
+              finalNoteAt: now,
+              finalNoteBy: "operatore pratiche",
+              sentToReviewAt: now,
+              sentToReviewBy: "operatore pratiche",
+              reviewDecision: "pending_admin",
+              reviewNote: "Pratica inviata in supervisione admin dopo checklist completata.",
+              returnedAt: null,
+              returnedBy: null,
+              reviewedAt: null,
+              reviewedBy: null,
+              closedAt: null,
+              closedBy: null
+            },
+            actor: "operatore pratiche"
+          })
+        });
+      }
       if (shouldMoveToAdminReview) {
         await moveLeadToStatus(PRACTICE_READY_STATUS, "nota finale pratica completata");
       }
@@ -1231,6 +1392,22 @@ export function PraticaDetailPage() {
       (normalizedStatus === PRACTICE_READY_STATUS || normalizedStatus === PRACTICE_CLOSED_STATUS) &&
       (!documentsComplete || !paymentsComplete)
     ) {
+      await api(`/api/leads/${detail.lead.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          practiceReview: {
+            reviewDecision: "returned_to_operator",
+            reviewNote: "Checklist riaperta: documenti o pagamenti non sono piu completi.",
+            reviewedAt: new Date().toISOString(),
+            reviewedBy: "sistema checklist",
+            returnedAt: new Date().toISOString(),
+            returnedBy: "sistema checklist",
+            closedAt: null,
+            closedBy: null
+          },
+          actor: "sistema checklist"
+        })
+      });
       await api(`/api/leads/${detail.lead.id}/status`, {
         method: "POST",
         body: JSON.stringify({
@@ -1243,8 +1420,6 @@ export function PraticaDetailPage() {
 
     if (normalizedStatus === PRACTICE_READY_STATUS || normalizedStatus === PRACTICE_CLOSED_STATUS) return;
     if (!documentsComplete || !paymentsComplete) return;
-
-    await moveLeadToStatus(PRACTICE_READY_STATUS, "checklist pratica completata automaticamente", normalizedStatus);
   }
 
   async function saveDocuments(nextDocuments: PracticeDocumentsState) {
@@ -1683,6 +1858,9 @@ export function PraticaDetailPage() {
     () => paymentsState.items.some((item) => item.required) && paymentsState.items.every((item) => !item.required || item.status !== "pending"),
     [paymentsState]
   );
+  const practiceReview = useMemo(() => normalizePracticeReview(detail?.lead.practiceReview), [detail?.lead.practiceReview]);
+  const finalReviewNote = String(practiceReview?.finalNote || "").trim();
+  const reviewDecision = practiceReview?.reviewDecision || null;
   const isReadyToCloseStatus = detail?.lead.status === PRACTICE_READY_STATUS;
   const isClosedPracticeStatus = detail?.lead.status === PRACTICE_CLOSED_STATUS;
   const isClosedReadOnly = Boolean(isClosedPracticeStatus && !isAdmin);
@@ -1805,10 +1983,29 @@ export function PraticaDetailPage() {
                   <p>
                     {isClosedPracticeStatus
                       ? "La pratica e stata completata e archiviata. Puoi riaprirla se torna un pagamento o un documento."
+                      : reviewDecision === "returned_to_operator"
+                        ? "La pratica e tornata all'operatore: aggiorna quanto richiesto dall'admin e salva di nuovo la nota finale per rimandarla in supervisione."
                       : isReadyToCloseStatus
-                        ? "Documenti e pagamenti sono completi: la pratica e gia tra le completate ed e pronta per la chiusura finale."
-                        : "Completa documenti e pagamenti richiesti. Quando entrambi sono verdi, la pratica si completa da sola."}
+                        ? "Documenti, pagamenti e nota finale sono stati inviati in supervisione admin. Da qui puoi confermare la chiusura finale."
+                        : closureReady
+                          ? "Checklist completata: aggiungi la nota finale per spostare la pratica in supervisione admin."
+                          : "Completa documenti e pagamenti richiesti. Quando entrambi sono verdi, la pratica resta pronta per la nota finale."}
                   </p>
+                  {finalReviewNote ? <p className="pd-closure-review-note">Nota finale: {finalReviewNote}</p> : null}
+                  {!isClosedPracticeStatus && reviewDecision === "returned_to_operator" && practiceReview?.reviewNote ? (
+                    <p className="pd-closure-review-note pd-closure-review-note-return">Motivazione admin: {practiceReview.reviewNote}</p>
+                  ) : null}
+                  {isClosedPracticeStatus && practiceReview?.closedAt ? (
+                    <p className="pd-closure-review-meta">
+                      Chiusa da {practiceReview.closedBy || "admin"} il {new Date(practiceReview.closedAt).toLocaleString("it-IT")}
+                    </p>
+                  ) : null}
+                  {!isClosedPracticeStatus && reviewDecision === "returned_to_operator" && practiceReview?.returnedAt ? (
+                    <p className="pd-closure-review-meta">
+                      Rimandata a operatore il {new Date(practiceReview.returnedAt).toLocaleString("it-IT")}
+                      {practiceReview.returnedBy ? ` da ${practiceReview.returnedBy}` : ""}.
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1866,6 +2063,30 @@ export function PraticaDetailPage() {
               )}
 
               <div className="pd-closure-actions">
+                {finalReviewNote ? (
+                  <div className="pd-closure-review-panel">
+                    <strong>Nota finale</strong>
+                    <span>{finalReviewNote}</span>
+                    {practiceReview?.finalNoteAt ? (
+                      <small>
+                        {new Date(practiceReview.finalNoteAt).toLocaleString("it-IT")}
+                        {practiceReview?.finalNoteBy ? ` - ${practiceReview.finalNoteBy}` : ""}
+                      </small>
+                    ) : null}
+                  </div>
+                ) : null}
+                {!isClosedPracticeStatus && reviewDecision === "returned_to_operator" && practiceReview?.reviewNote ? (
+                  <div className="pd-closure-review-panel pd-closure-review-panel-return">
+                    <strong>Da correggere</strong>
+                    <span>{practiceReview.reviewNote}</span>
+                    {practiceReview?.returnedAt ? (
+                      <small>
+                        {new Date(practiceReview.returnedAt).toLocaleString("it-IT")}
+                        {practiceReview?.returnedBy ? ` - ${practiceReview.returnedBy}` : ""}
+                      </small>
+                    ) : null}
+                  </div>
+                ) : null}
                 {closureReady && !isClosedPracticeStatus ? (
                   <button type="button" className="pd-closure-note-button" disabled={busy} onClick={openNoteModal}>
                     Nota finale
@@ -1882,12 +2103,15 @@ export function PraticaDetailPage() {
                   </button>
                 ) : null}
                 {canReopenPractice && isAdmin && detail?.lead.assignedTo ? (
-                  <button type="button" className="pd-closure-return-button" disabled={busy} onClick={() => void returnPracticeToOperator()}>
+                  <button type="button" className="pd-closure-return-button" disabled={busy} onClick={openReturnToOperatorModal}>
                     Rimanda a operatore
                   </button>
                 ) : null}
                 {isClosedReadOnly ? (
                   <span className="pd-closure-hint">Pratica chiusa in sola lettura per operatore. Riapertura e modifiche sensibili sono riservate ad admin.</span>
+                ) : null}
+                {isReadyToCloseStatus && reviewDecision === "pending_admin" ? (
+                  <span className="pd-closure-hint">In attesa della conferma admin finale.</span>
                 ) : null}
                 {!closureReady && !isClosedPracticeStatus ? (
                   <span className="pd-closure-hint">Completa i controlli evidenziati su documenti e pagamenti per proseguire.</span>
@@ -2547,6 +2771,43 @@ export function PraticaDetailPage() {
                   </button>
                   <button type="button" className="pd-note-modal-submit" disabled={busy || !noteDraft.trim()} onClick={saveNote}>
                     {closureReady && !isClosedPracticeStatus ? "Completa pratica" : "Salva nota"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {returnModalOpen ? (
+            <div className="pd-note-modal-backdrop" role="presentation" onClick={closeReturnToOperatorModal}>
+              <div
+                className="pd-note-modal pd-return-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="pd-return-modal-title"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="pd-note-modal-head">
+                  <div>
+                    <h5 id="pd-return-modal-title">Rimanda a operatore</h5>
+                    <p>Scrivi una motivazione chiara: l'operatore la vedra nella banda di chiusura quando riprende la pratica.</p>
+                  </div>
+                  <button type="button" className="pd-note-modal-close" onClick={closeReturnToOperatorModal} disabled={busy}>
+                    Chiudi
+                  </button>
+                </div>
+                <textarea
+                  className="pd-notes-input"
+                  value={returnReasonDraft}
+                  onChange={(event) => setReturnReasonDraft(event.target.value)}
+                  rows={6}
+                  placeholder="Esempio: manca verifica saldo finale, ricontrolla documento passeggero 2 e aggiorna la nota finale."
+                />
+                <div className="pd-note-modal-actions">
+                  <button type="button" className="pd-note-modal-cancel" onClick={closeReturnToOperatorModal} disabled={busy}>
+                    Annulla
+                  </button>
+                  <button type="button" className="pd-note-modal-submit" disabled={busy || !returnReasonDraft.trim()} onClick={() => void returnPracticeToOperator()}>
+                    Rimanda pratica
                   </button>
                 </div>
               </div>

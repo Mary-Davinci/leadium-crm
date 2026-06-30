@@ -22,6 +22,7 @@ export type Lead = {
   closingOutcome?: "open" | "won" | "lost" | "disqualified";
   lossReason?: string | null;
   lossDetail?: string | null;
+  practiceReview?: PracticeReviewState | null;
   metaEventSync?: {
     lastEventName?: string | null;
     lastStatus?: string | null;
@@ -43,6 +44,26 @@ export type Lead = {
   latestCallAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type PracticeReviewDecision = "pending_admin" | "approved" | "returned_to_operator";
+
+export type PracticeReviewState = {
+  finalNote?: string | null;
+  finalNoteAt?: string | null;
+  finalNoteBy?: string | null;
+  sentToReviewAt?: string | null;
+  sentToReviewBy?: string | null;
+  reviewDecision?: PracticeReviewDecision | null;
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
+  reviewNote?: string | null;
+  returnedAt?: string | null;
+  returnedBy?: string | null;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  reopenedAt?: string | null;
+  reopenedBy?: string | null;
 };
 
 export type PracticeDocumentKey =

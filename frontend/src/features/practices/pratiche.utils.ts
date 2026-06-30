@@ -33,6 +33,25 @@ export function normalizeLead(input: Lead): Lead {
     closingOutcome: input?.closingOutcome || "open",
     lossReason: input?.lossReason ? String(input.lossReason) : null,
     lossDetail: input?.lossDetail ? String(input.lossDetail) : null,
+    practiceReview: input?.practiceReview
+      ? {
+          finalNote: input.practiceReview.finalNote ? String(input.practiceReview.finalNote) : null,
+          finalNoteAt: input.practiceReview.finalNoteAt ? String(input.practiceReview.finalNoteAt) : null,
+          finalNoteBy: input.practiceReview.finalNoteBy ? String(input.practiceReview.finalNoteBy) : null,
+          sentToReviewAt: input.practiceReview.sentToReviewAt ? String(input.practiceReview.sentToReviewAt) : null,
+          sentToReviewBy: input.practiceReview.sentToReviewBy ? String(input.practiceReview.sentToReviewBy) : null,
+          reviewDecision: input.practiceReview.reviewDecision || null,
+          reviewedAt: input.practiceReview.reviewedAt ? String(input.practiceReview.reviewedAt) : null,
+          reviewedBy: input.practiceReview.reviewedBy ? String(input.practiceReview.reviewedBy) : null,
+          reviewNote: input.practiceReview.reviewNote ? String(input.practiceReview.reviewNote) : null,
+          returnedAt: input.practiceReview.returnedAt ? String(input.practiceReview.returnedAt) : null,
+          returnedBy: input.practiceReview.returnedBy ? String(input.practiceReview.returnedBy) : null,
+          closedAt: input.practiceReview.closedAt ? String(input.practiceReview.closedAt) : null,
+          closedBy: input.practiceReview.closedBy ? String(input.practiceReview.closedBy) : null,
+          reopenedAt: input.practiceReview.reopenedAt ? String(input.practiceReview.reopenedAt) : null,
+          reopenedBy: input.practiceReview.reopenedBy ? String(input.practiceReview.reopenedBy) : null
+        }
+      : null,
     nextActionAt: input?.nextActionAt ? String(input.nextActionAt) : undefined,
     latestCallOutcome: input?.latestCallOutcome || null,
     latestCallAt: input?.latestCallAt ? String(input.latestCallAt) : null,

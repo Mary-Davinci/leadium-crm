@@ -346,6 +346,7 @@ function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
     metaEventSync: lead.metaEventSync || null,
+    practiceReview: lead.practiceReview || null,
     documents: compactLeadDocumentsForResponse(lead.documents, options),
     payments: lead.payments || { items: [] },
     latestCallOutcome: lead.latestCallOutcome || null,
@@ -709,6 +710,29 @@ function getBoardLeadSummary(lead: any) {
   };
 }
 
+function normalizePracticeReview(input: any, previous?: any) {
+  const base = previous && typeof previous === "object" ? previous : {};
+  const next = input && typeof input === "object" ? input : {};
+  const merged = {
+    finalNote: next.finalNote !== undefined ? cleanOptionalString(next.finalNote) : cleanOptionalString(base.finalNote),
+    finalNoteAt: next.finalNoteAt !== undefined ? cleanOptionalString(next.finalNoteAt) : cleanOptionalString(base.finalNoteAt),
+    finalNoteBy: next.finalNoteBy !== undefined ? cleanOptionalString(next.finalNoteBy) : cleanOptionalString(base.finalNoteBy),
+    sentToReviewAt: next.sentToReviewAt !== undefined ? cleanOptionalString(next.sentToReviewAt) : cleanOptionalString(base.sentToReviewAt),
+    sentToReviewBy: next.sentToReviewBy !== undefined ? cleanOptionalString(next.sentToReviewBy) : cleanOptionalString(base.sentToReviewBy),
+    reviewDecision: next.reviewDecision !== undefined ? cleanOptionalString(next.reviewDecision) : cleanOptionalString(base.reviewDecision),
+    reviewedAt: next.reviewedAt !== undefined ? cleanOptionalString(next.reviewedAt) : cleanOptionalString(base.reviewedAt),
+    reviewedBy: next.reviewedBy !== undefined ? cleanOptionalString(next.reviewedBy) : cleanOptionalString(base.reviewedBy),
+    reviewNote: next.reviewNote !== undefined ? cleanOptionalString(next.reviewNote) : cleanOptionalString(base.reviewNote),
+    returnedAt: next.returnedAt !== undefined ? cleanOptionalString(next.returnedAt) : cleanOptionalString(base.returnedAt),
+    returnedBy: next.returnedBy !== undefined ? cleanOptionalString(next.returnedBy) : cleanOptionalString(base.returnedBy),
+    closedAt: next.closedAt !== undefined ? cleanOptionalString(next.closedAt) : cleanOptionalString(base.closedAt),
+    closedBy: next.closedBy !== undefined ? cleanOptionalString(next.closedBy) : cleanOptionalString(base.closedBy),
+    reopenedAt: next.reopenedAt !== undefined ? cleanOptionalString(next.reopenedAt) : cleanOptionalString(base.reopenedAt),
+    reopenedBy: next.reopenedBy !== undefined ? cleanOptionalString(next.reopenedBy) : cleanOptionalString(base.reopenedBy)
+  };
+  return Object.values(merged).some(Boolean) ? merged : null;
+}
+
 function getMissingDocumentsSummaryCount(lead: any) {
   const items = Array.isArray(lead?.documents?.items) ? lead.documents.items : [];
   return items.filter((item: any) => item?.required && (!item?.received || !item?.verified)).length;
@@ -741,6 +765,7 @@ function getLeadListSummary(lead: any) {
     closingOutcome: lead.closingOutcome || "open",
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
+    practiceReview: lead.practiceReview || null,
     latestCallOutcome: lead.latestCallOutcome || null,
     latestCallAt: lead.latestCallAt || null,
     callAttempts: lead.callAttempts || 0,
@@ -1278,6 +1303,7 @@ export const server = http.createServer(async (req, res) => {
         closingOutcome: "open",
         lossReason: null,
         lossDetail: null,
+        practiceReview: null,
         documents: normalizePracticeDocuments(body.documents),
         payments: normalizePracticePayments(body.payments),
         callAttempts: 0,
@@ -1344,6 +1370,7 @@ export const server = http.createServer(async (req, res) => {
         closingOutcome: "open",
         lossReason: null,
         lossDetail: null,
+        practiceReview: null,
         documents: normalizePracticeDocuments(body.documents),
         payments: normalizePracticePayments(body.payments),
         callAttempts: 0,
@@ -1503,6 +1530,9 @@ export const server = http.createServer(async (req, res) => {
       if (Object.prototype.hasOwnProperty.call(body, "firstContactAt")) lead.firstContactAt = cleanOptionalString(body.firstContactAt);
       if (Object.prototype.hasOwnProperty.call(body, "lastContactAt")) lead.lastContactAt = cleanOptionalString(body.lastContactAt);
       if (Object.prototype.hasOwnProperty.call(body, "slaDueAt")) lead.slaDueAt = cleanOptionalString(body.slaDueAt);
+      if (Object.prototype.hasOwnProperty.call(body, "practiceReview")) {
+        lead.practiceReview = normalizePracticeReview(body.practiceReview, lead.practiceReview);
+      }
         if (Object.prototype.hasOwnProperty.call(body, "closingOutcome")) {
           const nextOutcome = String(body.closingOutcome || "").trim();
           if (["open", "won", "lost", "disqualified"].includes(nextOutcome)) lead.closingOutcome = nextOutcome;
@@ -1520,7 +1550,7 @@ export const server = http.createServer(async (req, res) => {
       const hasPaymentsUpdate = Object.prototype.hasOwnProperty.call(body, "payments");
       const hasLeadFieldUpdate =
         ["fullName", "phone", "email", "source", "budget", "assignedTo"].some((key) => Object.prototype.hasOwnProperty.call(body, key)) ||
-        ["sourceLeadId", "sourcePlatform", "sourceCampaignId", "sourceFormId", "assignedAt", "firstContactAt", "lastContactAt", "slaDueAt", "closingOutcome", "lossReason", "lossDetail"].some((key) =>
+        ["sourceLeadId", "sourcePlatform", "sourceCampaignId", "sourceFormId", "assignedAt", "firstContactAt", "lastContactAt", "slaDueAt", "practiceReview", "closingOutcome", "lossReason", "lossDetail"].some((key) =>
           Object.prototype.hasOwnProperty.call(body, key)
         );
       if (Object.prototype.hasOwnProperty.call(body, "documents")) {
