@@ -1,0 +1,144 @@
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.ui-button-md {
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.ui-button-sm {
+  min-height: 32px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+
+.ui-button-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.ui-button-primary {
+  color: #fff;
+  background: var(--action-primary);
+  border-color: var(--action-primary);
+}
+
+.ui-button-primary:hover {
+  background: var(--action-primary-hover);
+  border-color: var(--action-primary-hover);
+}
+
+.ui-button-secondary {
+  color: var(--text-strong);
+  background: #fff;
+  border-color: var(--border-default);
+}
+
+.ui-button-secondary:hover,
+.ui-button-ghost:hover {
+  background: var(--surface-soft);
+  border-color: var(--border-strong);
+}
+
+.ui-button-ghost {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.ui-button-danger {
+  color: #a63d45;
+  background: #fff5f5;
+  border-color: #efc8cc;
+}
+
+.ui-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.ui-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ui-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.ui-page-state {
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--text-secondary);
+}
+
+.ui-page-state.compact {
+  min-height: 72px;
+  justify-content: flex-start;
+  padding: 14px 16px;
+}
+
+.ui-page-state-icon {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--action-primary);
+  background: var(--surface-info);
+}
+
+.ui-page-state-error .ui-page-state-icon {
+  color: #b5474f;
+  background: #fff0f1;
+}
+
+.ui-page-state-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.ui-page-state-copy strong {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.ui-page-state-copy span {
+  font-size: 12px;
+}
+
+.ui-spin {
+  animation: ui-spin 0.9s linear infinite;
+}
+
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-button,
+  .ui-spin {
+    transition: none;
+    animation: none;
+  }
+}

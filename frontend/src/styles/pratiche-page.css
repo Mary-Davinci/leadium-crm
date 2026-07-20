@@ -1064,6 +1064,52 @@
   font-weight: 700;
 }
 
+.pr-call-choice-group {
+  display: grid;
+  gap: 7px;
+}
+
+.pr-call-choice-label {
+  color: #2b4a75;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pr-call-choice-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pr-call-choice-row-four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pr-call-choice-row button {
+  min-height: 42px;
+  border: 1px solid #d5e0ee;
+  border-radius: 8px;
+  background: #fbfdff;
+  color: #405a7d;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  box-shadow: none;
+}
+
+.pr-call-choice-row button:hover {
+  border-color: #c4d3e7;
+  background: #ffffff;
+}
+
+.pr-call-choice-row button.active {
+  border-color: #8fb1dc;
+  background: #eef5ff;
+  color: #254c7d;
+  box-shadow: inset 0 0 0 1px rgba(61, 121, 207, 0.12);
+}
+
 .pr-call-modal-grid select,
 .pr-call-modal-grid input,
 .pr-call-modal-grid textarea {
@@ -1193,5 +1239,10 @@
 
   .pr-call-modal {
     padding: 14px;
+  }
+
+  .pr-call-choice-row,
+  .pr-call-choice-row-four {
+    grid-template-columns: 1fr;
   }
 }

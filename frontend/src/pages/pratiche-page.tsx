@@ -40,6 +40,8 @@ const PRACTICE_READY_STATUS = "pronta per chiusura";
 const PRACTICE_CLOSED_STATUS = "chiusa 100";
 
 type PracticeView = "active" | "ready" | "closed";
+type CallConnection = "answered" | "no_answer" | "busy";
+type AnsweredCallOutcome = "completed" | "interested" | "call_back" | "not_interested";
 
 function getPracticeViewFromStatus(status?: string | null): PracticeView {
   const normalized = String(status || "").trim().toLowerCase();
@@ -193,7 +195,8 @@ export function PratichePage() {
   const [error, setError] = useState("");
   const [callModalLead, setCallModalLead] = useState<Lead | null>(null);
   const [callSubmitting, setCallSubmitting] = useState(false);
-  const [callOutcome, setCallOutcome] = useState<CallOutcome>("completed");
+  const [callConnection, setCallConnection] = useState<CallConnection>("answered");
+  const [answeredCallOutcome, setAnsweredCallOutcome] = useState<AnsweredCallOutcome>("completed");
   const [callNote, setCallNote] = useState("");
   const [callCreateFollowUp, setCallCreateFollowUp] = useState(false);
   const [callFollowUpAt, setCallFollowUpAt] = useState(defaultFollowUpAt);
@@ -208,6 +211,7 @@ export function PratichePage() {
     () => leads.find((lead) => lead.id === selectedLeadId) || null,
     [leads, selectedLeadId]
   );
+  const resolvedCallOutcome: CallOutcome = callConnection === "answered" ? answeredCallOutcome : callConnection;
 
   function normalizeIdentity(value?: string | null) {
     return String(value || "").trim().toLocaleLowerCase("it");
@@ -287,6 +291,10 @@ export function PratichePage() {
     return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   }
 
+  function getBusyFollowUpAt() {
+    return new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  }
+
   async function createAutoFollowUp(lead: Lead, dueAt: string, description: string) {
     await api("/api/tasks", {
       method: "POST",
@@ -314,12 +322,40 @@ export function PratichePage() {
 
   function openCallOutcomeModal(lead: Lead, callMeta?: { startedAt?: string; requestKey?: string }) {
     setCallModalLead(lead);
-    setCallOutcome("completed");
+    setCallConnection("answered");
+    setAnsweredCallOutcome("completed");
     setCallNote("");
     setCallCreateFollowUp(false);
     setCallFollowUpAt(defaultFollowUpAt);
     setCallStartedAt(callMeta?.startedAt || new Date().toISOString());
     setCallRequestKey(callMeta?.requestKey || `callreq_${lead.id}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`);
+  }
+
+  function selectCallConnection(nextConnection: CallConnection) {
+    setCallConnection(nextConnection);
+    if (nextConnection === "answered") {
+      setCallCreateFollowUp(false);
+      setCallFollowUpAt(defaultFollowUpAt);
+    }
+    if (nextConnection === "busy") {
+      setCallCreateFollowUp(true);
+      setCallFollowUpAt(getBusyFollowUpAt());
+    }
+    if (nextConnection === "no_answer") {
+      setCallCreateFollowUp(false);
+      setCallFollowUpAt(defaultFollowUpAt);
+    }
+  }
+
+  function selectAnsweredCallOutcome(nextOutcome: AnsweredCallOutcome) {
+    setAnsweredCallOutcome(nextOutcome);
+    if (nextOutcome === "call_back") {
+      setCallCreateFollowUp(false);
+      setCallFollowUpAt(defaultFollowUpAt);
+    }
+    if (nextOutcome === "not_interested") {
+      setCallCreateFollowUp(false);
+    }
   }
 
   async function loadPratiche() {
@@ -417,6 +453,7 @@ export function PratichePage() {
       const targetLeadId = callModalLead.id;
       const endedAt = new Date().toISOString();
       const previousStatus = callModalLead.status;
+      const callOutcome = resolvedCallOutcome;
       const hasAutomaticFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
       const closesPractice = callOutcome === "not_interested";
       const automatedFollowUpAt =
@@ -877,8 +914,8 @@ export function PratichePage() {
     navigate(buildPracticeUrl(lead.id));
   }
 
-  const modalAutoFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
-  const modalClosedOutcome = callOutcome === "not_interested";
+  const modalAutoFollowUp = resolvedCallOutcome === "call_back" || resolvedCallOutcome === "no_answer";
+  const modalClosedOutcome = resolvedCallOutcome === "not_interested";
   const isQuickDetailVisible = Boolean(selectedLeadId);
   const pageTitle =
     practiceView === "closed"
@@ -1127,17 +1164,64 @@ export function PratichePage() {
             </div>
 
             <div className="pr-call-modal-grid">
-              <label>
-                Esito
-                <select value={callOutcome} onChange={(event) => setCallOutcome(event.target.value as CallOutcome)}>
-                  <option value="completed">Completata</option>
-                  <option value="no_answer">Nessuna risposta</option>
-                  <option value="busy">Occupato</option>
-                  <option value="call_back">Da richiamare</option>
-                  <option value="interested">Interessato</option>
-                  <option value="not_interested">Non interessato</option>
-                </select>
-              </label>
+              <div className="pr-call-choice-group">
+                <span className="pr-call-choice-label">Esito chiamata</span>
+                <div className="pr-call-choice-row" role="group" aria-label="Esito chiamata">
+                  <button
+                    type="button"
+                    className={callConnection === "answered" ? "active" : ""}
+                    onClick={() => selectCallConnection("answered")}
+                  >
+                    Ha risposto
+                  </button>
+                  <button
+                    type="button"
+                    className={callConnection === "no_answer" ? "active" : ""}
+                    onClick={() => selectCallConnection("no_answer")}
+                  >
+                    Nessuna risposta
+                  </button>
+                  <button type="button" className={callConnection === "busy" ? "active" : ""} onClick={() => selectCallConnection("busy")}>
+                    Occupato
+                  </button>
+                </div>
+              </div>
+
+              {callConnection === "answered" ? (
+                <div className="pr-call-choice-group">
+                  <span className="pr-call-choice-label">Esito cliente</span>
+                  <div className="pr-call-choice-row pr-call-choice-row-four" role="group" aria-label="Esito cliente">
+                    <button
+                      type="button"
+                      className={answeredCallOutcome === "interested" ? "active" : ""}
+                      onClick={() => selectAnsweredCallOutcome("interested")}
+                    >
+                      Interessato
+                    </button>
+                    <button
+                      type="button"
+                      className={answeredCallOutcome === "call_back" ? "active" : ""}
+                      onClick={() => selectAnsweredCallOutcome("call_back")}
+                    >
+                      Da richiamare
+                    </button>
+                    <button
+                      type="button"
+                      className={answeredCallOutcome === "not_interested" ? "active" : ""}
+                      onClick={() => selectAnsweredCallOutcome("not_interested")}
+                    >
+                      Non interessato
+                    </button>
+                    <button
+                      type="button"
+                      className={answeredCallOutcome === "completed" ? "active" : ""}
+                      onClick={() => selectAnsweredCallOutcome("completed")}
+                    >
+                      Contatto completato
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               <label className="pr-call-modal-note">
                 Nota breve
@@ -1149,11 +1233,19 @@ export function PratichePage() {
               </label>
 
               {modalAutoFollowUp ? (
-                <div className="pr-call-hint">
-                  {callOutcome === "call_back"
-                    ? "Follow-up automatico: verra impostato un richiamo con la data selezionata."
-                    : "Follow-up automatico: verra creato un richiamo per domani."}
-                </div>
+                <>
+                  <div className="pr-call-hint">
+                    {resolvedCallOutcome === "call_back"
+                      ? "Follow-up automatico: verra impostato un richiamo con la data selezionata."
+                      : "Follow-up automatico: verra creato un richiamo per domani."}
+                  </div>
+                  {resolvedCallOutcome === "call_back" ? (
+                    <label>
+                      Data richiamo
+                      <input type="datetime-local" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
+                    </label>
+                  ) : null}
+                </>
               ) : !modalClosedOutcome ? (
                 <>
                   <label className="pr-call-check">

@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
+import { Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { getAuthUser } from "../lib/auth";
@@ -12,47 +13,6 @@ import {
   setTaskBoardCache
 } from "../store/crm-store";
 import "../styles/dashboard-page.css";
-
-function IconCallback() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 4a8 8 0 1 0 7.4 11H17v-2h6v6h-2v-2.2A10 10 0 1 1 12 2v2z" fill="currentColor" />
-    </svg>
-  );
-}
-
-function IconChat() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm2 5h12v2H6V9zm0-3h12v2H6V6zm0 6h8v2H6v-2z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
-function IconDocument() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V7h3.5L13 3.5zM8 10h8v2H8v-2zm0 4h8v2H8v-2zm0 4h6v2H8v-2z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
-function IconPayment() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 3v2h16V8H4zm5 5h2v4h2v-4h2l-3-3-3 3z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
 
 type Lead = {
   id: string;
@@ -376,7 +336,7 @@ export function DashboardPage() {
       <section className="panel dash-op-toolbar">
         <div className="dash-op-toolbar-left">
           <div className="dash-op-search">
-          
+            <Search className="dash-op-search-icon" size={16} aria-hidden="true" />
             <input
               type="search"
               value={search}

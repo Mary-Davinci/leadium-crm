@@ -1,6 +1,7 @@
 import { ReactElement, Suspense, lazy, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "./layout/app-layout";
+import { PageState } from "./components/ui/page-state";
 import { fetchMe, getAuthToken, getAuthUser } from "./lib/auth";
 import { CallsPage } from "./pages/calls-page";
 import { CallBridgePage } from "./pages/call-bridge-page";
@@ -68,7 +69,7 @@ function RequireAdmin({ children }: { children: ReactElement }) {
 
 export default function App() {
   return (
-    <Suspense fallback={<div className="muted">Caricamento...</div>}>
+    <Suspense fallback={<PageState kind="loading" title="Caricamento area di lavoro" />}>
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<LoginPage />} />

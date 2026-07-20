@@ -25,8 +25,18 @@ CRM operativo per gestione lead, pratiche, task, chiamate e inbox WhatsApp.
 frontend/
 backend/
 docs/
+design-system/
 scripts/
 ```
+
+## Design system
+Le regole UI/UX operative del CRM sono in:
+
+```text
+design-system/MASTER.md
+```
+
+Prima di modificare pagine, modali, liste o dashboard, usare quel file come riferimento. Il progetto privilegia chiarezza operativa, densita leggibile e flussi guidati rispetto a decorazioni o componenti duplicati.
 
 ## Installazione
 Installa le dipendenze nei due workspace:

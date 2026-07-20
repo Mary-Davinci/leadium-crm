@@ -5,6 +5,20 @@
   --text: #1b2a40;
   --primary: #225fb6;
   --sidebar: #132036;
+  --surface-app: #edf1f6;
+  --surface-panel: #ffffff;
+  --surface-soft: #f7f9fc;
+  --surface-info: #edf5ff;
+  --border-default: #d5deea;
+  --border-strong: #bdccdf;
+  --text-strong: #1b2a40;
+  --text-secondary: #617795;
+  --action-primary: #2e66b7;
+  --action-primary-hover: #24579f;
+  --radius-control: 8px;
+  --radius-panel: 8px;
+  --shadow-panel: 0 4px 14px rgba(21, 36, 58, 0.06);
+  --focus-ring: 0 0 0 3px rgba(61, 121, 207, 0.18);
   --status-new-bg: #e6f0ff;
   --status-new-border: #bed4fb;
   --status-new-text: #2f5fa8;
@@ -30,15 +44,15 @@ body {
   margin: 0;
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
   color: var(--text);
-  background: #e9edf3;
+  background: var(--surface-app);
 }
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   padding: 10px;
-  box-shadow: 0 5px 12px rgba(21, 36, 58, 0.07);
+  box-shadow: var(--shadow-panel);
 }
 
 .panel h3 {
@@ -74,7 +88,7 @@ body {
   border: 1px solid #d2ddea;
   background: #fff;
   color: #244061;
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   min-height: 36px;
   padding: 7px 12px;
   font-size: 13px;
