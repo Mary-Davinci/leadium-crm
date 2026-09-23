@@ -30,5 +30,21 @@
     "body": "Ciao, abbiamo un aggiornamento sulla tua prenotazione.",
     "category": "utility",
     "suggestionTag": "generic"
+  },
+  {
+    "key": "reschedule_callback",
+    "name": "reschedule_callback",
+    "label": "Ricontattami",
+    "body": "Ciao, se preferisci essere richiamato in un altro momento facci sapere quando: ti richiamiamo noi.",
+    "category": "followup",
+    "suggestionTag": "callback"
+  },
+  {
+    "key": "not_interested_ack",
+    "name": "not_interested_ack",
+    "label": "Non interessato",
+    "body": "Ciao, grazie per averci contattato. Se in futuro dovessi essere di nuovo interessato, siamo a disposizione.",
+    "category": "followup",
+    "suggestionTag": "not_interested"
   }
 ]

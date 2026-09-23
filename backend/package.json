@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx services/scripts/dev-stack.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node dist/services/lead-service/task-sync.spec.js",
+    "test": "npm run build && node dist/services/lead-service/task-sync.spec.js && node dist/services/lead-service/customer-lifecycle.spec.js && node dist/services/analytics-service/marketing-export.spec.js && node dist/services/lead-service/booking-workflow.spec.js && node dist/services/lead-service/booking-report.spec.js && node dist/services/api-gateway/authorization-rules.spec.js && node dist/services/api-gateway/session-token.spec.js && node dist/services/api-gateway/password-hashing.spec.js && node dist/services/api-gateway/auth-store.spec.js && node dist/services/api-gateway/document-storage.spec.js && node dist/services/api-gateway/permission-matrix.spec.js && node dist/services/whatsapp-service/identity-association.spec.js",
     "start": "node dist/services/scripts/dev-stack.js",
     "dev:gateway": "tsx services/api-gateway/server.ts",
     "dev:lead": "tsx services/lead-service/server.ts",
@@ -15,7 +15,8 @@
     "dev:call": "tsx services/call-service/server.ts",
     "dev:analytics": "tsx services/analytics-service/server.ts",
     "dev:ingest": "tsx services/ingest-service/server.ts",
-    "dev:whatsapp": "tsx services/whatsapp-service/server.ts"
+    "dev:whatsapp": "tsx services/whatsapp-service/server.ts",
+    "backfill:customers": "tsx services/scripts/backfill-customers.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",

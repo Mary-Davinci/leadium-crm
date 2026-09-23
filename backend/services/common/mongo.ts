@@ -18,13 +18,21 @@ async function ensureIndexes(database: any) {
   const leads = database.collection("leads");
   const activities = database.collection("activities");
   const callLogs = database.collection("callLogs");
+  const customers = database.collection("customers");
+  const purchases = database.collection("purchases");
   await Promise.all([
     leads.createIndex({ phoneNormalized: 1 }),
     leads.createIndex({ emailNormalized: 1 }),
     leads.createIndex({ status: 1 }),
     leads.createIndex({ updatedAt: -1 }),
+    leads.createIndex({ customerId: 1 }),
     activities.createIndex({ leadId: 1, createdAt: -1 }),
-    callLogs.createIndex({ leadId: 1, startedAt: -1 })
+    callLogs.createIndex({ leadId: 1, startedAt: -1 }),
+    customers.createIndex({ phoneNormalized: 1 }),
+    customers.createIndex({ emailNormalized: 1 }),
+    purchases.createIndex({ customerId: 1 }),
+    purchases.createIndex({ leadId: 1 }),
+    purchases.createIndex({ status: 1 })
   ]);
   indexesReady = true;
 }

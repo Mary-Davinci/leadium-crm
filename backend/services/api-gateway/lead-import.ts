@@ -1,5 +1,6 @@
 import { createActivity } from "../common/automation";
 import { createLead, findLeadByContact, newId, normalizeEmail, normalizePhone } from "../common/leadStore";
+import { findOrCreateCustomerByContact } from "../common/customerStore";
 import { LEAD_STATUSES } from "../common/workflow";
 
 export type LeadImportCandidateInput = {
@@ -233,6 +234,7 @@ export async function applyLeadImport(
 
   for (const row of prepared.readyRows) {
     const now = new Date().toISOString();
+    const customer = await findOrCreateCustomerByContact({ phone: row.phone, email: row.email, fullName: row.fullName });
     const lead = {
       id: newId("lead"),
       fullName: row.fullName,
@@ -243,6 +245,7 @@ export async function applyLeadImport(
       assignedTo: "",
       status: prepared.status,
       notes: row.notes,
+      customerId: customer?.id || null,
       documents: { items: [] },
       payments: { items: [] },
       latestCallOutcome: null,

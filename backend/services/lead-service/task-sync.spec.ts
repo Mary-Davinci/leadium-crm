@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-const TEST_DB_FILE = path.join(process.cwd(), "backend", "data", "db.task-sync.test.json");
+const BACKEND_ROOT = path.join(__dirname, "..", "..", "..");
+const TEST_DB_FILE = path.join(BACKEND_ROOT, "data", "db.task-sync.test.json");
 
 process.env.NODE_ENV = "test";
 process.env.JSON_DB_FILE = TEST_DB_FILE;

@@ -16,8 +16,14 @@ import {
   normalizePhone,
   saveLead
 } from "../common/leadStore";
-import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listCallLogs, listCallLogsByLeadId } from "../common/callStore";
+import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listAllCallLogs, listCallLogs, listCallLogsByLeadId } from "../common/callStore";
 import { createTask, findRecentManualDuplicate, getTaskById, listTasks, listTasksByLeadAndKind, saveTask, TaskRecord } from "../common/taskStore";
+import { findOrCreateCustomerByContact } from "../common/customerStore";
+import { createPurchase, listAllPurchases, PurchaseRecord } from "../common/purchaseStore";
+import { isActiveLeadInvariantSatisfied } from "../common/leadInvariants";
+import { resolveLeadAssociationForPhone, tryHandleCustomerRoutes } from "./customer-routes";
+import { rowsToCsv } from "../common/csv";
+import { BOOKING_ACTIVITY_HEADERS, BookingActivityFilters, buildBookingActivityCsvRows, buildBookingActivityRows, filterBookingActivityRows } from "./booking-report";
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.LEAD_SERVICE_PORT || 4301);
@@ -31,9 +37,18 @@ const AUTOMATIC_TASK_KINDS = [
   "document_checklist",
   "payment_checklist",
   "post_sale_gadget",
-  "post_sale_tickets"
+  "post_sale_tickets",
+  "callback_reminder",
+  "quote_preparation",
+  "appointment_reminder"
 ] as const;
 type AutomaticTaskKind = (typeof AUTOMATIC_TASK_KINDS)[number];
+
+// Task kinds that represent an actual commercial next-step for the active
+// lead invariant. Deliberately excludes document/payment checklist and
+// post-sale tasks: those track paperwork state, not "what happens next" for
+// an in-progress commercial activity, and are open on almost every lead.
+const COMMERCIAL_FOLLOW_UP_TASK_KINDS = new Set<AutomaticTaskKind>(["next_action", "callback_reminder", "quote_preparation", "appointment_reminder"]);
 
 function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
@@ -165,6 +180,22 @@ function isDisqualifiedStatus(status: string) {
 
 function requiresExplicitLossReason(status: string) {
   return status === LEAD_STATUSES.LOST;
+}
+
+/**
+ * Whether a contact from this person should spawn a brand-new opportunity
+ * instead of merging into this lead. Deliberately narrower than the full
+ * "won" closingOutcome bucket: SOLD/GADGET_SENT/TICKETS_SENT/READY_TO_CLOSE
+ * are still an in-flight post-sale process for the same purchase, so a
+ * recontact during that window should keep merging into it as before. Only
+ * a fully closed practice (or a lost/disqualified one) is a finished
+ * relationship where a new inbound contact means a new opportunity.
+ */
+function isTerminalClosingOutcome(lead: any) {
+  const outcome = String(lead?.closingOutcome || "open");
+  if (outcome === "lost" || outcome === "disqualified") return true;
+  if (outcome === "won") return String(lead?.status || "") === LEAD_STATUSES.CLOSED_FULL;
+  return false;
 }
 
 function deriveClosingOutcome(status: string) {
@@ -345,6 +376,7 @@ function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
     closingOutcome: lead.closingOutcome || "open",
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
+    customerId: lead.customerId || null,
     metaEventSync: lead.metaEventSync || null,
     practiceReview: lead.practiceReview || null,
     documents: compactLeadDocumentsForResponse(lead.documents, options),
@@ -352,6 +384,7 @@ function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
     latestCallOutcome: lead.latestCallOutcome || null,
     latestCallAt: lead.latestCallAt || null,
     callAttempts: lead.callAttempts || 0,
+    secondAttemptPending: getSecondAttemptPending(lead),
     nextActionAt: lead.nextActionAt || null,
     createdAt: lead.createdAt,
     updatedAt: lead.updatedAt
@@ -390,6 +423,8 @@ export function normalizePracticeDocuments(input: any) {
         verified: Boolean(existing.verified),
         note: String(existing.note || ""),
         updatedAt: existing.updatedAt ? String(existing.updatedAt) : undefined,
+        verifiedAt: existing.verifiedAt ? String(existing.verifiedAt) : undefined,
+        verifiedBy: existing.verifiedBy ? String(existing.verifiedBy) : undefined,
         attachments: Array.isArray(existing.attachments)
           ? existing.attachments.map((attachment: any) => ({
               id: String(attachment?.id || newId("doc")),
@@ -399,7 +434,8 @@ export function normalizePracticeDocuments(input: any) {
               dataUrl: String(attachment?.dataUrl || ""),
               storageKey: String(attachment?.storageKey || ""),
               storageProvider: String(attachment?.storageProvider || ""),
-              uploadedAt: attachment?.uploadedAt ? String(attachment.uploadedAt) : new Date().toISOString()
+              uploadedAt: attachment?.uploadedAt ? String(attachment.uploadedAt) : new Date().toISOString(),
+              uploadedBy: String(attachment?.uploadedBy || "")
             }))
           : []
       };
@@ -581,6 +617,65 @@ export async function syncPaymentChecklistTask(lead: any) {
 
   await dismissDuplicateTasks(paymentTasks, "payment_checklist", "payments_sync");
 }
+
+/**
+ * Booking-workflow reminder: creates or re-syncs a single open task tracking
+ * a follow-up commitment (callback, quote preparation, appointment) for this
+ * lead. Mirrors the document/payment checklist sync pattern above so it gets
+ * the same dedup/idempotency guarantees via dismissDuplicateTasks.
+ */
+async function syncFollowUpTask(lead: any, kind: AutomaticTaskKind, title: string, description: string, dueAt: string, priority = 70) {
+  const existingTasks = await listTasksByLeadAndKind(lead.id, kind);
+  const existing = existingTasks[0] || null;
+  const expectedMeta = { status: lead.status, phone: lead.phone || "" };
+
+  if (!existing) {
+    await createTask({
+      leadId: lead.id,
+      assignedTo: lead.assignedTo || "",
+      kind,
+      title,
+      description,
+      source: "automation",
+      status: "open",
+      priority,
+      dueAt,
+      meta: expectedMeta
+    });
+  } else {
+    const hasChanged =
+      existing.assignedTo !== (lead.assignedTo || "") ||
+      existing.title !== title ||
+      existing.description !== description ||
+      existing.dueAt !== dueAt ||
+      existing.status !== "open";
+    if (hasChanged) {
+      existing.assignedTo = lead.assignedTo || "";
+      existing.title = title;
+      existing.description = description;
+      existing.dueAt = dueAt;
+      existing.status = "open";
+      existing.meta = expectedMeta;
+      existing.updatedAt = new Date().toISOString();
+      await saveTask(existing);
+    }
+  }
+
+  await dismissDuplicateTasks(existingTasks, kind, `${kind}_sync`);
+}
+
+/** Marks any open follow-up task of this kind for the lead as done. */
+async function resolveFollowUpTask(lead: any, kind: AutomaticTaskKind) {
+  const existingTasks = await listTasksByLeadAndKind(lead.id, kind);
+  for (const task of existingTasks) {
+    if (task.status === "open") {
+      task.status = "done";
+      task.updatedAt = new Date().toISOString();
+      await saveTask(task);
+    }
+  }
+}
+
 export function getEndOfTodayIso() {
   const now = new Date();
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 18, 0, 0, 0);
@@ -704,6 +799,9 @@ function getBoardLeadSummary(lead: any) {
     closingOutcome: lead.closingOutcome || "open",
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
+    customerId: lead.customerId || null,
+    callAttempts: lead.callAttempts || 0,
+    secondAttemptPending: getSecondAttemptPending(lead),
     documentsMissingCount: getMissingDocumentsSummaryCount(lead),
     updatedAt: String(lead.updatedAt || ""),
     createdAt: String(lead.createdAt || "")
@@ -765,10 +863,12 @@ function getLeadListSummary(lead: any) {
     closingOutcome: lead.closingOutcome || "open",
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
+    customerId: lead.customerId || null,
     practiceReview: lead.practiceReview || null,
     latestCallOutcome: lead.latestCallOutcome || null,
     latestCallAt: lead.latestCallAt || null,
     callAttempts: lead.callAttempts || 0,
+    secondAttemptPending: getSecondAttemptPending(lead),
     nextActionAt: lead.nextActionAt || null,
     documentsMissingCount: getMissingDocumentsSummaryCount(lead),
     pendingPaymentsCount: getPendingPaymentsSummaryCount(lead),
@@ -825,6 +925,30 @@ function getStatusFromCallDisposition(disposition: string) {
   if (normalized === "interested") return LEAD_STATUSES.INTERESTED;
   if (normalized === "not_interested") return LEAD_STATUSES.NOT_INTERESTED;
   return "";
+}
+
+const KNOWN_CALL_OUTCOMES = new Set([
+  "completed",
+  "no_answer",
+  "busy",
+  "call_back",
+  "interested",
+  "not_interested",
+  "quote_required",
+  "quote_sent",
+  "appointment_set",
+  "other"
+]);
+
+/**
+ * True once a lead has failed to answer at least twice in a row and is still
+ * sitting at NO_ANSWER: the guided "second contact" follow-up decision is
+ * still owed. Server-computed (not a stored counter) so it can never drift
+ * from callAttempts/status, and clears itself as soon as any other outcome
+ * is recorded.
+ */
+function getSecondAttemptPending(lead: any) {
+  return Number(lead.callAttempts || 0) >= 2 && String(lead.status || "") === LEAD_STATUSES.NO_ANSWER;
 }
 
 export async function ensureSlaTasks() {
@@ -1142,17 +1266,22 @@ async function handleCallEvent(body: any) {
 
   const eventType = body.eventType || "call_event";
   const disposition = body.disposition || "completed";
-  lead.updatedAt = new Date().toISOString();
-  markLeadContacted(lead, lead.updatedAt);
-  const activities = [
-    createActivity({
-      leadId: lead.id,
-      type: "3cx_event",
-      text: `Evento 3CX: ${eventType} (${disposition}).`,
-      actor: "3cx",
-      meta: { callId: body.callId || "", durationSeconds: body.durationSeconds || 0, from: body.from || "", to: body.to || "" }
-    })
-  ];
+  const callId = body.callId ? String(body.callId) : "";
+
+  // 3CX is known to retry webhook delivery. Without dedup keyed on the
+  // provider's own call id, a retried event would double-count callAttempts
+  // and log a duplicate activity/CallLog for the same physical call. When no
+  // callId is supplied we can't deduplicate, so we fall back to processing
+  // the event (matches the previous, pre-idempotent behavior for that case).
+  if (callId) {
+    const existingCall = await findCallLogByIdempotencyKey(lead.id, `3cx_${callId}`);
+    if (existingCall) return { ok: true, matched: true, leadId: lead.id, duplicate: true };
+  }
+
+  const now = new Date().toISOString();
+  lead.updatedAt = now;
+  markLeadContacted(lead, now);
+  const activities: ReturnType<typeof createActivity>[] = [];
   if (disposition === "no_answer") {
     const valid = await validateTransition(lead.status, LEAD_STATUSES.NO_ANSWER);
     if (valid) {
@@ -1160,6 +1289,37 @@ async function handleCallEvent(body: any) {
       activities.push(...applyStatusAutomation(lead, LEAD_STATUSES.NO_ANSWER, "3cx"));
     }
   }
+  // Operator-facing text avoids raw internal jargon (event type / disposition codes) and, for a
+  // missed call, states the attempt number right in the timeline line -- this is what actually
+  // answers "which attempt is this" without requiring the operator to count entries themselves.
+  const callEventText =
+    disposition === "no_answer"
+      ? `Chiamata da centralino: nessuna risposta (tentativo ${lead.callAttempts || 1}).`
+      : disposition === "busy"
+        ? "Chiamata da centralino: numero occupato."
+        : "Chiamata da centralino registrata.";
+  activities.unshift(
+    createActivity({
+      leadId: lead.id,
+      type: "3cx_event",
+      text: callEventText,
+      actor: "3cx",
+      meta: { eventType, callId, durationSeconds: body.durationSeconds || 0, from: body.from || "", to: body.to || "" }
+    })
+  );
+  const startedAt = body.startedAt ? String(body.startedAt) : now;
+  await createCallLog({
+    leadId: lead.id,
+    startedAt,
+    endedAt: body.endedAt ? String(body.endedAt) : now,
+    outcome: (KNOWN_CALL_OUTCOMES.has(disposition) ? disposition : "completed") as any,
+    actor: "3cx",
+    note: "",
+    idempotencyKey: callId ? `3cx_${callId}` : undefined,
+    source: "3cx"
+  });
+  lead.latestCallOutcome = disposition;
+  lead.latestCallAt = startedAt;
   await saveLead(lead);
   await appendActivities(activities);
   return { ok: true, matched: true, leadId: lead.id };
@@ -1228,11 +1388,49 @@ export const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, rows);
     }
 
+    if (method === "GET" && (pathname === "/report/booking-activities" || pathname === "/report/booking-activities/csv")) {
+      const filters: BookingActivityFilters = {
+        dateFrom: query.dateFrom,
+        dateTo: query.dateTo,
+        operatore: query.operatore,
+        campagna: query.campagna,
+        prodotto: query.prodotto,
+        canale: query.canale,
+        esito: query.esito,
+        statoLead: query.statoLead
+      };
+      const [callLogs, leads, purchases] = await Promise.all([listAllCallLogs(), listLeads({}), listAllPurchases()]);
+      const leadsById = new Map<string, any>(leads.map((lead: any) => [lead.id, lead]));
+      const purchasesByLeadId = new Map<string, PurchaseRecord[]>();
+      for (const purchase of purchases) {
+        if (!purchase.leadId) continue;
+        const bucket = purchasesByLeadId.get(purchase.leadId) || [];
+        bucket.push(purchase);
+        purchasesByLeadId.set(purchase.leadId, bucket);
+      }
+      for (const bucket of purchasesByLeadId.values()) {
+        bucket.sort((a, b) => new Date(b.purchasedAt || 0).getTime() - new Date(a.purchasedAt || 0).getTime());
+      }
+      const allRows = buildBookingActivityRows(callLogs, leadsById, purchasesByLeadId);
+      const filteredRows = filterBookingActivityRows(allRows, filters);
+
+      if (pathname === "/report/booking-activities/csv") {
+        const csv = rowsToCsv(BOOKING_ACTIVITY_HEADERS, buildBookingActivityCsvRows(filteredRows));
+        res.writeHead(200, {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="booking-activities.csv"`
+        });
+        res.end(csv);
+        return;
+      }
+      return sendJson(res, 200, { count: filteredRows.length, rows: filteredRows.slice(0, 500) });
+    }
+
     if (method === "POST" && pathname === "/leads") {
       const body = await parseBody(req);
       if (!body.fullName || !body.phone) return sendJson(res, 400, { error: "fullName e phone sono obbligatori." });
       const existing = await findLeadByContact(String(body.phone || ""), String(body.email || ""));
-      if (existing) {
+      if (existing && !isTerminalClosingOutcome(existing)) {
         const now = new Date().toISOString();
         let changed = false;
         if (!isMissing(body.fullName) && isMissing(existing.fullName)) {
@@ -1267,6 +1465,11 @@ export const server = http.createServer(async (req, res) => {
         }
         existing.updatedAt = now;
         existing.lastContactAt = existing.lastContactAt || null;
+        const existingCustomer = await findOrCreateCustomerByContact({ phone: existing.phone, email: existing.email, fullName: existing.fullName });
+        if (existingCustomer && existing.customerId !== existingCustomer.id) {
+          existing.customerId = existingCustomer.id;
+          changed = true;
+        }
         await saveLead(existing);
         const metaSync = await syncLeadToMetaCrm(existing, { stage: "initial", eventTime: existing.createdAt || now });
         await persistMetaSyncIfChanged(existing, metaSync);
@@ -1285,6 +1488,11 @@ export const server = http.createServer(async (req, res) => {
       const now = new Date().toISOString();
       const assignedTo = body.assignedTo ? String(body.assignedTo).trim() : "";
       const sourceFields = extractLeadSourceFields(body, body.source ? String(body.source) : "");
+      const contactCustomer = await findOrCreateCustomerByContact({
+        phone: body.phone,
+        email: body.email,
+        fullName: body.fullName
+      });
       const lead = {
         id: newId("lead"),
         fullName: String(body.fullName).trim(),
@@ -1303,6 +1511,7 @@ export const server = http.createServer(async (req, res) => {
         closingOutcome: "open",
         lossReason: null,
         lossDetail: null,
+        customerId: contactCustomer?.id || null,
         practiceReview: null,
         documents: normalizePracticeDocuments(body.documents),
         payments: normalizePracticePayments(body.payments),
@@ -1312,12 +1521,30 @@ export const server = http.createServer(async (req, res) => {
         updatedAt: now
       };
       syncLeadSlaState(lead);
-      await createLead(lead, [createActivity({ leadId: lead.id, type: "lead_created", text: "Lead creato.", actor: body.actor || "system" })]);
+      const creationActivities = [createActivity({ leadId: lead.id, type: "lead_created", text: "Lead creato.", actor: body.actor || "system" })];
+      if (existing) {
+        creationActivities.push(
+          createActivity({
+            leadId: lead.id,
+            type: "lead_new_opportunity",
+            text: `Nuova opportunita per un cliente gia noto (lead precedente ${existing.id}, esito "${existing.closingOutcome || "open"}").`,
+            actor: body.actor || "system",
+            meta: { previousLeadId: existing.id, previousClosingOutcome: existing.closingOutcome || "open" }
+          })
+        );
+      }
+      await createLead(lead, creationActivities);
       await syncDocumentChecklistTask(lead);
       await syncPaymentChecklistTask(lead);
       const metaSync = await syncLeadToMetaCrm(lead, { stage: "initial", eventTime: lead.createdAt || now });
       await persistMetaSyncIfChanged(lead, metaSync);
       return sendJson(res, 201, safeLead(lead));
+    }
+
+    if (method === "GET" && pathname === "/internal/lead-association") {
+      const phone = String(query.phone || "").trim();
+      if (!phone) return sendJson(res, 400, { error: "phone obbligatorio." });
+      return sendJson(res, 200, await resolveLeadAssociationForPhone(phone));
     }
 
     if (method === "POST" && pathname === "/internal/ingest") {
@@ -1331,13 +1558,15 @@ export const server = http.createServer(async (req, res) => {
       const actor = source;
       const now = new Date().toISOString();
       const sourceFields = extractLeadSourceFields(body, source);
-      if (existing) {
+      if (existing && !isTerminalClosingOutcome(existing)) {
         if (fullName && !existing.fullName) existing.fullName = fullName;
         if (phone && !existing.phone) existing.phone = phone;
         if (email && !existing.email) existing.email = email;
         applyLeadSourceFields(existing, sourceFields, false);
         existing.notes = appendNote(existing.notes, body.notes);
         existing.updatedAt = now;
+        const existingCustomer = await findOrCreateCustomerByContact({ phone: existing.phone, email: existing.email, fullName: existing.fullName });
+        if (existingCustomer) existing.customerId = existingCustomer.id;
         await saveLead(existing);
         const metaSync = await syncLeadToMetaCrm(existing, { stage: "initial", eventTime: existing.createdAt || now });
         await persistMetaSyncIfChanged(existing, metaSync);
@@ -1352,6 +1581,7 @@ export const server = http.createServer(async (req, res) => {
         ]);
         return sendJson(res, 200, { mode: "updated", lead: safeLead(existing) });
       }
+      const contactCustomer = await findOrCreateCustomerByContact({ phone, email, fullName });
       const lead = {
         id: newId("lead"),
         fullName: fullName || `Lead ${source}`,
@@ -1370,6 +1600,7 @@ export const server = http.createServer(async (req, res) => {
         closingOutcome: "open",
         lossReason: null,
         lossDetail: null,
+        customerId: contactCustomer?.id || null,
         practiceReview: null,
         documents: normalizePracticeDocuments(body.documents),
         payments: normalizePracticePayments(body.payments),
@@ -1379,7 +1610,7 @@ export const server = http.createServer(async (req, res) => {
         updatedAt: now
       };
       syncLeadSlaState(lead);
-      await createLead(lead, [
+      const ingestActivities = [
         createActivity({ leadId: lead.id, type: "lead_created", text: "Lead creato.", actor }),
         createActivity({
           leadId: lead.id,
@@ -1388,7 +1619,19 @@ export const server = http.createServer(async (req, res) => {
           actor,
           meta: { source, raw: body.raw || null }
         })
-      ]);
+      ];
+      if (existing) {
+        ingestActivities.push(
+          createActivity({
+            leadId: lead.id,
+            type: "lead_new_opportunity",
+            text: `Nuova opportunita per un cliente gia noto (lead precedente ${existing.id}, esito "${existing.closingOutcome || "open"}").`,
+            actor,
+            meta: { previousLeadId: existing.id, previousClosingOutcome: existing.closingOutcome || "open" }
+          })
+        );
+      }
+      await createLead(lead, ingestActivities);
       await syncDocumentChecklistTask(lead);
       await syncPaymentChecklistTask(lead);
       const metaSync = await syncLeadToMetaCrm(lead, { stage: "initial", eventTime: lead.createdAt || now });
@@ -1554,7 +1797,20 @@ export const server = http.createServer(async (req, res) => {
           Object.prototype.hasOwnProperty.call(body, key)
         );
       if (Object.prototype.hasOwnProperty.call(body, "documents")) {
-        lead.documents = normalizePracticeDocuments(body.documents);
+        // Uploading a document (or verifying it manually) most commonly happens through this
+        // generic PATCH, not the dedicated /documents/:documentId endpoint -- so the
+        // verifiedAt/verifiedBy audit fields need to be stamped here too, not only there.
+        const previousVerifiedByKey = new Map(normalizePracticeDocuments(lead.documents).items.map((item) => [item.key, item.verified]));
+        const incomingDocuments = normalizePracticeDocuments(body.documents);
+        const patchNow = new Date().toISOString();
+        incomingDocuments.items = incomingDocuments.items.map((item) => {
+          const wasVerified = previousVerifiedByKey.get(item.key) || false;
+          if (item.verified && !wasVerified && !item.verifiedAt) {
+            return { ...item, verifiedAt: patchNow, verifiedBy: String(body.actor || "chat") };
+          }
+          return item;
+        });
+        lead.documents = incomingDocuments;
       }
       if (Object.prototype.hasOwnProperty.call(body, "payments")) {
         lead.payments = normalizePracticePayments(body.payments);
@@ -1633,12 +1889,16 @@ export const server = http.createServer(async (req, res) => {
       documents.items = documents.items.map((item) => {
         if (String(item.key) !== documentId) return item;
         found = true;
+        const nextVerified = Object.prototype.hasOwnProperty.call(body, "verified") ? Boolean(body.verified) : item.verified;
+        const becameVerified = nextVerified && !item.verified;
         return {
           ...item,
           received: Object.prototype.hasOwnProperty.call(body, "received") ? Boolean(body.received) : item.received,
-          verified: Object.prototype.hasOwnProperty.call(body, "verified") ? Boolean(body.verified) : item.verified,
+          verified: nextVerified,
           note: Object.prototype.hasOwnProperty.call(body, "note") ? String(body.note || "") : item.note,
-          updatedAt: now
+          updatedAt: now,
+          verifiedAt: becameVerified ? now : item.verifiedAt,
+          verifiedBy: becameVerified ? String(body.actor || "chat") : item.verifiedBy
         };
       });
       if (!found) return sendJson(res, 404, { error: "Documento non trovato." });
@@ -1734,6 +1994,29 @@ export const server = http.createServer(async (req, res) => {
       await appendActivities(activities);
       const metaSync = await syncLeadToMetaCrm(lead, { stage: "status", eventTime: lead.updatedAt });
       await persistMetaSyncIfChanged(lead, metaSync);
+      if (lead.closingOutcome === "won" && body.purchase && Number(body.purchase.amount) > 0) {
+        const customerId = lead.customerId || (await findOrCreateCustomerByContact({ phone: lead.phone, email: lead.email, fullName: lead.fullName }))?.id;
+        if (customerId) {
+          if (!lead.customerId) {
+            lead.customerId = customerId;
+            await saveLead(lead);
+          }
+          await createPurchase({
+            customerId,
+            leadId: lead.id,
+            amount: Number(body.purchase.amount),
+            currency: String(body.purchase.currency || "EUR"),
+            status: "completed",
+            purchasedAt: body.purchase.purchasedAt ? String(body.purchase.purchasedAt) : lead.updatedAt,
+            product: body.purchase.product ? String(body.purchase.product) : null,
+            cruiseName: body.purchase.cruiseName || lead.cruiseName || null,
+            source: lead.source || null,
+            sourcePlatform: lead.sourcePlatform || null,
+            sourceCampaignId: lead.sourceCampaignId || null,
+            note: null
+          });
+        }
+      }
       return sendJson(res, 200, safeLead(lead));
     }
 
@@ -1755,21 +2038,70 @@ export const server = http.createServer(async (req, res) => {
           return sendJson(res, 200, safeLead(lead));
         }
       }
-      const disposition = body.disposition || "completed";
+      const disposition = String(body.disposition || "completed");
+      if (!KNOWN_CALL_OUTCOMES.has(disposition)) {
+        return sendJson(res, 400, { error: `Esito "${disposition}" non riconosciuto.` });
+      }
+
+      // Requirement: every recorded outcome must leave the lead with either a
+      // resolved/closed state or a well-formed next action. Validate BEFORE any
+      // mutation so a rejected request has zero side effects.
+      const callbackReason = String(body.callbackReason || "").trim();
+      const resolvedCallbackOperator = String(lead.assignedTo || body.assignedTo || "").trim();
+      if (disposition === "call_back") {
+        if (!body.followUpAt || Number.isNaN(new Date(String(body.followUpAt)).getTime())) {
+          return sendJson(res, 400, { error: "Data e ora del richiamo sono obbligatorie." });
+        }
+        if (!callbackReason) {
+          return sendJson(res, 400, { error: "Motivo del richiamo obbligatorio." });
+        }
+        if (!resolvedCallbackOperator) {
+          return sendJson(res, 400, { error: "Operatore responsabile del richiamo obbligatorio." });
+        }
+      }
+      if (disposition === "appointment_set" && (!body.followUpAt || Number.isNaN(new Date(String(body.followUpAt)).getTime()))) {
+        return sendJson(res, 400, { error: "Data e ora dell'appuntamento sono obbligatorie." });
+      }
+      if (disposition === "not_interested" && !String(body.lossReason || "").trim()) {
+        return sendJson(res, 400, { error: 'Motivo obbligatorio per l\'esito "Non interessato".' });
+      }
+      if (["completed", "other"].includes(disposition) && !body.followUpAt) {
+        const openLeadTasks = await listTasks({ leadId: lead.id, status: "open" });
+        const hasOpenTask = openLeadTasks.some((task) => COMMERCIAL_FOLLOW_UP_TASK_KINDS.has(task.kind as AutomaticTaskKind));
+        if (!isActiveLeadInvariantSatisfied(lead, { hasOpenOperationalTask: hasOpenTask, honorPreContactExemption: false })) {
+          return sendJson(res, 400, {
+            error: "Questo esito non definisce una prossima azione: indica un richiamo, un preventivo o un appuntamento, oppure chiudi la trattativa."
+          });
+        }
+      }
+
       const previousStatus = lead.status;
+      const previousAssignedTo = String(lead.assignedTo || "").trim();
       lead.updatedAt = new Date().toISOString();
       const startedAt = body.startedAt ? String(body.startedAt) : lead.updatedAt;
       const endedAt = body.endedAt ? String(body.endedAt) : lead.updatedAt;
       markLeadContacted(lead, endedAt);
       const note = body.note ? String(body.note) : "";
       if (body.followUpAt) lead.nextActionAt = String(body.followUpAt);
+      if (disposition === "call_back" && !lead.assignedTo && body.assignedTo) {
+        lead.assignedTo = String(body.assignedTo).trim();
+        syncLeadAssignmentState(lead, previousAssignedTo, lead.updatedAt);
+      }
       const activities = [
         createActivity({
           leadId: lead.id,
           type: "call",
           text: note.trim() ? `Chiamata registrata (${disposition}) - ${note.trim()}` : `Chiamata registrata (${disposition}).`,
           actor: body.actor || "operator",
-          meta: { durationSeconds: body.durationSeconds || 0, direction: body.direction || "outbound", phone: lead.phone, startedAt, endedAt, note }
+          meta: {
+            durationSeconds: body.durationSeconds || 0,
+            direction: body.direction || "outbound",
+            phone: lead.phone,
+            startedAt,
+            endedAt,
+            note,
+            callbackReason: disposition === "call_back" ? callbackReason : undefined
+          }
         })
       ];
       const nextStatus = getStatusFromCallDisposition(disposition);
@@ -1800,14 +2132,48 @@ export const server = http.createServer(async (req, res) => {
           activities.push(...applyStatusAutomation(lead, nextStatus, body.actor || "system"));
         }
       }
+
+      if (disposition === "call_back") {
+        await syncFollowUpTask(
+          lead,
+          "callback_reminder",
+          `Richiamare: ${lead.fullName || lead.phone || "lead"}`,
+          `Motivo: ${callbackReason}`,
+          String(lead.nextActionAt),
+          75
+        );
+        activities.push(createActivity({ leadId: lead.id, type: "callback_scheduled", text: `Richiamo programmato: ${callbackReason}.`, actor: body.actor || "operator", meta: { followUpAt: lead.nextActionAt, callbackReason } }));
+      } else {
+        await resolveFollowUpTask(lead, "callback_reminder");
+      }
+
+      if (disposition === "quote_required") {
+        const dueAt = body.followUpAt ? String(body.followUpAt) : getEndOfTodayIso();
+        await syncFollowUpTask(lead, "quote_preparation", `Preparare preventivo: ${lead.fullName || lead.phone || "lead"}`, "Preparare e inviare il preventivo al cliente.", dueAt, 80);
+        activities.push(createActivity({ leadId: lead.id, type: "quote_requested", text: "Preventivo richiesto dal cliente.", actor: body.actor || "operator" }));
+      }
+
+      if (disposition === "quote_sent") {
+        if (!lead.nextActionAt) lead.nextActionAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+        await resolveFollowUpTask(lead, "quote_preparation");
+        activities.push(createActivity({ leadId: lead.id, type: "quote_sent", text: "Preventivo inviato al cliente.", actor: body.actor || "operator", meta: { followUpAt: lead.nextActionAt } }));
+      }
+
+      if (disposition === "appointment_set") {
+        await syncFollowUpTask(lead, "appointment_reminder", `Appuntamento: ${lead.fullName || lead.phone || "lead"}`, "Appuntamento fissato con il cliente.", String(lead.nextActionAt), 78);
+        activities.push(createActivity({ leadId: lead.id, type: "appointment_set", text: "Appuntamento fissato con il cliente.", actor: body.actor || "operator", meta: { followUpAt: lead.nextActionAt } }));
+      }
+
       await createCallLog({
         leadId: lead.id,
         startedAt,
         endedAt,
-        outcome: disposition,
+        outcome: disposition as any,
         actor: body.actor || "operator",
         note,
-        idempotencyKey: idempotencyKey || undefined
+        idempotencyKey: idempotencyKey || undefined,
+        callbackReason: disposition === "call_back" ? callbackReason : undefined,
+        source: "manual"
       });
       lead.latestCallOutcome = disposition;
       lead.latestCallAt = startedAt;
@@ -1838,6 +2204,7 @@ export const server = http.createServer(async (req, res) => {
     }
 
     if (method === "POST" && pathname === "/internal/call-events") return sendJson(res, 200, await handleCallEvent(await parseBody(req)));
+    if (await tryHandleCustomerRoutes(method, pathname, req, res)) return;
     return sendJson(res, 404, { error: "Endpoint non trovato." });
   } catch (error: any) {
     return sendJson(res, 500, { error: error.message || "Errore interno." });

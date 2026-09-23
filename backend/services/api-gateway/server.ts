@@ -1,5 +1,6 @@
 import "../../loadEnv";
 import http from "http";
+import { createSessionToken } from "./session-token";
 import {
   authenticateUser,
   AuthCreateUserInput,
@@ -11,8 +12,16 @@ import {
   resetUserPassword,
   updateUser
 } from "./auth-store";
-import { createSignedDownload, createSignedUpload, deleteStoredObject, isDocumentStorageEnabled, uploadDocumentBuffer } from "./document-storage";
+import {
+  createSignedDownload,
+  createSignedUpload,
+  deleteStoredObject,
+  extractLeadIdFromStorageKey,
+  isDocumentStorageEnabled,
+  uploadDocumentBuffer
+} from "./document-storage";
 import { applyLeadImport, previewLeadImport } from "./lead-import";
+import { isTaskDismissBlocked, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.PORT || 4110);
@@ -26,6 +35,22 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5179";
 const SLA_FIRST_CONTACT_MINUTES = Number(process.env.SLA_FIRST_CONTACT_MINUTES || 5);
 const AUTH_SESSION_TTL_HOURS = Number(process.env.AUTH_SESSION_TTL_HOURS || 12);
 const DOCUMENT_UPLOAD_MAX_BYTES = Number(process.env.DOCUMENT_UPLOAD_MAX_BYTES || 8 * 1024 * 1024);
+// Practice documents are identity papers, contracts, and payment confirmations -- images and PDFs
+// cover every real case today. Deliberately excludes SVG/HTML and other script-capable types.
+const DOCUMENT_ALLOWED_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+]);
+
+function isAllowedDocumentMime(mimeType: string) {
+  return DOCUMENT_ALLOWED_MIME_TYPES.has(String(mimeType || "").trim().toLowerCase());
+}
 const PRACTICE_READY_STATUS = "Pronta per chiusura";
 const PRACTICE_CLOSED_STATUS = "Chiusa 100%";
 const PRACTICE_REOPEN_STATUS = "Invio biglietti";
@@ -90,9 +115,15 @@ type SessionRecord = {
 
 const sessions = new Map<string, SessionRecord>();
 
-function randomToken() {
-  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+// Login always requires Mongo (see auth-store.ts), which isn't available in this local/test
+// environment (see JSON_DB_FILE fallback used everywhere else). This lets tests exercise the
+// real session-lookup code path (getSessionFromRequest reads the same Map) without a live Mongo.
+export function __setTestSession(token: string, user: AuthPublicUser, ttlMs = 60 * 60 * 1000) {
+  if (process.env.NODE_ENV !== "test") throw new Error("__setTestSession e disponibile solo in test.");
+  sessions.set(token, { token, user, expiresAt: Date.now() + ttlMs });
 }
+
+const randomToken = createSessionToken;
 
 function getTokenFromRequest(req: http.IncomingMessage) {
   const header = String(req.headers.authorization || "");
@@ -128,6 +159,62 @@ async function fetchLeadStatus(leadId: string) {
   }
   const payload = (await response.json()) as { lead?: { status?: string } };
   return String(payload?.lead?.status || "").trim();
+}
+
+async function fetchLeadStatusForDocumentAuthorization(leadId: string): Promise<{ exists: boolean; status: string }> {
+  const response = await fetch(`${LEAD_URL}/leads/${leadId}`);
+  if (response.status === 404) return { exists: false, status: "" };
+  if (!response.ok) {
+    throw new Error("Impossibile verificare lo stato attuale della pratica.");
+  }
+  const payload = (await response.json()) as { lead?: { status?: string } };
+  return { exists: true, status: String(payload?.lead?.status || "").trim() };
+}
+
+type DocumentAccessResult = { ok: true; leadId: string } | { ok: false; status: number; error: string };
+
+/**
+ * Authorization for an existing stored document (download/delete) must be derived from the
+ * storageKey itself, never trust a client-supplied leadId: previously presign-download/delete
+ * took leadId from the request body, so a caller could send a real storageKey for a locked/other
+ * practice alongside a wrong or omitted leadId and skip the lock-check entirely (P1). This also
+ * rejects a storageKey whose embedded leadId doesn't correspond to any real lead, which the old
+ * check silently allowed (a failed status lookup was swallowed and treated as "not locked").
+ */
+async function resolveDocumentAccess(storageKey: string, session: { user: AuthPublicUser }): Promise<DocumentAccessResult> {
+  let leadId: string | null;
+  try {
+    leadId = extractLeadIdFromStorageKey(storageKey);
+  } catch (error: any) {
+    return { ok: false, status: 400, error: error.message || "storageKey non valido." };
+  }
+  if (!leadId) {
+    return { ok: false, status: 400, error: "storageKey non valido." };
+  }
+  const { exists, status } = await fetchLeadStatusForDocumentAuthorization(leadId);
+  if (!exists) {
+    return { ok: false, status: 404, error: "Pratica non trovata per questo documento." };
+  }
+  if (!isAdmin(session.user) && (status === PRACTICE_READY_STATUS || status === PRACTICE_CLOSED_STATUS)) {
+    return { ok: false, status: 403, error: "Questa pratica e riservata alla supervisione admin." };
+  }
+  return { ok: true, leadId };
+}
+
+/**
+ * Mirrors the lead-scoped admin gate already applied to /api/leads/:id(...): a non-admin cannot
+ * touch a ready/closed practice. Document upload/delete previously had NO such check at all
+ * (client-side only, in pratica-detail-page.tsx), so a non-admin could bypass it with a direct
+ * API call. Callers pass leadId when they have it; when they don't (older client), the check is
+ * skipped rather than failing the request, so this stays backward compatible.
+ */
+async function assertDocumentPracticeNotLocked(leadId: string, session: { user: AuthPublicUser }): Promise<string | null> {
+  if (!leadId || isAdmin(session.user)) return null;
+  const currentStatus = await fetchLeadStatus(leadId).catch(() => "");
+  if (currentStatus === PRACTICE_READY_STATUS || currentStatus === PRACTICE_CLOSED_STATUS) {
+    return "Questa pratica e riservata alla supervisione admin.";
+  }
+  return null;
 }
 
 async function parseJsonBody(req: http.IncomingMessage) {
@@ -319,9 +406,23 @@ async function buildInbox() {
   };
 }
 
+// Unlike lead-service's own parseBody (capped at 1MB), this gateway-level
+// reader had no size limit at all -- any request, including to the public
+// /api/auth/login route, could make it buffer an unbounded body in memory.
+// 10MB comfortably covers inline base64 document attachments while bounding
+// the DoS surface.
+const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+
 async function readBody(req: http.IncomingMessage) {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > MAX_REQUEST_BODY_BYTES) {
+      throw new Error("Corpo della richiesta troppo grande.");
+    }
+    chunks.push(Buffer.from(chunk));
+  }
   return chunks.length ? Buffer.concat(chunks) : null;
 }
 
@@ -378,14 +479,18 @@ function mapApiRoute(pathname: string) {
   if (pathname.startsWith("/api/leads")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname.startsWith("/api/calls")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname.startsWith("/api/tasks")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
+  if (pathname.startsWith("/api/customers")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
+  if (pathname.startsWith("/api/purchases")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname === "/api/3cx/webhook") return { base: CALL_URL, path: "/3cx/webhook" };
   if (pathname === "/api/analytics/kpis") return { base: ANALYTICS_URL, path: "/kpis" };
+  if (pathname.startsWith("/api/analytics/export")) return { base: ANALYTICS_URL, path: pathname.replace(/^\/api\/analytics/, "") };
+  if (pathname.startsWith("/api/report/booking-activities")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname.startsWith("/api/ingest/")) return { base: INGEST_URL, path: pathname.replace(/^\/api\/ingest/, "") };
   if (pathname.startsWith("/api/whatsapp/")) return { base: WHATSAPP_URL, path: pathname.replace(/^\/api\/whatsapp/, "") };
   return null;
 }
 
-const server = http.createServer(async (req, res) => {
+export const server = http.createServer(async (req, res) => {
   try {
     applyCors(req, res);
     const method = req.method || "GET";
@@ -465,7 +570,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 401, { error: "Password attuale non valida." });
         return;
       }
-      await resetUserPassword(identity, newPassword);
+      await resetUserPassword(identity, newPassword, session.user.role, session.user.username);
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -529,6 +634,19 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Dimensione file non valida." });
         return;
       }
+      if (size > DOCUMENT_UPLOAD_MAX_BYTES) {
+        sendJson(res, 413, { error: `Il file supera il limite di ${Math.round(DOCUMENT_UPLOAD_MAX_BYTES / (1024 * 1024))} MB.` });
+        return;
+      }
+      if (!isAllowedDocumentMime(mimeType)) {
+        sendJson(res, 415, { error: "Tipo di file non consentito. Sono ammessi PDF, immagini e documenti Word." });
+        return;
+      }
+      const lockError = await assertDocumentPracticeNotLocked(leadId, session);
+      if (lockError) {
+        sendJson(res, 403, { error: lockError });
+        return;
+      }
       const attachmentId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const signed = await createSignedUpload({
         leadId,
@@ -545,7 +663,8 @@ const server = http.createServer(async (req, res) => {
           size,
           storageKey: signed.storageKey,
           storageProvider: "backblaze_b2",
-          uploadedAt: new Date().toISOString()
+          uploadedAt: new Date().toISOString(),
+          uploadedBy: session.user.username || session.user.name || ""
         },
         upload: signed.upload
       });
@@ -569,6 +688,15 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "leadId, documentKey e fileName sono obbligatori." });
         return;
       }
+      if (!isAllowedDocumentMime(mimeType)) {
+        sendJson(res, 415, { error: "Tipo di file non consentito. Sono ammessi PDF, immagini e documenti Word." });
+        return;
+      }
+      const lockError = await assertDocumentPracticeNotLocked(leadId, session);
+      if (lockError) {
+        sendJson(res, 403, { error: lockError });
+        return;
+      }
       const body = await readBody(req);
       if (!body || !body.length) {
         sendJson(res, 400, { error: "File non ricevuto." });
@@ -586,7 +714,7 @@ const server = http.createServer(async (req, res) => {
         size: body.length,
         body
       });
-      sendJson(res, 200, { attachment });
+      sendJson(res, 200, { attachment: { ...attachment, uploadedBy: session.user.username || session.user.name || "" } });
       return;
     }
     if (pathname === "/api/document-storage/presign-download" && method === "POST") {
@@ -599,10 +727,18 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 501, { error: "Storage documenti non configurato." });
         return;
       }
-      const body = (await parseJsonBody(req)) as { storageKey?: string; fileName?: string };
+      const body = (await parseJsonBody(req)) as { storageKey?: string; fileName?: string; leadId?: string };
       const storageKey = String(body.storageKey || "").trim();
       if (!storageKey) {
         sendJson(res, 400, { error: "storageKey obbligatorio." });
+        return;
+      }
+      const access = await resolveDocumentAccess(storageKey, session);
+      // "=== false" rather than "!access.ok": with this project's strict:false tsconfig,
+      // negation doesn't narrow a boolean-literal discriminated union the same way explicit
+      // equality does (verified in isolation -- a real tsc quirk under strictNullChecks:false).
+      if (access.ok === false) {
+        sendJson(res, access.status, { error: access.error });
         return;
       }
       const signed = await createSignedDownload({
@@ -622,10 +758,15 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 501, { error: "Storage documenti non configurato." });
         return;
       }
-      const body = (await parseJsonBody(req)) as { storageKey?: string };
+      const body = (await parseJsonBody(req)) as { storageKey?: string; leadId?: string };
       const storageKey = String(body.storageKey || "").trim();
       if (!storageKey) {
         sendJson(res, 400, { error: "storageKey obbligatorio." });
+        return;
+      }
+      const access = await resolveDocumentAccess(storageKey, session);
+      if (access.ok === false) {
+        sendJson(res, access.status, { error: access.error });
         return;
       }
       await deleteStoredObject(storageKey);
@@ -700,7 +841,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const body = (await parseJsonBody(req)) as AuthUpdateUserInput;
-      const updated = await updateUser(username, body);
+      const updated = await updateUser(username, body, session.user.role, session.user.username);
       sendJson(res, 200, updated);
       return;
     }
@@ -726,7 +867,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Password minima 6 caratteri." });
         return;
       }
-      await resetUserPassword(username, password);
+      await resetUserPassword(username, password, session.user.role);
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -772,6 +913,24 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 401, { error: "Non autorizzato." });
       return;
     }
+    if (pathname.startsWith("/api/analytics/export") && !isAdmin(session.user)) {
+      sendJson(res, 403, { error: "Solo admin e super admin possono esportare dati marketing." });
+      return;
+    }
+    if (pathname.startsWith("/api/report/booking-activities") && !isAdmin(session.user)) {
+      sendJson(res, 403, { error: "Solo admin e super admin possono consultare il report attivita Booking." });
+      return;
+    }
+    // WhatsApp is a shared inbox by product design: any authenticated operator can read every
+    // conversation (including unassigned ones), claim/release ownership, and send messages on
+    // any conversation -- that is the point of a shared inbox, not an authorization gap. The one
+    // WhatsApp action that is NOT part of normal operator workflow is the template test-send tool
+    // (fires a template outside the composer, meant for verifying template config), which is
+    // admin-only.
+    if (pathname === "/api/whatsapp/templates/test-send" && method === "POST" && isWhatsappTemplateTestSendBlocked(session.user.role)) {
+      sendJson(res, 403, { error: "Solo admin e super admin possono inviare template di test." });
+      return;
+    }
     const leadScopedMatch = pathname.match(/^\/api\/leads\/([^/]+)(?:\/(notes|activities|calls))?$/);
     if (leadScopedMatch && !isAdmin(session.user)) {
       const leadId = decodeURIComponent(leadScopedMatch[1] || "").trim();
@@ -811,15 +970,39 @@ const server = http.createServer(async (req, res) => {
       await relayUpstreamResponse(res, upstream);
       return;
     }
+    // Task board reads/creates/completes are shared operator workflow (Dashboard, Pratica
+    // Detail, Chat, the Booking scheduler) and stay open to any authenticated user. The one
+    // task action that is NOT part of normal Booking operator workflow is dismissing a task
+    // outright via a raw PATCH: unlike completing it (status "done") or postponing it (dueAt),
+    // dismissing silently discards it without resolving an outcome, which is exactly what the
+    // Booking "active lead" invariant is meant to prevent. No current UI wires this action for
+    // operators, so gating it admin-only closes the gap without breaking anything live.
+    const taskUpdateMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (taskUpdateMatch && method === "PATCH") {
+      const body = (await parseJsonBody(req)) as { status?: string };
+      if (isTaskDismissBlocked(session.user.role, body.status)) {
+        sendJson(res, 403, { error: "Solo admin e super admin possono archiviare un task senza completarlo." });
+        return;
+      }
+      const upstream = await fetch(`${route.base}${route.path}${url.search}`, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      await relayUpstreamResponse(res, upstream);
+      return;
+    }
     await proxyRequest(req, res, route.base, `${route.path}${url.search}`);
   } catch (error: any) {
     sendJson(res, 502, { error: sanitizeApiError(error.message) });
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`api-gateway su http://localhost:${PORT}`);
-  console.log(
-    `[api-gateway] auth config mongoEnabled=${Boolean(process.env.MONGODB_URI)} db=${process.env.MONGODB_DB_NAME || "crocieriamo"} frontend=${FRONTEND_URL}`
-  );
-});
+if (process.env.NODE_ENV !== "test") {
+  server.listen(PORT, HOST, () => {
+    console.log(`api-gateway su http://localhost:${PORT}`);
+    console.log(
+      `[api-gateway] auth config mongoEnabled=${Boolean(process.env.MONGODB_URI)} db=${process.env.MONGODB_DB_NAME || "crocieriamo"} frontend=${FRONTEND_URL}`
+    );
+  });
+}

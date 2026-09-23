@@ -1,7 +1,17 @@
 import { getMongoDb, isMongoEnabled } from "./mongo";
 import { newId, readDb, writeDb } from "./jsonStore";
 
-export type CallOutcome = "completed" | "no_answer" | "busy" | "call_back" | "interested" | "not_interested";
+export type CallOutcome =
+  | "completed"
+  | "no_answer"
+  | "busy"
+  | "call_back"
+  | "interested"
+  | "not_interested"
+  | "quote_required"
+  | "quote_sent"
+  | "appointment_set"
+  | "other";
 
 export type CallLogRecord = {
   id: string;
@@ -12,6 +22,8 @@ export type CallLogRecord = {
   actor: string;
   note?: string;
   idempotencyKey?: string;
+  callbackReason?: string | null;
+  source?: string;
 };
 
 function fromCallDoc(doc: any): CallLogRecord | null {
@@ -49,6 +61,18 @@ export async function listCallLogs(limit = 200) {
   }
   const db = await getMongoDb();
   const docs = await db.collection("callLogs").find({}).sort({ startedAt: -1 }).limit(safeLimit).toArray();
+  return docs.map((doc) => fromCallDoc(doc)).filter(Boolean) as CallLogRecord[];
+}
+
+// listCallLogs caps at 1000 (a UI-feed safeguard); a report needs the full history for its own
+// date-range filter to be meaningful, not a silent recency cap on top of it.
+export async function listAllCallLogs() {
+  if (!isMongoEnabled()) {
+    const rows = readDb().callLogs || [];
+    return rows.slice().sort((a: CallLogRecord, b: CallLogRecord) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+  }
+  const db = await getMongoDb();
+  const docs = await db.collection("callLogs").find({}).sort({ startedAt: -1 }).toArray();
   return docs.map((doc) => fromCallDoc(doc)).filter(Boolean) as CallLogRecord[];
 }
 

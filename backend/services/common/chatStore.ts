@@ -3,7 +3,9 @@ import path from "path";
 import { isMongoEnabled, getMongoDb } from "./mongo";
 import { newId } from "./jsonStore";
 
-const CHAT_DB_FILE = path.join(__dirname, "..", "..", "data", "whatsapp.json");
+const CHAT_DB_FILE = process.env.WHATSAPP_DB_FILE
+  ? path.resolve(process.env.WHATSAPP_DB_FILE)
+  : path.join(__dirname, "..", "..", "data", "whatsapp.json");
 let mongoIndexesReady = false;
 
 const REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -56,6 +58,7 @@ async function ensureMongoIndexes() {
     db.collection("wa_conversations").createIndex({ phoneNormalized: 1 }),
     db.collection("wa_conversations").createIndex({ lastMessageAt: -1 }),
     db.collection("wa_conversations").createIndex({ assignedTo: 1, status: 1 }),
+    db.collection("wa_conversations").createIndex({ customerId: 1 }),
     db.collection("wa_messages").createIndex({ conversationId: 1, createdAt: -1 }),
     db.collection("wa_messages").createIndex({ providerMessageId: 1 })
   ]);
@@ -98,7 +101,9 @@ function normalizeMessage(doc: any) {
 
 export async function listConversations() {
   if (!isMongoEnabled()) {
-    return readLocal().conversations.sort((a: any, b: any) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime());
+    return readLocal()
+      .conversations.sort((a: any, b: any) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime())
+      .map(normalizeConversation);
   }
   await ensureMongoIndexes();
   const db = await getMongoDb();
@@ -107,7 +112,7 @@ export async function listConversations() {
 }
 
 export async function getConversationById(conversationId: string) {
-  if (!isMongoEnabled()) return readLocal().conversations.find((c: any) => c.id === conversationId) || null;
+  if (!isMongoEnabled()) return normalizeConversation(readLocal().conversations.find((c: any) => c.id === conversationId) || null);
   await ensureMongoIndexes();
   const db = await getMongoDb();
   const doc = await db.collection("wa_conversations").findOne({ _id: conversationId });
@@ -127,14 +132,44 @@ export async function listMessages(conversationId: string, limit = 100) {
   return docs.map(normalizeMessage);
 }
 
-async function findConversationByPhone(phone: string) {
+/**
+ * Meta is documented to retry webhook delivery, and handleInboundWebhook used to call
+ * appendMessage unconditionally for every message in the payload -- a retried delivery created a
+ * duplicate message row with a new local id but the same providerMessageId. This lookup is the
+ * idempotency check that closes that gap.
+ */
+export async function findMessageByProviderId(providerMessageId: string) {
+  if (!providerMessageId) return null;
+  if (!isMongoEnabled()) {
+    return readLocal().messages.find((m: any) => m.providerMessageId === providerMessageId) || null;
+  }
+  await ensureMongoIndexes();
+  const db = await getMongoDb();
+  const doc = await db.collection("wa_messages").findOne({ providerMessageId });
+  return normalizeMessage(doc);
+}
+
+export async function findConversationByPhone(phone: string) {
   const normalized = normalizePhone(phone);
   if (!normalized) return null;
-  if (!isMongoEnabled()) return readLocal().conversations.find((c: any) => normalizePhone(c.phone) === normalized) || null;
+  if (!isMongoEnabled()) {
+    return normalizeConversation(readLocal().conversations.find((c: any) => normalizePhone(c.phone) === normalized) || null);
+  }
   await ensureMongoIndexes();
   const db = await getMongoDb();
   const doc = await db.collection("wa_conversations").findOne({ phoneNormalized: normalized });
   return normalizeConversation(doc);
+}
+
+// A Customer can in principle end up with more than one conversation record (e.g. they were
+// first contacted on an old number, then a new one) -- listConversations is already sorted by
+// lastMessageAt desc, so picking the first match here means "the most recently active one",
+// a safe default tie-breaker rather than an arbitrary pick.
+export async function findConversationByCustomerId(customerId: string) {
+  const id = String(customerId || "").trim();
+  if (!id) return null;
+  const conversations = await listConversations();
+  return conversations.find((c: any) => String(c.customerId || "") === id) || null;
 }
 
 async function saveConversation(conversation: any) {
@@ -147,6 +182,7 @@ async function saveConversation(conversation: any) {
     lastOutboundAt: null,
     replyWindowExpiresAt: null,
     hasOpenSession: false,
+    customerId: null,
     ...conversation,
     updatedAt: conversation.updatedAt || now
   };
@@ -169,6 +205,7 @@ export async function createOrUpdateConversation({
   phone,
   customerName = "",
   leadId = null,
+  customerId = null,
   assignedTo = "",
   incrementUnread = false,
   lastMessagePreview = "",
@@ -185,7 +222,13 @@ export async function createOrUpdateConversation({
     const updated = {
       ...existing,
       customerName: customerName || existing.customerName || "",
-      leadId: leadId || existing.leadId || null,
+      // leadId is sticky once set (a conversation never silently re-targets to a different
+      // opportunity) -- enforced here, not just by caller convention, so a future caller can't
+      // accidentally rebind an existing conversation by passing a different leadId. customerId is
+      // filled in the same way but represents the person, who doesn't change, so backfilling it
+      // on a legacy conversation is always safe regardless of which side wins.
+      leadId: existing.leadId || leadId || null,
+      customerId: customerId || existing.customerId || null,
       assignedTo: assignedTo !== undefined ? assignedTo : existing.assignedTo || "",
       status: status || existing.status || "open",
       channel: existing.channel || source || "whatsapp",
@@ -204,6 +247,7 @@ export async function createOrUpdateConversation({
     phone,
     customerName: customerName || phone,
     leadId: leadId || null,
+    customerId: customerId || null,
     assignedTo: assignedTo || "",
     status: status || "open",
     channel: source || "whatsapp",
@@ -235,6 +279,11 @@ export async function appendMessage(message: any) {
     to: message.to || "",
     providerMessageId: message.providerMessageId || "",
     agentName: message.agentName || "",
+    // Additive: a message can reference one media attachment. Inbound carries what Meta's
+    // webhook sends (mediaId/mimeType/filename/caption, no bytes -- Meta hosts the media, we
+    // never proxy or store the binary); outbound carries a reference into this CRM's own
+    // document storage (documentStorageKey) rather than a second, parallel file store.
+    attachment: message.attachment || null,
     raw: message.raw || null,
     createdAt
   };

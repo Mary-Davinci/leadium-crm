@@ -101,6 +101,18 @@ function validateStorageKey(storageKey: string) {
   return normalized;
 }
 
+// Authorization for download/delete must be derived from the storage key itself, never from a
+// client-supplied leadId: a caller could otherwise send a real storageKey alongside a wrong or
+// omitted leadId and bypass the lock-check for the lead the document actually belongs to (P1 --
+// this is what buildDocumentStorageKey embeds the leadId as the first segment after B2_PREFIX
+// for). Returns null when the key doesn't have the expected shape.
+export function extractLeadIdFromStorageKey(storageKey: string): string | null {
+  const normalized = validateStorageKey(storageKey);
+  const withoutPrefix = B2_PREFIX && normalized.startsWith(`${B2_PREFIX}/`) ? normalized.slice(B2_PREFIX.length + 1) : normalized;
+  const leadId = withoutPrefix.split("/")[0] || "";
+  return leadId || null;
+}
+
 export async function createSignedUpload(input: SignedUploadInput) {
   const storageKey = buildDocumentStorageKey(input);
   const command = new PutObjectCommand({

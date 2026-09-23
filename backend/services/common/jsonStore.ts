@@ -4,7 +4,7 @@ import path from "path";
 const DB_FILE_PATH = process.env.JSON_DB_FILE
   ? path.resolve(process.env.JSON_DB_FILE)
   : path.join(__dirname, "..", "..", "data", "db.json");
-const EMPTY_DB = { leads: [], activities: [], tasks: [], callLogs: [] };
+const EMPTY_DB = { leads: [], activities: [], tasks: [], callLogs: [], customers: [], purchases: [] };
 
 function ensureDbFile() {
   const dir = path.dirname(DB_FILE_PATH);
@@ -21,7 +21,9 @@ export function readDb() {
       leads: Array.isArray(parsed.leads) ? parsed.leads : [],
       activities: Array.isArray(parsed.activities) ? parsed.activities : [],
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
-      callLogs: Array.isArray(parsed.callLogs) ? parsed.callLogs : []
+      callLogs: Array.isArray(parsed.callLogs) ? parsed.callLogs : [],
+      customers: Array.isArray(parsed.customers) ? parsed.customers : [],
+      purchases: Array.isArray(parsed.purchases) ? parsed.purchases : []
     };
   } catch {
     return { ...EMPTY_DB };

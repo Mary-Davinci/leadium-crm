@@ -37,6 +37,7 @@ export async function listLeads(query: Record<string, string> = {}) {
     let rows = readDb().leads;
     if (query.status) rows = rows.filter((item: any) => item.status === query.status);
     if (query.assignedTo) rows = rows.filter((item: any) => (item.assignedTo || "") === query.assignedTo);
+    if (query.customerId) rows = rows.filter((item: any) => item.customerId === query.customerId);
     if (query.search) {
       const q = String(query.search).toLowerCase();
       rows = rows.filter(
@@ -52,6 +53,7 @@ export async function listLeads(query: Record<string, string> = {}) {
   const filter: any = {};
   if (query.status) filter.status = query.status;
   if (query.assignedTo) filter.assignedTo = query.assignedTo;
+  if (query.customerId) filter.customerId = query.customerId;
   if (query.search) {
     const regex = new RegExp(escapeRegex(query.search), "i");
     filter.$or = [{ fullName: regex }, { phone: regex }, { email: regex }];

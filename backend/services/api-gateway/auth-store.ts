@@ -325,7 +325,7 @@ export async function createUser(input: AuthCreateUserInput): Promise<AuthPublic
   };
 }
 
-export async function resetUserPassword(identifier: string, newPassword: string): Promise<void> {
+export async function resetUserPassword(identifier: string, newPassword: string, actorRole: AuthRole, actorUsername?: string): Promise<void> {
   const normalizedIdentifier = identifier.trim();
   const identifierLower = normalizedIdentifier.toLowerCase();
   if (!identifierLower) throw new Error("Username obbligatorio.");
@@ -338,19 +338,28 @@ export async function resetUserPassword(identifier: string, newPassword: string)
   const db = await getMongoDb();
   if (!db) throw new Error("Mongo non disponibile.");
   const users = db.collection("users") as {
+    findOne(query: Record<string, unknown>): Promise<MongoAuthUser | null>;
     updateOne(query: Record<string, unknown>, update: Record<string, unknown>): Promise<{ matchedCount: number }>;
   };
-  const result = await users.updateOne(
-    {
-      $or: [
-        { usernameLower: identifierLower },
-        { emailLower: identifierLower },
-        { username: normalizedIdentifier },
-        { email: normalizedIdentifier }
-      ]
-    },
-    { $set: { passwordHash: hashPassword(password), updatedAt: new Date().toISOString() }, $unset: { password: "" } }
-  );
+  const filter = {
+    $or: [
+      { usernameLower: identifierLower },
+      { emailLower: identifierLower },
+      { username: normalizedIdentifier },
+      { email: normalizedIdentifier }
+    ]
+  };
+  const target = await users.findOne(filter);
+  if (!target) throw new Error("Utente non trovato.");
+  const targetRole = normalizeRole(target.role);
+  const isSelfReset = Boolean(actorUsername) && actorUsername!.trim().toLowerCase() === target.usernameLower;
+  if (!isSelfReset && actorRole !== "super_admin" && (targetRole === "admin" || targetRole === "super_admin")) {
+    throw new Error("Solo super admin puo reimpostare la password di un utente admin.");
+  }
+  const result = await users.updateOne(filter, {
+    $set: { passwordHash: hashPassword(password), updatedAt: new Date().toISOString() },
+    $unset: { password: "" }
+  });
   if (!result.matchedCount) throw new Error("Utente non trovato.");
 }
 
@@ -384,7 +393,7 @@ export async function deleteUser(username: string, actorRole: AuthRole): Promise
   if (!result.deletedCount) throw new Error("Utente non trovato.");
 }
 
-export async function updateUser(username: string, input: AuthUpdateUserInput): Promise<AuthPublicUser> {
+export async function updateUser(username: string, input: AuthUpdateUserInput, actorRole: AuthRole, actorUsername?: string): Promise<AuthPublicUser> {
   const currentUsernameLower = username.trim().toLowerCase();
   if (!currentUsernameLower) throw new Error("Username obbligatorio.");
 
@@ -410,13 +419,21 @@ export async function updateUser(username: string, input: AuthUpdateUserInput): 
 
   const existing = await users.findOne({ usernameLower: currentUsernameLower });
   if (!existing) throw new Error("Utente non trovato.");
+  const existingRole = normalizeRole(existing.role);
+  const isSelfEdit = Boolean(actorUsername) && actorUsername!.trim().toLowerCase() === currentUsernameLower;
+  if (!isSelfEdit && actorRole !== "super_admin" && (existingRole === "admin" || existingRole === "super_admin")) {
+    throw new Error("Solo super admin puo modificare un utente admin.");
+  }
   const nextEmail = nextEmailFromInput || existing.email || existing.username;
   if (nextUsernameLower !== currentUsernameLower) {
     const conflict = await users.findOne({ usernameLower: nextUsernameLower });
     if (conflict) throw new Error("Username gia esistente.");
   }
 
-  const nextRole = input.role ? normalizeRole(input.role) : normalizeRole(existing.role);
+  const nextRole = input.role ? normalizeRole(input.role) : existingRole;
+  if (nextRole === "super_admin" && actorRole !== "super_admin") {
+    throw new Error("Solo super admin puo assegnare il ruolo super admin.");
+  }
   const result = await users.updateOne(
     { usernameLower: currentUsernameLower },
     {
