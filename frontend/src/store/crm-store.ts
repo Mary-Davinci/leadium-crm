@@ -59,6 +59,7 @@ export type DashboardInboxPayload = {
 export type CrmConversation = {
   id: string;
   leadId?: string | null;
+  customerId?: string | null;
   customerName?: string;
   phone?: string;
   unreadCount?: number;
@@ -73,6 +74,17 @@ export type CrmConversation = {
   hasOpenSession?: boolean;
 };
 
+export type CrmChatMessageAttachment = {
+  direction: "inbound" | "outbound";
+  mediaType: string;
+  mediaId?: string;
+  url?: string;
+  filename?: string;
+  mimeType?: string;
+  caption?: string;
+  documentStorageKey?: string;
+};
+
 export type CrmChatMessage = {
   id: string;
   direction: "inbound" | "outbound";
@@ -82,6 +94,7 @@ export type CrmChatMessage = {
   messageType?: string;
   templateKey?: string;
   templateName?: string;
+  attachment?: CrmChatMessageAttachment | null;
 };
 
 type CrmStoreState = {
@@ -121,38 +134,12 @@ export const CRM_STORE_TTLS = {
   leadDetail: 5 * 60 * 1000
 } as const;
 
-const MAX_LEAD_DETAIL_CACHE_ENTRIES = 6;
-
 function isFresh<T>(entry: TimedValue<T> | null | undefined, ttlMs: number) {
   return Boolean(entry && Date.now() - entry.loadedAt < ttlMs);
 }
 
 function normalizeContactPhone(value?: string) {
   return String(value || "").replace(/\D+/g, "");
-}
-
-function compactLeadDetail(detail: LeadDetail): LeadDetail {
-  const documents = detail?.lead?.documents;
-  return {
-    ...detail,
-    lead: {
-      ...detail.lead,
-      documents: documents
-        ? {
-            ...documents,
-            items: (documents.items || []).map((item) => ({
-              ...item,
-              attachments: (item.attachments || []).map((attachment) => ({
-                ...attachment,
-                dataUrl: attachment.storageKey ? "" : attachment.dataUrl
-              }))
-            }))
-          }
-        : documents
-    },
-    timeline: Array.isArray(detail.timeline) ? detail.timeline.slice(-40) : [],
-    callLogs: Array.isArray(detail.callLogs) ? detail.callLogs.slice(-20) : []
-  };
 }
 
 function getLeadContactKey(lead: Lead) {
@@ -397,17 +384,8 @@ export function getLeadDetailCacheEntry(leadId: string) {
 }
 
 export function setLeadDetailCacheEntry(leadId: string, detail: LeadDetail) {
-  const compacted = compactLeadDetail(detail);
-  if (!state.leadDetails[leadId]) {
-    const keys = Object.keys(state.leadDetails);
-    if (keys.length >= MAX_LEAD_DETAIL_CACHE_ENTRIES) {
-      const oldestKey = keys
-        .sort((a, b) => (state.leadDetails[a]?.loadedAt || 0) - (state.leadDetails[b]?.loadedAt || 0))[0];
-      if (oldestKey) delete state.leadDetails[oldestKey];
-    }
-  }
   state.leadDetails[leadId] = {
-    data: compacted,
+    data: detail,
     loadedAt: Date.now()
   };
 }

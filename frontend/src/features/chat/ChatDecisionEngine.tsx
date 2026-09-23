@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { buildPracticeUrl } from "../practices/practice-links";
 import { CrmTask } from "../../store/crm-store";
@@ -44,6 +44,8 @@ type ChatDecisionEngineProps = {
   onCallCustomer: () => void;
   onRequestDocuments: () => void;
   onRequestPaymentReminder: () => void;
+  onScheduleCallback: (payload: { followUpAt: string; callbackReason: string }) => void;
+  callbackScheduling: boolean;
   onMarkDocumentReceived: (documentId: string) => void;
   onMarkPaymentReceived: (paymentId: string) => void;
   onVerifyPayment: (paymentId: string) => void;
@@ -83,6 +85,8 @@ export function ChatDecisionEngine({
   onCallCustomer,
   onRequestDocuments,
   onRequestPaymentReminder,
+  onScheduleCallback,
+  callbackScheduling,
   onMarkDocumentReceived,
   onMarkPaymentReceived,
   onVerifyPayment,
@@ -91,6 +95,17 @@ export function ChatDecisionEngine({
 }: ChatDecisionEngineProps) {
   const navigate = useNavigate();
   const decision = useMemo(() => getDecisionSnapshot(lead, openTasks), [lead, openTasks]);
+  const [callbackFormOpen, setCallbackFormOpen] = useState(false);
+  const [callbackDate, setCallbackDate] = useState("");
+  const [callbackReasonDraft, setCallbackReasonDraft] = useState("");
+
+  function submitCallbackForm() {
+    if (!callbackDate || !callbackReasonDraft.trim()) return;
+    onScheduleCallback({ followUpAt: callbackDate, callbackReason: callbackReasonDraft.trim() });
+    setCallbackFormOpen(false);
+    setCallbackDate("");
+    setCallbackReasonDraft("");
+  }
   const {
     pendingPayments,
     pendingPaymentAmount,
@@ -138,8 +153,14 @@ export function ChatDecisionEngine({
           <span>Documenti assenti</span>
           <strong>{missingDocumentsCount ? `Si -  ${missingDocumentsCount}` : "No"}</strong>
         </div>
-        <button type="button" className="chat-contact-edit" onClick={() => lead && navigate(buildPracticeUrl(lead.id, "overview"))}>
-          Apri pratica
+        <button
+          type="button"
+          className="chat-contact-edit"
+          disabled={!lead}
+          title={lead ? undefined : "Nessun lead collegato a questa conversazione"}
+          onClick={() => lead && navigate(buildPracticeUrl(lead.id, "overview"))}
+        >
+          {lead ? "Apri pratica" : "Nessun lead collegato"}
         </button>
       </div>
 
@@ -427,6 +448,43 @@ export function ChatDecisionEngine({
                 Chiudi
               </button>
             </div>
+            {lead ? (
+              <div className="chat-react-ops-row chat-callback-row">
+                {!callbackFormOpen ? (
+                  <button type="button" className="secondary" onClick={() => setCallbackFormOpen(true)}>
+                    Programma richiamo
+                  </button>
+                ) : (
+                  <div className="chat-callback-form">
+                    <label>
+                      <span>Data e ora richiamo</span>
+                      <input type="datetime-local" value={callbackDate} onChange={(event) => setCallbackDate(event.target.value)} />
+                    </label>
+                    <label>
+                      <span>Motivo</span>
+                      <input
+                        type="text"
+                        value={callbackReasonDraft}
+                        onChange={(event) => setCallbackReasonDraft(event.target.value)}
+                        placeholder="Es. vuole confrontare i prezzi..."
+                      />
+                    </label>
+                    <div className="chat-callback-form-actions">
+                      <button type="button" className="secondary" disabled={callbackScheduling} onClick={() => setCallbackFormOpen(false)}>
+                        Annulla
+                      </button>
+                      <button
+                        type="button"
+                        disabled={callbackScheduling || !callbackDate || !callbackReasonDraft.trim()}
+                        onClick={submitCallbackForm}
+                      >
+                        {callbackScheduling ? "Salvataggio..." : "Conferma richiamo"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
         </section>
       ) : null}

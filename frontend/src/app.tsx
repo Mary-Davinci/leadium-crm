@@ -11,6 +11,7 @@ import { LoginPage } from "./pages/login-page";
 const DashboardPage = lazy(() => import("./pages/dashboard-page").then((module) => ({ default: module.DashboardPage })));
 const PratichePage = lazy(() => import("./pages/pratiche-page").then((module) => ({ default: module.PratichePage })));
 const PraticaDetailPage = lazy(() => import("./pages/pratica-detail-page").then((module) => ({ default: module.PraticaDetailPage })));
+const CustomerDetailPage = lazy(() => import("./pages/customer-detail-page").then((module) => ({ default: module.CustomerDetailPage })));
 const LeadImportPage = lazy(() => import("./pages/lead-import-page").then((module) => ({ default: module.LeadImportPage })));
 const LeadBoardPage = lazy(() => import("./pages/leadboard-page").then((module) => ({ default: module.LeadBoardPage })));
 const LegacyLeadBoardRedirect = lazy(() =>
@@ -18,6 +19,8 @@ const LegacyLeadBoardRedirect = lazy(() =>
 );
 const ChatPage = lazy(() => import("./pages/chat-page").then((module) => ({ default: module.ChatPage })));
 const AnalyticsPage = lazy(() => import("./pages/analytics-page").then((module) => ({ default: module.AnalyticsPage })));
+const BookingReportPage = lazy(() => import("./pages/booking-report-page").then((module) => ({ default: module.BookingReportPage })));
+const MarketingReportPage = lazy(() => import("./pages/marketing-report-page").then((module) => ({ default: module.MarketingReportPage })));
 const ProfilePage = lazy(() => import("./pages/profile-page").then((module) => ({ default: module.ProfilePage })));
 const ChangePasswordPage = lazy(() =>
   import("./pages/change-password-page").then((module) => ({ default: module.ChangePasswordPage }))
@@ -86,6 +89,7 @@ export default function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/pratiche" element={<PratichePage />} />
           <Route path="/pratiche/:id" element={<PraticaDetailPage />} />
+          <Route path="/customers/:id" element={<CustomerDetailPage />} />
           <Route
             path="/tasks/import"
             element={
@@ -106,6 +110,22 @@ export default function App() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/calls" element={<CallsPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route
+            path="/reports/booking-activities"
+            element={
+              <RequireAdmin>
+                <BookingReportPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/reports/marketing"
+            element={
+              <RequireAdmin>
+                <MarketingReportPage />
+              </RequireAdmin>
+            }
+          />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/change-password" element={<ChangePasswordPage />} />
           <Route

@@ -64,6 +64,14 @@ export function UsersPage() {
     return false;
   }
 
+  function canEditTarget(user: UserItem) {
+    if (!authUser) return false;
+    if (user.username.toLowerCase() === authUser.username.toLowerCase()) return true;
+    if (authUser.role === "super_admin") return true;
+    if (authUser.role === "admin") return user.role === "operatore";
+    return false;
+  }
+
   useEffect(() => {
     if (!uiAlert) return;
     const t = setTimeout(() => setUiAlert(null), 4000);
@@ -312,6 +320,7 @@ export function UsersPage() {
                             className="editBtn"
                             title="Modifica utente"
                             onClick={() => startEdit(user)}
+                            disabled={!canEditTarget(user)}
                           >
                             <svg viewBox="0 0 512 512" aria-hidden="true" focusable="false">
                               <path d="M410.3 231l11.3-11.3c18.8-18.8 18.8-49.1 0-67.9l-61.4-61.4c-18.8-18.8-49.1-18.8-67.9 0L281 101.7 410.3 231zM63.6 337.1L32 480l142.9-31.6L386.1 237.2 274.8 125.9 63.6 337.1z" />

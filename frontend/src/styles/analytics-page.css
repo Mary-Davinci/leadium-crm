@@ -289,9 +289,131 @@
   font-weight: 800;
 }
 
+.an-export-presets {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.an-export-preset {
+  padding: 6px 12px;
+  border: 1px solid #bcd2ef;
+  border-radius: 999px;
+  background: #edf4fd;
+  color: #225fb6;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.an-export-preset:hover {
+  background: #dfeafb;
+}
+
+.an-export-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.an-export-filters label {
+  display: grid;
+  gap: 4px;
+  color: #526b8b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.an-export-filters input,
+.an-export-filters select {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #d5deea;
+  border-radius: 8px;
+  color: #263f62;
+  font-size: 12px;
+  background: #fff;
+}
+
+.an-export-filters input:focus-visible,
+.an-export-filters select:focus-visible {
+  outline: 2px solid #4d78b6;
+  outline-offset: 1px;
+}
+
+.an-export-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.an-export-mode {
+  display: inline-flex;
+  border: 1px solid #d5deea;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.an-export-mode button {
+  padding: 8px 14px;
+  border: 0;
+  background: #fff;
+  color: #526b8b;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.an-export-mode button.is-active {
+  background: #225fb6;
+  color: #fff;
+}
+
+.an-export-btn {
+  padding: 8px 16px;
+  border: 1px solid #d5deea;
+  border-radius: 8px;
+  background: #fff;
+  color: #354d70;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.an-export-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.an-export-btn-primary {
+  border-color: #225fb6;
+  background: #225fb6;
+  color: #fff;
+}
+
+.an-export-error {
+  margin: 0 0 12px;
+  color: #bd4b52;
+  font-size: 12px;
+}
+
+.an-export-count {
+  margin: 0 0 8px;
+  color: #4d6686;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 @media (max-width: 1240px) {
   .an-kpi-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .an-export-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -307,6 +429,10 @@
 
   .an-kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .an-export-filters {
+    grid-template-columns: 1fr;
   }
 }
 

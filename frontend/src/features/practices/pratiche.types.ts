@@ -22,6 +22,7 @@ export type Lead = {
   closingOutcome?: "open" | "won" | "lost" | "disqualified";
   lossReason?: string | null;
   lossDetail?: string | null;
+  customerId?: string | null;
   practiceReview?: PracticeReviewState | null;
   metaEventSync?: {
     lastEventName?: string | null;
@@ -42,6 +43,8 @@ export type Lead = {
   nextActionAt?: string;
   latestCallOutcome?: CallOutcome | null;
   latestCallAt?: string | null;
+  callAttempts?: number;
+  secondAttemptPending?: boolean;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -80,6 +83,8 @@ export type PracticeDocumentItem = {
   verified: boolean;
   note?: string;
   updatedAt?: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
   attachments?: PracticeDocumentAttachment[];
 };
 
@@ -96,6 +101,7 @@ export type PracticeDocumentAttachment = {
   storageKey?: string;
   storageProvider?: string;
   uploadedAt?: string;
+  uploadedBy?: string;
 };
 
 export type PaymentStatus = "pending" | "received" | "verified";
@@ -124,7 +130,11 @@ export type CallOutcome =
   | "busy"
   | "call_back"
   | "interested"
-  | "not_interested";
+  | "not_interested"
+  | "quote_required"
+  | "quote_sent"
+  | "appointment_set"
+  | "other";
 
 export type CallLog = {
   id: string;

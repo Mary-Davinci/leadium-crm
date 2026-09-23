@@ -1,25 +1,24 @@
-import { useEffect, useRef } from "react";
+import type { MouseEvent } from "react";
 import { Lead } from "../pratiche.types";
 import { CrmTask } from "../../../store/crm-store";
 import {
   getNextActionMeta,
   getMissingDocumentsCount,
   getPriority,
-  getStatusClass,
-  getStatusLabel,
   getSuggestedAction,
-  getTravelLabel,
-  urgencyLabels
+  getTravelLabel
 } from "../pratiche.utils";
+import { PracticeStatusBadge } from "./PracticeStatusBadge";
+import { PracticePriorityBadge } from "./PracticePriorityBadge";
+import { PracticeActionsMenu } from "./PracticeActionsMenu";
 
-export type PracticeCardProps = {
+export type PracticeListItemProps = {
   lead: Lead;
   linkedTask?: CrmTask | null;
   isAdminView?: boolean;
   isSelected: boolean;
-  isBusy: boolean;
+  availableStatuses?: string[];
   onSelect: (id: string) => void;
-  onPrefetchDetail?: (id: string) => void;
   onOpen: (id: string) => void;
   onStartCall: (lead: Lead) => void;
   onRegisterCall: (lead: Lead) => void;
@@ -29,7 +28,6 @@ export type PracticeCardProps = {
   onAssign: (lead: Lead) => void;
   onMarkUrgent: (lead: Lead) => void;
   onSuggestedAction: (lead: Lead, kind: "call" | "open" | "task") => void;
-  availableStatuses?: string[];
 };
 
 type MetaVisual = {
@@ -205,25 +203,23 @@ function getDueVisual(label: string, meta: string): MetaVisual {
   return { label, meta, tone: "due", icon: "calendar" };
 }
 
-export function PracticeCard({
+export function PracticeListItem({
   lead,
   linkedTask,
   isAdminView = false,
   isSelected,
-  isBusy: _isBusy,
+  availableStatuses = [],
   onSelect,
-  onPrefetchDetail,
   onOpen,
-  onStartCall: _onStartCall,
-  onRegisterCall: _onRegisterCall,
-  onWrite: _onWrite,
-  onQuickTask: _onQuickTask,
-  onStatusChange: _onStatusChange,
-  onAssign: _onAssign,
-  onMarkUrgent: _onMarkUrgent,
-  onSuggestedAction: _onSuggestedAction,
-  availableStatuses: _availableStatuses = []
-}: PracticeCardProps) {
+  onStartCall,
+  onRegisterCall,
+  onWrite,
+  onQuickTask,
+  onStatusChange,
+  onAssign,
+  onMarkUrgent,
+  onSuggestedAction
+}: PracticeListItemProps) {
   const priority = getPriority(lead);
   const nextMeta = getNextActionMeta(lead.nextActionAt);
   const suggestedAction = getSuggestedAction(lead);
@@ -269,8 +265,6 @@ export function PracticeCard({
   const lastContact = getLastContactVisual(lead);
   const nextAction = getNextActionVisual(nextActionLabel, nextActionMeta);
   const dueInfo = getDueVisual(dueLabel, dueMeta);
-  const statusLabel = getStatusLabel(lead.status);
-  const statusClass = getStatusClass(lead.status);
   const sourceLabel = getSourceLabel(lead.sourcePlatform || lead.source);
   const travelLabel = getTravelLabel(lead);
   const documentsMissing = getMissingDocumentsCount(lead);
@@ -304,75 +298,46 @@ export function PracticeCard({
     : nextAction.meta;
   const duePrimaryText = isAdminView ? `SLA ${slaLabel}` : dueInfo.label;
   const dueSecondaryText = isAdminView ? `Assegnata ${assignedAtLabel}` : dueInfo.meta;
-  const clickTimerRef = useRef<number | null>(null);
-  const prefetchTimerRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (clickTimerRef.current) {
-        window.clearTimeout(clickTimerRef.current);
-      }
-      if (prefetchTimerRef.current) {
-        window.clearTimeout(prefetchTimerRef.current);
-      }
-    };
-  }, []);
-
-  function handleClick() {
-    if (clickTimerRef.current) {
-      window.clearTimeout(clickTimerRef.current);
-    }
-    clickTimerRef.current = window.setTimeout(() => {
-      onSelect(lead.id);
-      clickTimerRef.current = null;
-    }, 220);
+  function handleRowClick() {
+    onSelect(lead.id);
   }
 
-  function handleDoubleClick() {
-    if (clickTimerRef.current) {
-      window.clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
-    }
+  function handleRowDoubleClick() {
     onOpen(lead.id);
   }
 
-  function handlePrefetchStart() {
-    if (!onPrefetchDetail) return;
-    if (prefetchTimerRef.current) {
-      window.clearTimeout(prefetchTimerRef.current);
-    }
-    prefetchTimerRef.current = window.setTimeout(() => {
-      onPrefetchDetail(lead.id);
-      prefetchTimerRef.current = null;
-    }, 180);
+  function handleOpenClick(event: MouseEvent) {
+    event.stopPropagation();
+    onOpen(lead.id);
   }
 
-  function handlePrefetchCancel() {
-    if (prefetchTimerRef.current) {
-      window.clearTimeout(prefetchTimerRef.current);
-      prefetchTimerRef.current = null;
-    }
+  function handleSuggestedActionClick(event: MouseEvent) {
+    event.stopPropagation();
+    onSuggestedAction(lead, suggestedAction.kind);
   }
 
   return (
     <article
       className={`pr-row-card ${isSelected ? "active" : ""} ${hasHighPriorityTask ? "priority-glow" : ""}`}
-      onClick={handleClick}
-      onDoubleClick={handleDoubleClick}
-      onMouseEnter={handlePrefetchStart}
-      onMouseLeave={handlePrefetchCancel}
+      onClick={handleRowClick}
+      onDoubleClick={handleRowDoubleClick}
     >
       <div className="pr-row-grid">
         <div className="pr-cell pr-cell-priority">
-          <span className={`pr-priority-dot pr-priority-dot-${priority}`} aria-hidden="true" />
-          <div className="pr-cell-stack">
-            <strong className={`pr-priority-label pr-priority-label-${priority}`}>{urgencyLabels[priority]}</strong>
-            <span className="pr-priority-meta">{priorityMeta}</span>
-          </div>
+          <PracticePriorityBadge priority={priority} />
+          <span className="pr-priority-meta">{priorityMeta}</span>
         </div>
 
         <div className="pr-cell pr-cell-client">
-          <span className="pr-client-link">{lead.fullName}</span>
+          <button
+            type="button"
+            className="pr-client-link"
+            onClick={handleOpenClick}
+            onDoubleClick={(event) => event.stopPropagation()}
+          >
+            {lead.fullName}
+          </button>
           <div className="pr-cell-stack">
             <span className="pr-client-travel">{travelLabel}</span>
             {isAdminView && lead.sourceCampaignId ? (
@@ -380,7 +345,7 @@ export function PracticeCard({
             ) : null}
           </div>
           <div className="pr-inline-tags">
-            <span className={`pr-status ${statusClass}`}>{statusLabel}</span>
+            <PracticeStatusBadge status={lead.status} />
             <span className="pr-source-badge">{sourceLabel}</span>
             {documentsMissing ? <span className="pr-documents-badge">{documentsMissing} doc</span> : null}
             {isUrgent ? <span className="pr-urgent-tag">Urgente</span> : null}
@@ -417,6 +382,11 @@ export function PracticeCard({
               </span>
             ) : null}
           </div>
+          {!isClosedPractice ? (
+            <button type="button" className="pr-suggested-action" onClick={handleSuggestedActionClick}>
+              {suggestedAction.label}
+            </button>
+          ) : null}
         </div>
 
         <div className={`pr-cell pr-cell-text pr-cell-tone-${dueInfo.tone}`}>
@@ -436,6 +406,23 @@ export function PracticeCard({
               {isAdminView ? <span className="pr-admin-meta-line">{ownerMeta}</span> : null}
             </div>
           </div>
+        </div>
+
+        <div className="pr-cell pr-cell-actions">
+          <PracticeActionsMenu
+            lead={lead}
+            linkedTask={linkedTask || null}
+            availableStatuses={availableStatuses}
+            isUrgent={isUrgent}
+            onOpen={onOpen}
+            onStartCall={onStartCall}
+            onRegisterCall={onRegisterCall}
+            onWrite={onWrite}
+            onQuickTask={onQuickTask}
+            onStatusChange={onStatusChange}
+            onAssign={onAssign}
+            onMarkUrgent={onMarkUrgent}
+          />
         </div>
       </div>
     </article>

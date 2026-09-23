@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { apiUrl } from "../lib/api-url";
 import { clearSession, getAuthToken, getAuthUser } from "../lib/auth";
 import { build3CXCallUri, clearPending3CXCall, createPending3CXCall, launch3CXUri } from "../lib/threecx";
-import { buildWhatsAppUrl, WHATSAPP_TEMPLATES, WhatsAppTemplateKey } from "../lib/whatsapp";
+import { buildWhatsAppUrl } from "../lib/whatsapp";
 import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache, upsertTaskInBoard } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
 import { CallOutcome, Lead as ThreeCXLead } from "../features/practices/pratiche.types";
@@ -38,6 +38,9 @@ type Lead = {
   nextActionAt?: string;
   latestCallOutcome?: CallOutcome | null;
   latestCallAt?: string | null;
+  customerId?: string | null;
+  callAttempts?: number;
+  secondAttemptPending?: boolean;
 };
 
 type PracticeReviewDecision = "pending_admin" | "approved" | "returned_to_operator";
@@ -74,6 +77,8 @@ type PracticeDocumentItem = {
   verified: boolean;
   note?: string;
   updatedAt?: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
   attachments?: PracticeDocumentAttachment[];
 };
 
@@ -90,6 +95,7 @@ type PracticeDocumentAttachment = {
   storageKey?: string;
   storageProvider?: string;
   uploadedAt?: string;
+  uploadedBy?: string;
 };
 
 type PaymentStatus = "pending" | "received" | "verified";
@@ -133,7 +139,7 @@ type CallLog = {
   leadId: string;
   startedAt: string;
   endedAt?: string;
-  outcome: "completed" | "no_answer" | "busy" | "call_back" | "interested" | "not_interested";
+  outcome: CallOutcome;
   actor: string;
   note?: string;
 };
@@ -146,7 +152,21 @@ type LeadDetail = {
 
 type Priority = "alta" | "media" | "bassa";
 type CallConnection = "answered" | "no_answer" | "busy";
-type AnsweredCallOutcome = "completed" | "interested" | "call_back" | "not_interested";
+type AnsweredCallOutcome =
+  | "completed"
+  | "interested"
+  | "call_back"
+  | "not_interested"
+  | "quote_required"
+  | "quote_sent"
+  | "appointment_set";
+
+const LOSS_REASON_OPTIONS = [
+  { value: "non_interessato", label: "Non interessato" },
+  { value: "fuori_budget", label: "Fuori budget" },
+  { value: "trovato_alternativa", label: "Ha trovato un'alternativa" },
+  { value: "altro", label: "Altro" }
+];
 
 type NoteEntry = {
   id: string;
@@ -490,8 +510,12 @@ function isPostSalePracticeStatus(status?: string | null) {
 
 function getTimelineLabel(type: string) {
   const t = String(type || "").toLowerCase();
-  if (t.includes("call")) return "Call";
+  if (t.includes("3cx") || t.includes("call")) return "Chiamata";
   if (t.includes("whatsapp")) return "WhatsApp";
+  if (t.includes("callback")) return "Richiamo";
+  if (t.includes("quote")) return "Preventivo";
+  if (t.includes("appointment")) return "Appuntamento";
+  if (t.includes("new_opportunity")) return "Nuova opportunita";
   if (t.includes("status")) return "Cambio stato";
   if (t.includes("task")) return "Task";
   if (t.includes("note")) return "Nota";
@@ -500,8 +524,10 @@ function getTimelineLabel(type: string) {
 
 function getTimelineMeta(type: string) {
   const t = String(type || "").toLowerCase();
-  if (t.includes("call")) return { icon: "Call", className: "call" };
+  if (t.includes("3cx") || t.includes("call")) return { icon: "Call", className: "call" };
   if (t.includes("whatsapp")) return { icon: "WA", className: "whatsapp" };
+  if (t.includes("callback")) return { icon: "Call", className: "call" };
+  if (t.includes("quote") || t.includes("appointment")) return { icon: "Task", className: "task" };
   if (t.includes("status")) return { icon: "Stato", className: "status" };
   if (t.includes("task")) return { icon: "Task", className: "task" };
   if (t.includes("note")) return { icon: "Nota", className: "note" };
@@ -745,6 +771,7 @@ export function PraticaDetailPage() {
   const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
   const activityActor = authUser?.name?.trim() || authUser?.username || "operatore pratiche";
   const [detail, setDetail] = useState<LeadDetail | null>(null);
+  const [customerSummary, setCustomerSummary] = useState<{ ltv: number; purchaseCount: number } | null>(null);
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [assignees, setAssignees] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -779,6 +806,10 @@ export function PraticaDetailPage() {
   const [callFollowUpAt, setCallFollowUpAt] = useState(getDefaultFollowUpAt());
   const [callStartedAt, setCallStartedAt] = useState("");
   const [callRequestKey, setCallRequestKey] = useState("");
+  const [callbackReason, setCallbackReason] = useState("");
+  const [callbackOperator, setCallbackOperator] = useState("");
+  const [callLossReason, setCallLossReason] = useState("");
+  const [callModalForced, setCallModalForced] = useState(false);
   const [animationsReady, setAnimationsReady] = useState(false);
   const resolvedCallOutcome: CallOutcome = callConnection === "answered" ? answeredCallOutcome : callConnection;
 
@@ -818,8 +849,9 @@ export function PraticaDetailPage() {
     setDetail((prev) => (prev ? { ...prev, callLogs: [item, ...(prev.callLogs || [])] } : prev));
   }
 
-  function closeCallOutcomeModal() {
+  function resetCallModalState() {
     setCallModalOpen(false);
+    setCallModalForced(false);
     setCallSubmitting(false);
     setCallConnection("answered");
     setAnsweredCallOutcome("completed");
@@ -828,18 +860,30 @@ export function PraticaDetailPage() {
     setCallFollowUpAt(getDefaultFollowUpAt());
     setCallStartedAt("");
     setCallRequestKey("");
+    setCallbackReason("");
+    setCallbackOperator("");
+    setCallLossReason("");
     clearPending3CXCall();
   }
 
-  function openCallOutcomeModal(callMeta?: { startedAt?: string; requestKey?: string }) {
+  function closeCallOutcomeModal() {
+    if (callModalForced) return;
+    resetCallModalState();
+  }
+
+  function openCallOutcomeModal(callMeta?: { startedAt?: string; requestKey?: string; forced?: boolean }) {
     setCallModalOpen(true);
-    setCallConnection("answered");
+    setCallModalForced(Boolean(callMeta?.forced));
+    setCallConnection(callMeta?.forced ? "no_answer" : "answered");
     setAnsweredCallOutcome("completed");
     setCallNote("");
     setCallCreateFollowUp(false);
     setCallFollowUpAt(getDefaultFollowUpAt());
     setCallStartedAt(callMeta?.startedAt || new Date().toISOString());
     setCallRequestKey(callMeta?.requestKey || `callreq_${detail?.lead.id || "lead"}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`);
+    setCallbackReason("");
+    setCallbackOperator(detail?.lead.assignedTo || "");
+    setCallLossReason("");
   }
 
   function getBusyFollowUpAt() {
@@ -864,7 +908,7 @@ export function PraticaDetailPage() {
 
   function selectAnsweredCallOutcome(nextOutcome: AnsweredCallOutcome) {
     setAnsweredCallOutcome(nextOutcome);
-    if (nextOutcome === "call_back") {
+    if (nextOutcome === "call_back" || nextOutcome === "appointment_set") {
       setCallCreateFollowUp(false);
       setCallFollowUpAt(getDefaultFollowUpAt());
     }
@@ -992,23 +1036,6 @@ export function PraticaDetailPage() {
     }
   }
 
-  async function registerCall() {
-    if (!detail?.lead.id) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api(`/api/leads/${detail.lead.id}/calls`, {
-        method: "POST",
-        body: JSON.stringify({ disposition: "completed", actor: "operatore pratica" })
-      });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore registrazione chiamata.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function handleSubmitCallOutcome() {
     if (!detail?.lead || callSubmitting) return;
     setCallSubmitting(true);
@@ -1018,16 +1045,18 @@ export function PraticaDetailPage() {
       const endedAt = new Date().toISOString();
       const previousStatus = targetLead.status;
       const callOutcome = resolvedCallOutcome;
-      const hasAutomaticFollowUp = callOutcome === "call_back" || callOutcome === "no_answer";
+      const hasAutomaticFollowUp = callOutcome === "call_back" || callOutcome === "no_answer" || callOutcome === "appointment_set";
       const closesPractice = callOutcome === "not_interested";
       const automatedFollowUpAt =
-        callOutcome === "call_back"
+        callOutcome === "call_back" || callOutcome === "appointment_set"
           ? callFollowUpAt
             ? toIsoDateTime(callFollowUpAt)
             : toIsoDateTime(getDefaultFollowUpAt())
           : callOutcome === "no_answer"
             ? getTomorrowIso()
-            : "";
+            : callCreateFollowUp && callFollowUpAt
+              ? toIsoDateTime(callFollowUpAt)
+              : "";
 
       const updatedLead = await api<Lead>(`/api/leads/${targetLead.id}/calls`, {
         method: "POST",
@@ -1038,7 +1067,10 @@ export function PraticaDetailPage() {
           endedAt,
           startedAt: callStartedAt || undefined,
           followUpAt: automatedFollowUpAt || undefined,
-          idempotencyKey: callRequestKey || undefined
+          idempotencyKey: callRequestKey || undefined,
+          callbackReason: callOutcome === "call_back" ? callbackReason.trim() : undefined,
+          assignedTo: callOutcome === "call_back" && !targetLead.assignedTo ? callbackOperator.trim() : undefined,
+          lossReason: callOutcome === "not_interested" ? callLossReason : undefined
         })
       });
 
@@ -1106,14 +1138,6 @@ export function PraticaDetailPage() {
         await createAutoFollowUp(targetLead, suggestedFollowUpAt, callNote.trim() || "Follow-up automatico creato dopo lead interessato.");
       }
 
-      if (!automatedFollowUpAt && !closesPractice && callCreateFollowUp && callFollowUpAt) {
-        await createAutoFollowUp(
-          targetLead,
-          toIsoDateTime(callFollowUpAt),
-          callNote.trim() || `Follow-up creato dopo chiamata con esito ${callOutcome}.`
-        );
-      }
-
       navigate(
         {
           pathname: location.pathname,
@@ -1121,7 +1145,7 @@ export function PraticaDetailPage() {
         },
         { replace: true }
       );
-      closeCallOutcomeModal();
+      resetCallModalState();
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Errore registrazione esito chiamata.");
@@ -1150,10 +1174,27 @@ export function PraticaDetailPage() {
     }
   }
 
-  async function openWhatsApp(templateKey: WhatsAppTemplateKey = "generic") {
+  async function logWhatsAppActivity(type: string, text: string, meta: Record<string, unknown>) {
     if (!detail?.lead.id) return;
-    const template = WHATSAPP_TEMPLATES[templateKey];
-    const url = buildWhatsAppUrl(detail.lead.phone || "", template.message);
+    try {
+      await api(`/api/leads/${detail.lead.id}/activities`, {
+        method: "POST",
+        body: JSON.stringify({ type, text, actor: "operatore pratiche", meta })
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Errore registrazione evento WhatsApp.");
+    }
+  }
+
+  // Primary WhatsApp action for this release: opens wa.me (the operator's own WhatsApp Web/app),
+  // same as before the internal CRM chat integration existed. Product decision for this
+  // milestone: the internal chat stays as a foundation (whatsapp-service, conversation
+  // association, history, attachments, customer actions -- all untouched), but isn't the default
+  // entry point from the Pratica page yet. See openWhatsAppCrmChat for the secondary path.
+  function openWhatsApp() {
+    if (!detail?.lead.id) return;
+    const url = buildWhatsAppUrl(detail.lead.phone || "", "");
     if (!url) {
       setError("Numero cliente non disponibile per aprire WhatsApp.");
       return;
@@ -1162,20 +1203,19 @@ export function PraticaDetailPage() {
     if (!popup) {
       window.location.href = url;
     }
-    try {
-      await api(`/api/leads/${detail.lead.id}/activities`, {
-        method: "POST",
-        body: JSON.stringify({
-          type: "whatsapp_opened",
-          text: template.message ? `Template WhatsApp usato: ${template.label}.` : "Chat WhatsApp avviata.",
-          actor: "operatore pratiche",
-          meta: { channel: "whatsapp", template: templateKey }
-        })
-      });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore registrazione evento WhatsApp.");
-    }
+    void logWhatsAppActivity("whatsapp_opened", "Chat WhatsApp esterna (wa.me) aperta dalla pratica.", { channel: "whatsapp", target: "external" });
+  }
+
+  // Secondary, non-prominent path to the internal CRM chat foundation (Cloud API-backed, tracked,
+  // associated to the right lead/customer via /conversations/ensure). Only offered when the
+  // practice has a customerId to route into.
+  function openWhatsAppCrmChat() {
+    if (!detail?.lead.id || !detail.lead.customerId) return;
+    const params = new URLSearchParams({ customerId: detail.lead.customerId, leadId: detail.lead.id });
+    if (detail.lead.phone) params.set("phone", detail.lead.phone);
+    if (detail.lead.fullName) params.set("customerName", detail.lead.fullName);
+    void logWhatsAppActivity("whatsapp_crm_chat_opened", "Chat WhatsApp CRM aperta dalla pratica.", { channel: "whatsapp", target: "crm_chat" });
+    navigate(`/chat?${params.toString()}`);
   }
 
   useEffect(
@@ -1559,7 +1599,7 @@ export function PraticaDetailPage() {
       return;
     }
     try {
-      const attachment = detail?.lead.id
+      const rawAttachment = detail?.lead.id
         ? await uploadDocumentToStorage(detail.lead.id, key, file).catch(async (error) => {
             if (error instanceof Error && error.message.toLowerCase().includes("storage documenti non configurato")) {
               return readFileAsAttachment(file);
@@ -1567,6 +1607,10 @@ export function PraticaDetailPage() {
             throw error;
           })
         : await readFileAsAttachment(file);
+      const attachment: PracticeDocumentAttachment = {
+        ...rawAttachment,
+        uploadedBy: rawAttachment.uploadedBy || authUser?.name || authUser?.username || ""
+      };
       const nextDocuments = {
         items: documentsDraft.items.map((item) =>
           item.key === key
@@ -1601,7 +1645,8 @@ export function PraticaDetailPage() {
         method: "POST",
         body: JSON.stringify({
           storageKey: attachment.storageKey,
-          fileName: attachment.name
+          fileName: attachment.name,
+          leadId: detail?.lead.id
         })
       });
       window.open(payload.url, "_blank", "noopener,noreferrer");
@@ -1622,7 +1667,8 @@ export function PraticaDetailPage() {
         await api("/api/document-storage/delete", {
           method: "POST",
           body: JSON.stringify({
-            storageKey: attachmentToRemove.storageKey
+            storageKey: attachmentToRemove.storageKey,
+            leadId: detail?.lead.id
           })
         });
       } catch (e) {
@@ -1768,12 +1814,48 @@ export function PraticaDetailPage() {
   }, [id]);
 
   useEffect(() => {
+    if (loading || !detail?.lead) return;
+    if (detail.lead.secondAttemptPending && !callModalOpen) {
+      openCallOutcomeModal({ forced: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, detail?.lead?.id, detail?.lead?.secondAttemptPending]);
+
+  useEffect(() => {
+    if (!callModalOpen || callModalForced) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !callSubmitting) closeCallOutcomeModal();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [callModalOpen, callModalForced, callSubmitting]);
+
+  useEffect(() => {
     if (loading || !detail?.lead?.id) return;
     const timer = window.setTimeout(() => {
       setAnimationsReady(true);
     }, 320);
     return () => window.clearTimeout(timer);
   }, [loading, detail?.lead?.id]);
+
+  useEffect(() => {
+    const customerId = detail?.lead?.customerId;
+    if (!customerId) {
+      setCustomerSummary(null);
+      return;
+    }
+    let canceled = false;
+    api<{ ltv: { ltv: number; purchaseCount: number } }>(`/api/customers/${customerId}`)
+      .then((payload) => {
+        if (!canceled) setCustomerSummary({ ltv: payload.ltv.ltv, purchaseCount: payload.ltv.purchaseCount });
+      })
+      .catch(() => {
+        if (!canceled) setCustomerSummary(null);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [detail?.lead?.customerId]);
 
   useEffect(() => {
     if (!taskModalOpen) return;
@@ -1860,8 +1942,13 @@ export function PraticaDetailPage() {
   const completedPracticeTasks = useMemo(() => sortedPracticeTasks.filter((task) => task.status === "done").slice(0, 4), [sortedPracticeTasks]);
   const dismissedPracticeTasks = useMemo(() => sortedPracticeTasks.filter((task) => task.status === "dismissed").slice(0, 3), [sortedPracticeTasks]);
   const nextTaskMeta = useMemo(() => (openPracticeTasks[0] ? getTaskUrgencyMeta(openPracticeTasks[0]) : null), [openPracticeTasks]);
-  const modalAutoFollowUp = resolvedCallOutcome === "call_back" || resolvedCallOutcome === "no_answer";
-  const modalClosedOutcome = resolvedCallOutcome === "not_interested";
+  const modalRequiresCallbackOperator = Boolean(detail?.lead.assignedTo) || callbackOperator.trim().length > 0;
+  const canSubmitCallOutcome =
+    (resolvedCallOutcome !== "call_back" ||
+      (Boolean(callFollowUpAt) && callbackReason.trim().length > 0 && modalRequiresCallbackOperator)) &&
+    (resolvedCallOutcome !== "appointment_set" || Boolean(callFollowUpAt)) &&
+    (resolvedCallOutcome !== "not_interested" || callLossReason.trim().length > 0) &&
+    (!["completed", "other"].includes(resolvedCallOutcome) || callCreateFollowUp);
   const documentsState = useMemo(() => normalizeDocuments(documentsDraft), [documentsDraft]);
   const documentsBadge = useMemo(() => getDocumentsBadge(documentsState), [documentsState]);
   const missingDocumentsCount = useMemo(() => getMissingDocumentsCount(documentsState), [documentsState]);
@@ -1958,9 +2045,23 @@ export function PraticaDetailPage() {
               <h4>{detail.lead.fullName}</h4>
               <p className="pd-sub">{detail.lead.phone}</p>
               <p className="pd-sub pd-sub-secondary">{detail.lead.email || "-"}</p>
+              {detail.lead.customerId ? (
+                <Link className="pd-customer-link" to={`/customers/${detail.lead.customerId}`}>
+                  {customerSummary
+                    ? `Storico cliente - LTV ${formatCurrency(customerSummary.ltv)} - ${customerSummary.purchaseCount} ${customerSummary.purchaseCount === 1 ? "acquisto" : "acquisti"}`
+                    : "Storico cliente"}
+                </Link>
+              ) : null}
               <div className="pd-badges">
                 <span className={`pd-status ${statusClass}`}>{getStatusLabel(detail.lead.status)}</span>
                 <span className={`pd-priority pd-priority-${priority}`}>{getPriorityLabel(priority)}</span>
+                {detail.lead.callAttempts ? (
+                  <span className={`pd-attempts ${detail.lead.secondAttemptPending ? "pd-attempts-alert" : ""}`}>
+                    {detail.lead.secondAttemptPending
+                      ? `2° tentativo senza risposta - serve una decisione`
+                      : `Tentativi di contatto: ${detail.lead.callAttempts}`}
+                  </span>
+                ) : null}
               </div>
               <div className="pd-hero-actions">
                 <button type="button" className="pd-hero-action pd-hero-action-call" disabled={busy} onClick={startCall}>
@@ -1972,7 +2073,7 @@ export function PraticaDetailPage() {
                   </svg>
                   <span>Chiama</span>
                 </button>
-                <button type="button" className="pd-hero-action pd-hero-action-whatsapp" onClick={() => void openWhatsApp("generic")}>
+                <button type="button" className="pd-hero-action pd-hero-action-whatsapp" onClick={openWhatsApp}>
                   <svg className="pd-hero-action-icon-whatsapp" viewBox="0 0 32 32" fill="none" aria-hidden="true">
                     <path
                       d="M27.281 4.673A15.815 15.815 0 0 0 16.028 0C7.308 0 .215 7.093.212 15.813a15.74 15.74 0 0 0 2.124 7.923L0 32l8.47-2.221a15.814 15.814 0 0 0 7.551 1.919h.007c8.718 0 15.812-7.094 15.815-15.813A15.7 15.7 0 0 0 27.281 4.673Z"
@@ -1999,6 +2100,11 @@ export function PraticaDetailPage() {
                   <span>Nota</span>
                 </button>
               </div>
+              {detail.lead.customerId && detail.lead.phone ? (
+                <button type="button" className="pd-whatsapp-external-link" onClick={openWhatsAppCrmChat}>
+                  Apri chat CRM
+                </button>
+              ) : null}
             </div>
           </section>
 
@@ -2567,7 +2673,7 @@ export function PraticaDetailPage() {
           </div>
 
           {callModalOpen && detail?.lead ? (
-            <div className="pd-note-modal-backdrop" role="presentation" onClick={() => (callSubmitting ? null : closeCallOutcomeModal())}>
+            <div className="pd-note-modal-backdrop" role="presentation" onClick={() => (callSubmitting || callModalForced ? null : closeCallOutcomeModal())}>
               <div
                 className="pd-note-modal pd-call-modal"
                 role="dialog"
@@ -2577,16 +2683,21 @@ export function PraticaDetailPage() {
               >
                 <div className="pd-note-modal-head">
                   <div>
-                    <h5 id="pd-call-modal-title">Esito chiamata</h5>
+                    <h5 id="pd-call-modal-title">{callModalForced ? "Follow-up cliente" : "Esito chiamata"}</h5>
                     <p>
                       {detail.lead.fullName} - {detail.lead.phone || "-"}
                     </p>
+                    {callModalForced ? (
+                      <p className="pd-call-forced-hint">
+                        Il cliente e stato ricontattato per la seconda volta senza risposta. Indica come procedere prima di continuare.
+                      </p>
+                    ) : null}
                   </div>
                   <button
                     type="button"
                     className="pd-call-close"
                     aria-label="Chiudi modale esito chiamata"
-                    disabled={callSubmitting}
+                    disabled={callSubmitting || callModalForced}
                     onClick={closeCallOutcomeModal}
                   >
                     X
@@ -2650,6 +2761,29 @@ export function PraticaDetailPage() {
                           Contatto completato
                         </button>
                       </div>
+                      <div className="pd-call-choice-row pd-call-choice-row-secondary" role="group" aria-label="Altri esiti">
+                        <button
+                          type="button"
+                          className={answeredCallOutcome === "quote_required" ? "active" : ""}
+                          onClick={() => selectAnsweredCallOutcome("quote_required")}
+                        >
+                          Preventivo da preparare
+                        </button>
+                        <button
+                          type="button"
+                          className={answeredCallOutcome === "quote_sent" ? "active" : ""}
+                          onClick={() => selectAnsweredCallOutcome("quote_sent")}
+                        >
+                          Preventivo inviato
+                        </button>
+                        <button
+                          type="button"
+                          className={answeredCallOutcome === "appointment_set" ? "active" : ""}
+                          onClick={() => selectAnsweredCallOutcome("appointment_set")}
+                        >
+                          Appuntamento fissato
+                        </button>
+                      </div>
                     </div>
                   ) : null}
 
@@ -2663,21 +2797,68 @@ export function PraticaDetailPage() {
                     />
                   </label>
 
-                  {modalAutoFollowUp ? (
+                  {resolvedCallOutcome === "call_back" ? (
                     <>
-                      <div className="pd-call-hint">
-                        {resolvedCallOutcome === "call_back"
-                          ? "Follow-up automatico: verra impostato un richiamo con la data selezionata."
-                          : "Follow-up automatico: verra creato un richiamo per domani."}
-                      </div>
-                      {resolvedCallOutcome === "call_back" ? (
+                      <div className="pd-call-hint">Il richiamo va indicato con data, ora, operatore e motivo: sono tutti obbligatori.</div>
+                      <label>
+                        <span>Data e ora richiamo</span>
+                        <input type="datetime-local" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
+                      </label>
+                      <label>
+                        <span>Motivo del richiamo</span>
+                        <input
+                          type="text"
+                          value={callbackReason}
+                          onChange={(event) => setCallbackReason(event.target.value)}
+                          placeholder="Es. vuole confrontare i prezzi, richiede tempo per decidere..."
+                        />
+                      </label>
+                      {detail.lead.assignedTo ? (
+                        <div className="pd-call-hint">Operatore responsabile: {detail.lead.assignedTo}</div>
+                      ) : (
                         <label>
-                          <span>Data richiamo</span>
-                          <input type="datetime-local" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
+                          <span>Operatore responsabile del richiamo</span>
+                          <select value={callbackOperator} onChange={(event) => setCallbackOperator(event.target.value)}>
+                            <option value="">Seleziona operatore...</option>
+                            {assignees.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
                         </label>
-                      ) : null}
+                      )}
                     </>
-                  ) : !modalClosedOutcome ? (
+                  ) : resolvedCallOutcome === "appointment_set" ? (
+                    <>
+                      <div className="pd-call-hint">Indica la data e l'ora dell'appuntamento fissato con il cliente.</div>
+                      <label>
+                        <span>Data e ora appuntamento</span>
+                        <input type="datetime-local" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
+                      </label>
+                    </>
+                  ) : resolvedCallOutcome === "not_interested" ? (
+                    <>
+                      <label>
+                        <span>Motivo</span>
+                        <select value={callLossReason} onChange={(event) => setCallLossReason(event.target.value)}>
+                          <option value="">Seleziona motivo...</option>
+                          {LOSS_REASON_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="pd-call-hint pd-call-hint-closed">La pratica verra chiusa senza creare una prossima azione.</div>
+                    </>
+                  ) : resolvedCallOutcome === "quote_required" ? (
+                    <div className="pd-call-hint">Verra creato un task per preparare il preventivo.</div>
+                  ) : resolvedCallOutcome === "quote_sent" ? (
+                    <div className="pd-call-hint">Il lead resta attivo: se non indichi una data, verra impostato un follow-up automatico tra 2 giorni.</div>
+                  ) : resolvedCallOutcome === "no_answer" ? (
+                    <div className="pd-call-hint">Follow-up automatico: verra creato un richiamo per domani.</div>
+                  ) : (
                     <>
                       <label className="pd-call-check">
                         <input
@@ -2697,17 +2878,25 @@ export function PraticaDetailPage() {
                           disabled={!callCreateFollowUp}
                         />
                       </label>
+                      {!callCreateFollowUp ? (
+                        <div className="pd-call-hint pd-call-hint-warning">
+                          Senza una prossima azione questo esito non potra essere salvato: seleziona un altro esito o crea un follow-up.
+                        </div>
+                      ) : null}
                     </>
-                  ) : (
-                    <div className="pd-call-hint pd-call-hint-closed">La pratica verra chiusa senza creare una prossima azione.</div>
                   )}
                 </div>
 
                 <div className="pd-call-modal-actions">
-                  <button type="button" className="pd-call-cancel" disabled={callSubmitting} onClick={closeCallOutcomeModal}>
+                  <button
+                    type="button"
+                    className="pd-call-cancel"
+                    disabled={callSubmitting || callModalForced}
+                    onClick={closeCallOutcomeModal}
+                  >
                     Annulla
                   </button>
-                  <button type="button" disabled={callSubmitting} onClick={() => void handleSubmitCallOutcome()}>
+                  <button type="button" disabled={callSubmitting || !canSubmitCallOutcome} onClick={() => void handleSubmitCallOutcome()}>
                     {callSubmitting ? "Salvataggio..." : "Salva esito"}
                   </button>
                 </div>

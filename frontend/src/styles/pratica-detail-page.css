@@ -136,6 +136,47 @@
   color: rgba(228, 237, 250, 0.92);
 }
 
+.pd-customer-link {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(243, 247, 255, 0.96);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  width: fit-content;
+}
+
+.pd-customer-link:hover,
+.pd-customer-link:focus-visible {
+  background: rgba(255, 255, 255, 0.16);
+  text-decoration: underline;
+}
+
+.pd-whatsapp-external-link {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: rgba(243, 247, 255, 0.72);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  width: fit-content;
+}
+
+.pd-whatsapp-external-link:hover,
+.pd-whatsapp-external-link:focus-visible {
+  color: rgba(243, 247, 255, 0.96);
+}
+
 .pd-badges {
   display: inline-flex;
   gap: 8px;
@@ -853,6 +894,23 @@
   font-weight: 800;
   padding: 6px 11px;
   display: inline-block;
+}
+
+.pd-attempts {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(243, 247, 255, 0.96);
+  font-size: 12px;
+  font-weight: 750;
+  padding: 6px 11px;
+  display: inline-block;
+}
+
+.pd-attempts-alert {
+  border-color: #e79b9b;
+  background: #c94f4f;
+  color: #ffffff;
 }
 
 .pd-status-new {
@@ -2842,6 +2900,29 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
   border-left-color: #d6a047;
   background: #fff6e8;
   color: #7a5720;
+}
+
+.pd-call-hint-warning {
+  border-left-color: #c94f4f;
+  background: #fff1f1;
+  color: #8a2f2f;
+}
+
+.pd-call-choice-row-secondary {
+  margin-top: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pd-call-choice-row-secondary button {
+  min-height: 36px;
+  font-size: 11px;
+}
+
+.pd-call-forced-hint {
+  margin: 4px 0 0;
+  color: #8a2f2f;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .pd-call-check {

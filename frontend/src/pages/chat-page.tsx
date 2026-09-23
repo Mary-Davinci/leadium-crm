@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getAuthUser } from "../lib/auth";
 import { api } from "../lib/api";
 import {
@@ -213,6 +214,7 @@ function getOperationalMarker(item: TimelineItem) {
 }
 
 export function ChatPage() {
+  const [searchParams] = useSearchParams();
   const authUser = getAuthUser();
   const authUsername = String(authUser?.username || authUser?.name || "").trim();
   const initialConversations = getChatConversationsCache()?.data || [];
@@ -396,10 +398,47 @@ export function ChatPage() {
     }
   }
 
+  // Deep-link support for "open WhatsApp" from the Pratica page: ?customerId=/leadId= selects the
+  // existing conversation for that Customer if one is already loaded/known server-side, or (with
+  // ?phone=) creates an empty one so the operator lands ready to compose. Runs after the initial
+  // load so it can override the "select the first conversation" default, not race it.
+  async function applyConversationDeepLink() {
+    const targetCustomerId = String(searchParams.get("customerId") || "").trim();
+    const targetLeadId = String(searchParams.get("leadId") || "").trim();
+    const targetPhone = String(searchParams.get("phone") || "").trim();
+    const targetCustomerName = String(searchParams.get("customerName") || "").trim();
+    if (!targetCustomerId && !targetLeadId) return;
+
+    // Queried server-side rather than checked against local state: this runs right after
+    // loadConversations() kicks off its own async setConversations(), so the component's
+    // `conversations` closure here could still be the pre-fetch snapshot (stale-closure risk).
+    const query = targetCustomerId ? `customerId=${encodeURIComponent(targetCustomerId)}` : `leadId=${encodeURIComponent(targetLeadId)}`;
+    const matches = await api<Conversation[]>(`/api/whatsapp/conversations?${query}`);
+    let target = Array.isArray(matches) && matches.length ? matches[0] : null;
+    if (!target && targetPhone) {
+      target = await api<Conversation>("/api/whatsapp/conversations/ensure", {
+        method: "POST",
+        body: JSON.stringify({
+          phone: targetPhone,
+          leadId: targetLeadId || undefined,
+          customerId: targetCustomerId || undefined,
+          customerName: targetCustomerName || undefined
+        })
+      });
+    }
+    if (!target) return;
+    const resolvedTarget = target;
+    setConversations((prev) => (prev.some((item) => item.id === resolvedTarget.id) ? prev : [resolvedTarget, ...prev].sort(compareConversations)));
+    setSelectedId(resolvedTarget.id);
+  }
+
   useEffect(() => {
-    loadConversations({ force: true }).catch((error: Error) => setChatError(error.message));
+    loadConversations({ force: true })
+      .then(() => applyConversationDeepLink())
+      .catch((error: Error) => setChatError(error.message));
     loadTaskBoard().catch((error: Error) => setLeadError(error.message));
     loadTemplates().catch(() => setTemplates(FALLBACK_TEMPLATE_OPTIONS));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -566,6 +605,26 @@ export function ChatPage() {
         meta: { automation: "template_task_follow_up" }
       });
     }
+    if (tag === "callback") {
+      return createSmartTask({
+        kind: "callback_reminder",
+        title: `Confermare richiamo ${currentLead?.fullName || ""}`.trim(),
+        description: 'Template "Ricontattami" inviato dalla chat. Attendere la risposta del cliente e programmare il richiamo con data/ora.',
+        priority: 75,
+        dueAt: makeDueAt("tomorrow"),
+        meta: { automation: "template_callback_follow_up" }
+      });
+    }
+    if (tag === "not_interested") {
+      return createSmartTask({
+        kind: "chat_follow_up",
+        title: `Confermare esito ${currentLead?.fullName || ""}`.trim(),
+        description: 'Template "Non interessato" inviato dalla chat. Registrare l\'esito definitivo sulla pratica (motivo obbligatorio).',
+        priority: 60,
+        dueAt: makeDueAt("tomorrow"),
+        meta: { automation: "template_not_interested_follow_up" }
+      });
+    }
     return null;
   }
 
@@ -681,6 +740,25 @@ export function ChatPage() {
     const phone = String(currentLead?.phone || selectedConversation?.phone || "").trim();
     if (!phone) return;
     window.location.href = `tel:${phone}`;
+  }
+
+  function scheduleCallback(payload: { followUpAt: string; callbackReason: string }) {
+    return runContextAction(
+      "schedule-callback",
+      () =>
+        api(`/api/leads/${currentLead?.id}/calls`, {
+          method: "POST",
+          body: JSON.stringify({
+            disposition: "call_back",
+            actor: authUsername || "chat",
+            followUpAt: payload.followUpAt,
+            callbackReason: payload.callbackReason,
+            assignedTo: currentLead?.assignedTo || authUsername || undefined,
+            idempotencyKey: `chat_callback_${currentLead?.id}_${Date.now()}`
+          })
+        }),
+      { notice: "Richiamo programmato" }
+    );
   }
 
   function requestDocuments() {
@@ -925,6 +1003,14 @@ export function ChatPage() {
                     : getAvatarLabel(selectedConversation?.customerName, selectedConversation?.phone)}
                 </span>
                 <article className={`chat-react-bubble ${item.message.direction === "outbound" ? "out" : "in"}`}>
+                  {item.message.attachment ? (
+                    <div className="chat-react-attachment">
+                      <svg className="chat-react-attachment-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                        <path d="M4 12.5 11.5 5a3.5 3.5 0 0 1 5 5L9 17.5a2 2 0 0 1-3-3L13 7.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      <span className="chat-react-attachment-name">{item.message.attachment.filename || "Allegato"}</span>
+                    </div>
+                  ) : null}
                   <p>{item.message.text}</p>
                   <span>
                     {item.message.messageType === "template" ? "Template • " : ""}
@@ -1037,6 +1123,8 @@ export function ChatPage() {
         onCallCustomer={callCustomer}
         onRequestDocuments={requestDocuments}
         onRequestPaymentReminder={requestPaymentReminder}
+        onScheduleCallback={(payload) => void scheduleCallback(payload)}
+        callbackScheduling={actionBusyKey === "schedule-callback"}
         onMarkDocumentReceived={(documentId) => void markDocumentReceived(documentId)}
         onMarkPaymentReceived={(paymentId) => void markPaymentReceived(paymentId)}
         onVerifyPayment={(paymentId) => void verifyPayment(paymentId)}

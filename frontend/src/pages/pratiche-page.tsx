@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { PracticeCard } from "../features/practices/components/PracticeCard";
+import { PracticeListItem } from "../features/practices/components/PracticeListItem";
 import { PracticesQuickDetail } from "../features/practices/components/PracticesQuickDetail";
+import { PracticeFilters } from "../features/practices/components/PracticeFilters";
 import { buildPracticeUrl } from "../features/practices/practice-links";
 import { CallOutcome, Lead, LeadDetail, Workflow } from "../features/practices/pratiche.types";
 import { getPriority, getPriorityScore, getSmartBucket, includesAny, normalizeLead } from "../features/practices/pratiche.utils";
@@ -193,6 +194,10 @@ export function PratichePage() {
   const [showExtraFilters, setShowExtraFilters] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [newLeadModalOpen, setNewLeadModalOpen] = useState(false);
+  const [newLeadSubmitting, setNewLeadSubmitting] = useState(false);
+  const [newLeadError, setNewLeadError] = useState("");
+  const [newLeadDraft, setNewLeadDraft] = useState({ fullName: "", phone: "", email: "", notes: "" });
   const [callModalLead, setCallModalLead] = useState<Lead | null>(null);
   const [callSubmitting, setCallSubmitting] = useState(false);
   const [callConnection, setCallConnection] = useState<CallConnection>("answered");
@@ -408,6 +413,55 @@ export function PratichePage() {
       setError(e instanceof Error ? e.message : "Errore caricamento pratiche.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function openNewLeadModal() {
+    setNewLeadDraft({ fullName: "", phone: "", email: "", notes: "" });
+    setNewLeadError("");
+    setNewLeadModalOpen(true);
+  }
+
+  function closeNewLeadModal() {
+    if (newLeadSubmitting) return;
+    setNewLeadModalOpen(false);
+    setNewLeadError("");
+  }
+
+  async function submitNewLead() {
+    const fullName = newLeadDraft.fullName.trim();
+    const phone = newLeadDraft.phone.trim();
+    if (!fullName || !phone) {
+      setNewLeadError("Nome completo e telefono sono obbligatori.");
+      return;
+    }
+    setNewLeadSubmitting(true);
+    setNewLeadError("");
+    try {
+      const response = await api<{ id?: string; mode?: string; lead?: { id: string } }>("/api/leads", {
+        method: "POST",
+        body: JSON.stringify({
+          fullName,
+          phone,
+          email: newLeadDraft.email.trim(),
+          notes: newLeadDraft.notes.trim(),
+          source: "manuale",
+          actor: authUser?.name || authUser?.username || "operatore"
+        })
+      });
+      const newLeadId = response.mode ? response.lead?.id : response.id;
+      invalidateTaskBoardCache();
+      invalidateDashboardCache();
+      setNewLeadModalOpen(false);
+      if (newLeadId) {
+        navigate(buildPracticeUrl(newLeadId, "overview"));
+      } else {
+        await loadPratiche();
+      }
+    } catch (e) {
+      setNewLeadError(e instanceof Error ? e.message : "Errore creazione lead.");
+    } finally {
+      setNewLeadSubmitting(false);
     }
   }
 
@@ -849,6 +903,7 @@ export function PratichePage() {
     return { mine, all: leads.length };
   }, [leads, currentUserKeys]);
 
+
   useEffect(() => {
     if (!selectedLeadId) return;
     const exists = sortedRows.some((lead) => lead.id === selectedLeadId);
@@ -1012,88 +1067,34 @@ export function PratichePage() {
 
             <p className="pr-view-hint">{viewHintText}</p>
           </div>
+
+          <button type="button" className="pr-new-lead-btn" onClick={openNewLeadModal}>
+            + Nuovo lead
+          </button>
         </header>
 
-        <div className={`pr-filters ${isAdmin ? "" : "pr-filters-compact"}`}>
-          <label className="pr-search-field">
-            <span className="pr-search-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16">
-                <circle cx="7" cy="7" r="4.5" />
-                <path d="M10.5 10.5 14 14" />
-              </svg>
-            </span>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca nelle pratiche..." />
-          </label>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="">Tutti gli stati</option>
-            {workflow?.statuses.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
-          {isAdmin ? (
-            <select value={assignedFilter} onChange={(e) => setAssignedFilter(e.target.value)}>
-              <option value="">Tutti gli assegnati</option>
-              {assignees.map((assignee) => (
-                <option key={assignee} value={assignee}>
-                  {assignee}
-                </option>
-              ))}
-            </select>
-          ) : null}
-          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-            <option value="">Tutte le priorita</option>
-            <option value="alta">Alta</option>
-            <option value="media">Media</option>
-            <option value="bassa">Bassa</option>
-            {practiceView === "active" ? (
-              <>
-                <option value="overdue">In ritardo</option>
-                <option value="today">Da fare oggi</option>
-                <option value="callbacks">Da richiamare</option>
-              </>
-            ) : null}
-          </select>
-          <button
-            type="button"
-            className={`pr-filter-toggle ${showExtraFilters ? "active" : ""}`}
-            onClick={() => setShowExtraFilters((current) => !current)}
-          >
-            <span className="pr-filter-toggle-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16">
-                <path d="M2 4h12M4.5 8h7M6.5 12h3" />
-              </svg>
-            </span>
-            Extra filtri
-          </button>
-        </div>
-
-        {showExtraFilters ? (
-          <div className={`pr-filters pr-filters-extra ${practiceView === "active" ? "" : "pr-filters-extra-compact"}`}>
-            <select value={callOutcomeFilter} onChange={(e) => setCallOutcomeFilter(e.target.value)}>
-              <option value="">Tutti gli esiti chiamata</option>
-              <option value="completed">Completata</option>
-              <option value="no_answer">Nessuna risposta</option>
-              <option value="busy">Occupato</option>
-              <option value="call_back">Da richiamare</option>
-              <option value="interested">Interessato</option>
-              <option value="not_interested">Non interessato</option>
-            </select>
-            {practiceView === "active" ? (
-              <>
-                <label className="pr-check">
-                  <input type="checkbox" checked={documentFilter} onChange={(e) => setDocumentFilter(e.target.checked)} />
-                  Documenti mancanti
-                </label>
-                <label className="pr-check">
-                  <input type="checkbox" checked={paymentFilter} onChange={(e) => setPaymentFilter(e.target.checked)} />
-                  Pagamenti in scadenza
-                </label>
-              </>
-            ) : null}
-          </div>
-        ) : null}
+        <PracticeFilters
+          isAdmin={isAdmin}
+          practiceView={practiceView}
+          workflow={workflow}
+          assignees={assignees}
+          search={search}
+          onSearchChange={setSearch}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
+          assignedFilter={assignedFilter}
+          onAssignedFilterChange={setAssignedFilter}
+          priorityFilter={priorityFilter}
+          onPriorityFilterChange={setPriorityFilter}
+          showExtraFilters={showExtraFilters}
+          onToggleExtraFilters={() => setShowExtraFilters((current) => !current)}
+          callOutcomeFilter={callOutcomeFilter}
+          onCallOutcomeFilterChange={setCallOutcomeFilter}
+          documentFilter={documentFilter}
+          onDocumentFilterChange={setDocumentFilter}
+          paymentFilter={paymentFilter}
+          onPaymentFilterChange={setPaymentFilter}
+        />
 
         {loading ? <p className="muted">Caricamento pratiche...</p> : null}
         {error ? <p className="pr-error">{error}</p> : null}
@@ -1106,16 +1107,16 @@ export function PratichePage() {
             <span>Prossima azione</span>
             <span>SLA</span>
             <span>Owner</span>
+            <span>Azioni</span>
           </div>
           {sortedRows.length ? (
             sortedRows.map((lead) => (
-              <PracticeCard
+              <PracticeListItem
                 key={lead.id}
                 lead={lead}
                 linkedTask={primaryTaskByLeadId.get(lead.id) || null}
                 isAdminView={isAdmin}
                 isSelected={selectedLeadId === lead.id}
-                isBusy={loading}
                 availableStatuses={workflow?.flow[lead.status] || []}
                 onSelect={handleSelectLead}
                 onOpen={(id) => navigate(buildPracticeUrl(id))}
@@ -1290,6 +1291,70 @@ export function PratichePage() {
                 </button>
               <button type="button" className="primary" disabled={callSubmitting} onClick={() => void handleSubmitCallOutcome()}>
                 {callSubmitting ? "Salvataggio..." : "Salva esito"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {newLeadModalOpen ? (
+        <div className="pr-call-modal-backdrop" onClick={closeNewLeadModal}>
+          <div className="pr-call-modal panel" onClick={(event) => event.stopPropagation()}>
+            <div className="pr-call-modal-head">
+              <div>
+                <h3>Nuovo lead</h3>
+                <p>Crea un lead manuale e apri subito la pratica per iniziare a lavorarlo.</p>
+              </div>
+            </div>
+
+            <div className="pr-call-modal-grid">
+              <label>
+                <span>Nome completo</span>
+                <input
+                  type="text"
+                  value={newLeadDraft.fullName}
+                  onChange={(event) => setNewLeadDraft((draft) => ({ ...draft, fullName: event.target.value }))}
+                  placeholder="Nome e cognome del cliente"
+                  autoFocus
+                />
+              </label>
+              <label>
+                <span>Telefono</span>
+                <input
+                  type="text"
+                  value={newLeadDraft.phone}
+                  onChange={(event) => setNewLeadDraft((draft) => ({ ...draft, phone: event.target.value }))}
+                  placeholder="+39 ..."
+                />
+              </label>
+              <label>
+                <span>Email (facoltativa)</span>
+                <input
+                  type="email"
+                  value={newLeadDraft.email}
+                  onChange={(event) => setNewLeadDraft((draft) => ({ ...draft, email: event.target.value }))}
+                  placeholder="cliente@esempio.it"
+                />
+              </label>
+              <label>
+                <span>Note (facoltative)</span>
+                <input
+                  type="text"
+                  value={newLeadDraft.notes}
+                  onChange={(event) => setNewLeadDraft((draft) => ({ ...draft, notes: event.target.value }))}
+                  placeholder="Contesto utile per il primo contatto"
+                />
+              </label>
+            </div>
+
+            {newLeadError ? <p className="pr-error">{newLeadError}</p> : null}
+
+            <div className="pr-call-modal-actions">
+              <button type="button" className="secondary" disabled={newLeadSubmitting} onClick={closeNewLeadModal}>
+                Annulla
+              </button>
+              <button type="button" className="primary" disabled={newLeadSubmitting} onClick={() => void submitNewLead()}>
+                {newLeadSubmitting ? "Creazione..." : "Crea lead"}
               </button>
             </div>
           </div>

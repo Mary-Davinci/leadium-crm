@@ -743,6 +743,31 @@
   color: #0ea5a2;
 }
 
+.chat-react-attachment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: rgba(27, 42, 65, 0.06);
+  font-size: 12px;
+  font-weight: 600;
+  color: #1b2a41;
+}
+
+.chat-react-attachment-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.chat-react-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-react-op-marker {
   justify-self: center;
   display: inline-flex;
@@ -1184,6 +1209,42 @@
 .chat-react-ops {
   display: grid;
   gap: 9px;
+}
+
+.chat-callback-row {
+  display: block;
+}
+
+.chat-callback-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #e6edf6;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.chat-callback-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #4b6280;
+}
+
+.chat-callback-form input {
+  min-height: 34px;
+  border: 1px solid #d8e2f0;
+  border-radius: 7px;
+  padding: 0 9px;
+  font-size: 12px;
+  color: #26344d;
+}
+
+.chat-callback-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .chat-action-block,
