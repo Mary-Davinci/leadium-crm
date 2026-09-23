@@ -1,5 +1,5 @@
-import { createHash } from "crypto";
 import { getMongoDb, isMongoEnabled } from "../common/mongo";
+import { hashPasswordScrypt, resolvePasswordVerification } from "./password-hashing";
 
 export type AuthRole = "super_admin" | "admin" | "operatore";
 
@@ -63,20 +63,12 @@ const AUTH_SALT = process.env.AUTH_PASSWORD_SALT || "crocieriamo-auth-salt";
 const AUTH_MONGO_TIMEOUT_MS = Number(process.env.AUTH_MONGO_TIMEOUT_MS || 3500);
 let mongoAuthSetupPromise: Promise<void> | null = null;
 
+// New/reset passwords are always hashed with scrypt (see password-hashing.ts).
+// Legacy SHA-256 verification and the upgrade-on-login decision live in
+// resolvePasswordVerification (password-hashing.ts), kept side-effect-free
+// there so it's unit testable without a live Mongo instance.
 function hashPassword(password: string) {
-  return createHash("sha256").update(`${AUTH_SALT}:${password}`).digest("hex");
-}
-
-function hashPasswordWithoutSalt(password: string) {
-  return createHash("sha256").update(password).digest("hex");
-}
-
-function hashPasswordWithSuffixSalt(password: string) {
-  return createHash("sha256").update(`${password}:${AUTH_SALT}`).digest("hex");
-}
-
-function isSha256Hash(value: unknown) {
-  return /^[a-f0-9]{64}$/i.test(String(value || ""));
+  return hashPasswordScrypt(password);
 }
 
 function normalizeRole(value: unknown): AuthRole {
@@ -232,57 +224,21 @@ export async function authenticateUser(identifier: string, password: string): Pr
       return null;
     }
 
-    const expectedHash = hashPassword(password);
-    const legacyHashWithoutSalt = hashPasswordWithoutSalt(password);
-    const legacyHashWithSuffixSalt = hashPasswordWithSuffixSalt(password);
-    if (user.passwordHash) {
-      if (user.passwordHash !== expectedHash) {
-        const matchesLegacyHash =
-          user.passwordHash === legacyHashWithoutSalt || user.passwordHash === legacyHashWithSuffixSalt;
-        if (matchesLegacyHash) {
-          await users.updateOne(
-            {
-              $or: [
-                { usernameLower: String(user.usernameLower || "").toLowerCase() },
-                { emailLower: String(user.emailLower || "").toLowerCase() }
-              ]
-            },
-            { $set: { passwordHash: expectedHash, updatedAt: new Date().toISOString() }, $unset: { password: "" } }
-          );
-          console.warn(
-            `[auth] migrated legacy password hash for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
-          );
-          return toPublicMongoUser(user);
-        }
-        // Legacy/manual recovery path:
-        // if a plain password is present, or was accidentally saved in passwordHash,
-        // and matches the login password, re-hash it and migrate.
-        const plainPasswordMatches = user.password && user.password === password;
-        const plainHashFieldMatches = !isSha256Hash(user.passwordHash) && user.passwordHash === password;
-        if (plainPasswordMatches || plainHashFieldMatches) {
-          await users.updateOne(
-            {
-              $or: [
-                { usernameLower: String(user.usernameLower || "").toLowerCase() },
-                { emailLower: String(user.emailLower || "").toLowerCase() }
-              ]
-            },
-            { $set: { passwordHash: expectedHash, updatedAt: new Date().toISOString() }, $unset: { password: "" } }
-          );
-          console.warn(
-            `[auth] migrated plain-text password storage for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
-          );
-          return toPublicMongoUser(user);
-        }
-        console.warn(
-          `[auth] login denied: password mismatch for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
-        );
-        return null;
-      }
-      return toPublicMongoUser(user);
+    const verification = resolvePasswordVerification({
+      password,
+      storedPasswordHash: user.passwordHash,
+      storedPlaintextPassword: user.password,
+      configuredSalt: AUTH_SALT
+    });
+
+    if (verification.outcome === "invalid") {
+      console.warn(
+        `[auth] login denied: password mismatch for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
+      );
+      return null;
     }
 
-    if (user.password && user.password === password) {
+    if (verification.outcome === "valid_upgrade") {
       await users.updateOne(
         {
           $or: [
@@ -290,18 +246,12 @@ export async function authenticateUser(identifier: string, password: string): Pr
             { emailLower: String(user.emailLower || "").toLowerCase() }
           ]
         },
-        { $set: { passwordHash: expectedHash, updatedAt: new Date().toISOString() }, $unset: { password: "" } }
+        { $set: { passwordHash: hashPassword(password), updatedAt: new Date().toISOString() }, $unset: { password: "" } }
       );
-      console.warn(
-        `[auth] migrated password field for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
-      );
-      return toPublicMongoUser(user);
+      console.warn(`[auth] ${verification.reason} for "${String(user.usernameLower || identifierLower).toLowerCase()}"`);
     }
 
-    console.warn(
-      `[auth] login denied: no usable password fields for "${String(user.usernameLower || identifierLower).toLowerCase()}"`
-    );
-    return null;
+    return toPublicMongoUser(user);
   } catch (error) {
     console.error("[auth] login failed with internal error", error);
     return null;
