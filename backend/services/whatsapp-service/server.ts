@@ -25,6 +25,7 @@ const {
   normalizeAttachmentKind,
   sanitizeAttachmentFilename,
   isInlineSafeMime,
+  buildContentDisposition,
   INBOUND_MEDIA_MAX_BYTES
 } = require("./media-rules");
 
@@ -861,7 +862,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         "Content-Type": isInlineSafeMime(mimeType) ? mimeType : "application/octet-stream",
         "Content-Length": String(content.length),
-        "Content-Disposition": `${isInlineSafeMime(mimeType) ? "inline" : "attachment"}; filename="${filename}"`,
+        "Content-Disposition": buildContentDisposition(isInlineSafeMime(mimeType) ? "inline" : "attachment", filename),
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, max-age=300"
       });

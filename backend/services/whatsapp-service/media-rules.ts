@@ -52,3 +52,13 @@ export function isInlineSafeMime(mimeType: string) {
 }
 
 export const INBOUND_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
+
+// Node refuses header values outside Latin-1 (customers' files often have emoji/accents/CJK in
+// the name), so the plain filename gets an ASCII fallback and the real name travels in the
+// RFC 5987 filename* parameter, which every current browser prefers.
+export function buildContentDisposition(disposition: "inline" | "attachment", filename: string) {
+  const name = sanitizeAttachmentFilename(filename);
+  const asciiFallback = name.replace(/[^\x20-\x7e]/g, "_");
+  const encoded = encodeURIComponent(name).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}

@@ -72,7 +72,17 @@ type TaskBoardPayload = {
 type OutgoingJob =
   | { kind: "text"; conversationId: string; to: string; text: string }
   | { kind: "template"; conversationId: string; to: string; template: TemplateOption }
-  | { kind: "attachment"; conversationId: string; to: string; leadId: string; draft: DraftAttachment; caption: string };
+  | {
+      kind: "attachment";
+      conversationId: string;
+      to: string;
+      leadId: string;
+      draft: DraftAttachment;
+      caption: string;
+      // Set once the upload succeeded, so a retry after a failed send reuses the stored file
+      // instead of uploading a duplicate copy.
+      stored?: { storageKey: string; name: string; mimeType: string; size: number };
+    };
 
 const FALLBACK_TEMPLATE_OPTIONS: TemplateOption[] = [
   { key: "reopen_contact", name: "reopen_contact", label: "Ricontatto pratica", body: "Ciao, ti ricontattiamo per aggiornarti sulla tua pratica.", category: "followup" },
@@ -609,10 +619,13 @@ export function ChatPage() {
       return;
     }
     const { draft } = job;
-    const stored =
-      draft.source === "upload"
-        ? await uploadChatFile(job.leadId, draft.file, draft.mimeType, draft.kind)
-        : { storageKey: draft.storageKey, name: draft.name, mimeType: draft.mimeType, size: draft.size };
+    if (!job.stored) {
+      job.stored =
+        draft.source === "upload"
+          ? await uploadChatFile(job.leadId, draft.file, draft.mimeType, draft.kind)
+          : { storageKey: draft.storageKey, name: draft.name, mimeType: draft.mimeType, size: draft.size };
+    }
+    const stored = job.stored;
     await api("/api/whatsapp/messages/send", {
       method: "POST",
       body: JSON.stringify({

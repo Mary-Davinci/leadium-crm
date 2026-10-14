@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { classifyMetaError, createMetaSendError } from "./meta-errors";
-import { isInlineSafeMime, normalizeAttachmentKind, resolveOutboundMediaType, sanitizeAttachmentFilename } from "./media-rules";
+import { buildContentDisposition, isInlineSafeMime, normalizeAttachmentKind, resolveOutboundMediaType, sanitizeAttachmentFilename } from "./media-rules";
 
 // Resolved from the compiled spec's location (backend/dist/services/whatsapp-service/), like the
 // other specs, so the test DB lands in backend/data regardless of the runner's cwd.
@@ -108,6 +108,17 @@ async function main() {
     assert.equal(sanitizeAttachmentFilename(""), "documento");
     assert.equal(normalizeAttachmentKind("quote"), "quote");
     assert.equal(normalizeAttachmentKind("<script>"), "file");
+  });
+
+  await runCase("nomi file Unicode/spazi producono un header Content-Disposition valido", async () => {
+    const header = buildContentDisposition("attachment", "Passaporto Müller 文件 😊.pdf");
+    assert.match(header, /^attachment; filename="Passaporto M_ller _+ _+\.pdf"; filename\*=UTF-8''/);
+    assert.ok(/^[\x20-\x7e]*$/.test(header), "l'header deve essere solo ASCII");
+    assert.equal(decodeURIComponent(header.split("UTF-8''")[1]), "Passaporto Müller 文件 😊.pdf");
+    // Node would throw ERR_INVALID_CHAR on a non-Latin-1 header value: prove it accepts this one.
+    const http = require("node:http");
+    const res = new http.ServerResponse(new http.IncomingMessage(null));
+    assert.doesNotThrow(() => res.setHeader("Content-Disposition", header));
   });
 
   await runCase("solo tipi sicuri vengono serviti inline (mai SVG/HTML)", async () => {

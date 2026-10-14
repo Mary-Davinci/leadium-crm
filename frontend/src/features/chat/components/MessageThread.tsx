@@ -21,7 +21,9 @@ export function MessageThread({ conversationId, items, loading, localPreviews, o
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
-  const lastKey = items.length ? items[items.length - 1].key : "";
+  const lastItem = items.length ? items[items.length - 1] : null;
+  // Includes the send state: a failure line appears under the last bubble without a new item.
+  const lastKey = lastItem ? `${lastItem.key}:${lastItem.type === "message" ? lastItem.message.localState || "" : ""}` : "";
 
   function scrollToBottom() {
     const node = scrollRef.current;

@@ -1223,7 +1223,8 @@
   gap: 4px;
 }
 
-.chat-input {
+/* Two classes on purpose: must outrank the app-wide `.content textarea` (80px, resizable). */
+.chat-composer .chat-input {
   flex: 1;
   min-width: 0;
   min-height: 40px;
@@ -1239,7 +1240,7 @@
   resize: none;
 }
 
-.chat-input:focus {
+.chat-composer .chat-input:focus {
   border-color: var(--border-strong);
   box-shadow: var(--focus-ring);
   outline: none;
