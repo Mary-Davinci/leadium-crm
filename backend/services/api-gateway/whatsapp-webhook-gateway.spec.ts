@@ -95,6 +95,58 @@ async function main() {
       assert.equal(received.length, 0);
     });
 
+    await runCase("media e invio WhatsApp senza sessione restano 401", async () => {
+      for (const [method, requestPath] of [
+        ["GET", "/api/whatsapp/messages/wa_msg_1/media"],
+        ["POST", "/api/whatsapp/messages/send"]
+      ]) {
+        const response = await fetch(`${gatewayUrl}${requestPath}`, { method });
+        assert.equal(response.status, 401, `${method} ${requestPath} dovrebbe essere 401`);
+      }
+      assert.equal(received.length, 0);
+    });
+
+    gateway.__setTestSession("tok-operator", { username: "marco", name: "Marco", role: "operator" } as any);
+    const authed = { Authorization: "Bearer tok-operator", "content-type": "application/json" };
+
+    await runCase("invio testo: il nome operatore viene dalla sessione, non dal client", async () => {
+      const response = await fetch(`${gatewayUrl}/api/whatsapp/messages/send`, {
+        method: "POST",
+        headers: authed,
+        body: JSON.stringify({ conversationId: "c1", mode: "text", text: "Ciao", agentName: "qualcun-altro" })
+      });
+      assert.equal(response.status, 200);
+      assert.equal(received.length, 1);
+      assert.equal(received[0].url, "/messages/send");
+      const forwarded = JSON.parse(received[0].body);
+      assert.equal(forwarded.agentName, "marco");
+      assert.equal(forwarded.text, "Ciao");
+    });
+
+    await runCase("allegato senza storageKey rifiutato: l'URL scaricato da Meta non arriva mai dal browser", async () => {
+      const response = await fetch(`${gatewayUrl}/api/whatsapp/messages/send`, {
+        method: "POST",
+        headers: authed,
+        body: JSON.stringify({ conversationId: "c1", mode: "attachment", attachment: { url: "https://evil.example/x.pdf", filename: "x.pdf" } })
+      });
+      assert.equal(response.status, 400);
+      assert.equal(received.length, 0);
+    });
+
+    await runCase("allegato con storageKey ma storage non configurato: 501, nessun inoltro", async () => {
+      const response = await fetch(`${gatewayUrl}/api/whatsapp/messages/send`, {
+        method: "POST",
+        headers: authed,
+        body: JSON.stringify({
+          conversationId: "c1",
+          mode: "attachment",
+          attachment: { storageKey: "lead-documents/l1/chat_attachment/doc-x.pdf", url: "https://evil.example/x.pdf", filename: "x.pdf" }
+        })
+      });
+      assert.equal(response.status, 501);
+      assert.equal(received.length, 0);
+    });
+
     await runCase("route CRM protetta senza sessione resta 401", async () => {
       const response = await fetch(`${gatewayUrl}/api/leads`);
       assert.equal(response.status, 401);

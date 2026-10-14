@@ -83,6 +83,8 @@ export type CrmChatMessageAttachment = {
   mimeType?: string;
   caption?: string;
   documentStorageKey?: string;
+  kind?: "file" | "quote" | "practice_document";
+  size?: number;
 };
 
 export type CrmChatMessage = {

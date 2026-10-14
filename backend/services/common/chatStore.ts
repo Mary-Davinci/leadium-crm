@@ -128,8 +128,20 @@ export async function listMessages(conversationId: string, limit = 100) {
   }
   await ensureMongoIndexes();
   const db = await getMongoDb();
-  const docs = await db.collection("wa_messages").find({ conversationId }).sort({ createdAt: 1 }).limit(limit).toArray();
-  return docs.map(normalizeMessage);
+  // Newest `limit` messages, returned oldest-first: sorting ascending before limit() would return
+  // the OLDEST page, so a conversation past `limit` messages would stop showing new ones (the
+  // local JSON branch above already keeps the newest via slice(-limit)).
+  const docs = await db.collection("wa_messages").find({ conversationId }).sort({ createdAt: -1 }).limit(limit).toArray();
+  return docs.reverse().map(normalizeMessage);
+}
+
+export async function getMessageById(messageId: string) {
+  const id = String(messageId || "").trim();
+  if (!id) return null;
+  if (!isMongoEnabled()) return readLocal().messages.find((m: any) => m.id === id) || null;
+  await ensureMongoIndexes();
+  const db = await getMongoDb();
+  return normalizeMessage(await db.collection("wa_messages").findOne({ _id: id }));
 }
 
 /**

@@ -22,6 +22,7 @@ import {
 } from "./document-storage";
 import { applyLeadImport, previewLeadImport } from "./lead-import";
 import { isTaskDismissBlocked, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
+import { CHAT_UPLOAD_FORMAT_ERROR, isAllowedChatUploadMime, isChatDocumentKey, validateChatUpload } from "./chat-upload-rules";
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.PORT || 4110);
@@ -444,7 +445,11 @@ async function proxyRequest(
     headers,
     body: body && req.method !== "GET" && req.method !== "HEAD" ? body : undefined
   });
+  await forwardUpstreamResponse(res, upstream);
+}
 
+// Relays an upstream service response, masking infrastructure detail in 5xx JSON errors.
+async function forwardUpstreamResponse(res: http.ServerResponse, upstream: Response) {
   const responseHeaders: Record<string, string> = {};
   upstream.headers.forEach((value, key) => {
     if (key !== "transfer-encoding" && key !== "connection") responseHeaders[key] = value;
@@ -690,8 +695,9 @@ export const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "leadId, documentKey e fileName sono obbligatori." });
         return;
       }
-      if (!isAllowedDocumentMime(mimeType)) {
-        sendJson(res, 415, { error: "Tipo di file non consentito. Sono ammessi PDF, immagini e documenti Word." });
+      const chatUpload = isChatDocumentKey(documentKey);
+      if (chatUpload ? !isAllowedChatUploadMime(mimeType) : !isAllowedDocumentMime(mimeType)) {
+        sendJson(res, 415, { error: chatUpload ? CHAT_UPLOAD_FORMAT_ERROR : "Tipo di file non consentito. Sono ammessi PDF, immagini e documenti Word." });
         return;
       }
       const lockError = await assertDocumentPracticeNotLocked(leadId, session);
@@ -707,6 +713,13 @@ export const server = http.createServer(async (req, res) => {
       if (body.length > DOCUMENT_UPLOAD_MAX_BYTES) {
         sendJson(res, 413, { error: `Il file supera il limite di ${Math.round(DOCUMENT_UPLOAD_MAX_BYTES / (1024 * 1024))} MB.` });
         return;
+      }
+      if (chatUpload) {
+        const validation = validateChatUpload({ fileName, mimeType, body });
+        if (validation.ok === false) {
+          sendJson(res, 415, { error: validation.error });
+          return;
+        }
       }
       const attachment = await uploadDocumentBuffer({
         leadId,
@@ -937,6 +950,39 @@ export const server = http.createServer(async (req, res) => {
     // admin-only.
     if (pathname === "/api/whatsapp/templates/test-send" && method === "POST" && isWhatsappTemplateTestSendBlocked(session.user.role)) {
       sendJson(res, 403, { error: "Solo admin e super admin possono inviare template di test." });
+      return;
+    }
+    // Outbound chat attachments: Meta downloads the file from the URL we hand it, so that URL must
+    // never come from the browser. The client only names a storageKey; the gateway re-checks the
+    // operator can access that practice's documents and signs a short-lived download URL itself.
+    // The sender name is likewise taken from the session, not trusted from the request body.
+    if (pathname === "/api/whatsapp/messages/send" && method === "POST") {
+      const body = (await parseJsonBody(req)) as Record<string, any>;
+      body.agentName = session.user.username || session.user.name || body.agentName || "";
+      if (String(body.mode || "").trim().toLowerCase() === "attachment") {
+        const storageKey = String(body.attachment?.storageKey || "").trim();
+        if (!storageKey) {
+          sendJson(res, 400, { error: "Allegato non valido: file non caricato nello storage documenti." });
+          return;
+        }
+        if (!isDocumentStorageEnabled()) {
+          sendJson(res, 501, { error: "Storage documenti non configurato." });
+          return;
+        }
+        const access = await resolveDocumentAccess(storageKey, session);
+        if (access.ok === false) {
+          sendJson(res, access.status, { error: access.error });
+          return;
+        }
+        const signed = await createSignedDownload({ storageKey, fileName: String(body.attachment?.filename || "") });
+        body.attachment = { ...body.attachment, storageKey, url: signed.url };
+      }
+      const upstream = await fetch(`${route.base}${route.path}${url.search}`, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      await forwardUpstreamResponse(res, upstream);
       return;
     }
     const leadScopedMatch = pathname.match(/^\/api\/leads\/([^/]+)(?:\/(notes|activities|calls))?$/);

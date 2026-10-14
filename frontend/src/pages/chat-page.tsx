@@ -1,25 +1,48 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { WifiOff, X } from "lucide-react";
 import { getAuthUser } from "../lib/auth";
 import { api } from "../lib/api";
+import { ChatDecisionEngine, ChatDecisionLead, Payment, PracticeDocument, sortOperationalTasks } from "../features/chat/ChatDecisionEngine";
+import { buildPracticeUrl } from "../features/practices/practice-links";
+import { uploadChatFile } from "../features/chat/chat-api";
 import {
-  ChatDecisionEngine,
-  ChatDecisionLead,
-  Payment,
-  PracticeDocument,
-  sortOperationalTasks
-} from "../features/chat/ChatDecisionEngine";
-import { getConversationPriorityScore } from "../features/chat/ChatDecisionEngine.logic";
+  buildThreadItems,
+  countConversationFilters,
+  filterConversations,
+  getChatLayoutMode,
+  getReplyWindowState,
+  getTimelineMarker,
+  isInfoPanelInitiallyOpen,
+  mapChatError,
+  shouldCloseListOnSelect,
+  validateChatFile,
+  type ThreadMarker
+} from "../features/chat/chat.logic";
+import type {
+  ChatLayoutMode,
+  Conversation,
+  DraftAttachment,
+  InboxFilter,
+  Message,
+  MessageMode,
+  PracticeDocumentAttachment,
+  PracticeDocumentOption,
+  TemplateOption,
+  TimelineItem
+} from "../features/chat/chat.types";
+import { ChatEmptyState } from "../features/chat/components/ChatEmptyState";
+import { ChatHeader } from "../features/chat/components/ChatHeader";
+import { Composer } from "../features/chat/components/Composer";
+import { ConversationList, type ConversationRow } from "../features/chat/components/ConversationList";
+import { MessageThread } from "../features/chat/components/MessageThread";
 import {
-  CrmChatMessage,
-  CrmConversation,
   CrmTask,
   getChatConversationsCache,
   getChatMessagesCache,
   getLeadDetailCacheEntry,
   getTaskBoardCache,
   isChatConversationsCacheFresh,
-  isChatMessagesCacheFresh,
   isLeadDetailCacheFresh,
   isTaskBoardCacheFresh,
   patchConversationInChatCache,
@@ -31,50 +54,13 @@ import {
 } from "../store/crm-store";
 import "../styles/chat-page.css";
 
-type ConversationStatus = "open" | "waiting_customer" | "resolved";
-type InboxFilter = "all" | "unread" | "mine" | "unassigned" | "resolved";
-type MessageMode = "text" | "template";
-
-type Conversation = CrmConversation & {
-  id: string;
-  leadId?: string | null;
-  customerName?: string;
-  phone?: string;
-  unreadCount?: number;
-  lastMessagePreview?: string;
-  lastMessageAt?: string;
-  assignedTo?: string;
-  status?: ConversationStatus | string;
-  channel?: string;
-  lastInboundAt?: string | null;
-  lastOutboundAt?: string | null;
-  replyWindowExpiresAt?: string | null;
-  hasOpenSession?: boolean;
+type Lead = Omit<ChatDecisionLead, "documents"> & {
+  documents?: { items?: Array<PracticeDocument & { attachments?: PracticeDocumentAttachment[] }> };
 };
-
-type Message = CrmChatMessage & {
-  id: string;
-  direction: "inbound" | "outbound";
-  text: string;
-  createdAt: string;
-  status?: string;
-  messageType?: string;
-  templateKey?: string;
-  templateName?: string;
-};
-
-type Lead = ChatDecisionLead;
 
 type LeadDetail = {
   lead: Lead;
   timeline?: TimelineItem[];
-};
-
-type TimelineItem = {
-  type: string;
-  text: string;
-  actor?: string;
-  createdAt: string;
 };
 
 type TaskBoardPayload = {
@@ -82,198 +68,179 @@ type TaskBoardPayload = {
   leads: Lead[];
 };
 
-type TemplateOption = {
-  key: string;
-  name: string;
-  label: string;
-  body: string;
-  category: "utility" | "followup";
-  suggestionTag?: string;
-};
+// A send the operator started; kept so a failed message can be retried exactly as it was.
+type OutgoingJob =
+  | { kind: "text"; conversationId: string; to: string; text: string }
+  | { kind: "template"; conversationId: string; to: string; template: TemplateOption }
+  | { kind: "attachment"; conversationId: string; to: string; leadId: string; draft: DraftAttachment; caption: string };
 
 const FALLBACK_TEMPLATE_OPTIONS: TemplateOption[] = [
-  {
-    key: "reopen_contact",
-    name: "reopen_contact",
-    label: "Ricontatto pratica",
-    body: "Ciao, ti ricontattiamo per aggiornarti sulla tua pratica.",
-    category: "followup"
-  },
-  {
-    key: "request_documents",
-    name: "request_documents",
-    label: "Richiesta documenti",
-    body: "Ciao, ci servono i documenti mancanti per proseguire con la pratica.",
-    category: "utility"
-  },
-  {
-    key: "payment_followup",
-    name: "payment_followup",
-    label: "Promemoria pagamento",
-    body: "Ciao, ti contattiamo per il pagamento in sospeso della tua pratica.",
-    category: "utility"
-  },
-  {
-    key: "booking_update",
-    name: "booking_update",
-    label: "Aggiornamento prenotazione",
-    body: "Ciao, abbiamo un aggiornamento sulla tua prenotazione.",
-    category: "utility"
-  }
+  { key: "reopen_contact", name: "reopen_contact", label: "Ricontatto pratica", body: "Ciao, ti ricontattiamo per aggiornarti sulla tua pratica.", category: "followup" },
+  { key: "request_documents", name: "request_documents", label: "Richiesta documenti", body: "Ciao, ci servono i documenti mancanti per proseguire con la pratica.", category: "utility" },
+  { key: "payment_followup", name: "payment_followup", label: "Promemoria pagamento", body: "Ciao, ti contattiamo per il pagamento in sospeso della tua pratica.", category: "utility" },
+  { key: "booking_update", name: "booking_update", label: "Aggiornamento prenotazione", body: "Ciao, abbiamo un aggiornamento sulla tua prenotazione.", category: "utility" }
 ];
 
-function getConversationStatusLabel(status?: string) {
-  if (status === "resolved") return "Chiusa";
-  if (status === "waiting_customer") return "In gestione";
-  return "Aperta";
-}
+const POLL_INTERVAL_MS = 15000;
+const MAX_DRAFT_ATTACHMENTS = 10;
+const WHATSAPP_CAPTION_MAX = 1024;
+const PREVIEWABLE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-function getConversationStatusClass(status?: string) {
-  if (status === "resolved") return "chat-react-status-resolved";
-  if (status === "waiting_customer") return "chat-react-status-waiting";
-  return "chat-react-status-open";
-}
-
-function getMessageStatusLabel(status?: string) {
-  if (status === "read") return "Letto";
-  if (status === "delivered") return "Consegnato";
-  if (status === "sent") return "Inviato";
-  if (status === "failed") return "Errore";
-  if (status === "simulated") return "Simulato";
-  return status || "";
-}
-
-function getMessageStatusClass(status?: string) {
-  if (status === "read") return "chat-react-message-status-read";
-  if (status === "delivered") return "chat-react-message-status-delivered";
-  if (status === "failed") return "chat-react-message-status-failed";
-  if (status === "simulated") return "chat-react-message-status-simulated";
-  return "chat-react-message-status-sent";
-}
-
-function formatDateTime(value?: string | null) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "-";
-  return date.toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
-function formatShortTime(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  return date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatDayLabel(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const yesterday = today - 24 * 60 * 60 * 1000;
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  if (target === today) return "Oggi";
-  if (target === yesterday) return "Ieri";
-  return date.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit", year: "numeric" });
-}
-
-function compareConversations(a: Conversation, b: Conversation) {
-  const unreadDelta = Number(b.unreadCount || 0) - Number(a.unreadCount || 0);
-  if (unreadDelta) return unreadDelta;
-  const inboundDelta = new Date(b.lastInboundAt || b.lastMessageAt || 0).getTime() - new Date(a.lastInboundAt || a.lastMessageAt || 0).getTime();
-  if (inboundDelta) return inboundDelta;
-  return new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime();
-}
-
-function getAvatarLabel(name?: string, phone?: string) {
-  const raw = String(name || phone || "?").trim();
-  if (!raw) return "?";
-  const parts = raw.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
-  return raw.slice(0, 2).toUpperCase();
+function newLocalId(prefix: string) {
+  return `local_${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
 function getLeadOperationalSummary(lead?: Lead | null) {
-  const payments = (lead?.payments?.items || []).filter((item) => item.required && item.status !== "verified");
-  const documents = (lead?.documents?.items || []).filter((item) => item.required && (!item.received || !item.verified));
   return {
-    pendingPaymentAmount: payments.reduce((sum, item) => sum + Number(item.amount || 0), 0),
-    pendingPaymentCount: payments.length,
-    missingDocumentCount: documents.length
+    pendingPaymentCount: (lead?.payments?.items || []).filter((item) => item.required && item.status !== "verified").length,
+    missingDocumentCount: (lead?.documents?.items || []).filter((item) => item.required && (!item.received || !item.verified)).length
   };
 }
 
-function getOperationalMarker(item: TimelineItem) {
-  const type = String(item.type || "").toLowerCase();
-  const text = String(item.text || "").trim();
-  if (type.includes("call")) return { icon: "☎", label: text || "Chiamata registrata" };
-  if (type.includes("document")) return { icon: "□", label: text || "Documento aggiornato" };
-  if (type.includes("payment")) return { icon: "€", label: text || "Pagamento aggiornato" };
-  return null;
+function useChatLayoutMode() {
+  const [mode, setMode] = useState<ChatLayoutMode>(() => getChatLayoutMode(typeof window === "undefined" ? 1440 : window.innerWidth));
+  useEffect(() => {
+    let frame = 0;
+    const onResize = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => setMode(getChatLayoutMode(window.innerWidth)));
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+  return mode;
+}
+
+function useOnlineStatus() {
+  const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+  return online;
 }
 
 export function ChatPage() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const authUser = getAuthUser();
   const authUsername = String(authUser?.username || authUser?.name || "").trim();
-  const initialConversations = getChatConversationsCache()?.data || [];
-  const initialSelectedId = initialConversations[0]?.id || null;
-  const initialMessages = initialSelectedId ? getChatMessagesCache(initialSelectedId)?.data : null;
+  const layoutMode = useChatLayoutMode();
+  const online = useOnlineStatus();
 
-  const [conversations, setConversations] = useState<Conversation[]>(() => initialConversations.sort(compareConversations));
+  const [conversations, setConversations] = useState<Conversation[]>(() => getChatConversationsCache()?.data || []);
+  const [conversationsLoading, setConversationsLoading] = useState(() => !getChatConversationsCache()?.data?.length);
+  const [listError, setListError] = useState("");
+  // No conversation is opened automatically: opening one marks it read server-side, so the
+  // operator must choose it (previously the first unread chat was silently marked as read).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [pendingByConversation, setPendingByConversation] = useState<Record<string, Message[]>>({});
+  const [localPreviews, setLocalPreviews] = useState<Record<string, string>>({});
+  const retryJobs = useRef(new Map<string, OutgoingJob>());
+
+  const [search, setSearch] = useState("");
+  const [inboxFilter, setInboxFilter] = useState<InboxFilter>("all");
+  const [textDrafts, setTextDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<DraftAttachment[]>([]);
+  const [fileError, setFileError] = useState("");
+  const [messageMode, setMessageMode] = useState<MessageMode>("text");
+  const [templates, setTemplates] = useState<TemplateOption[]>(FALLBACK_TEMPLATE_OPTIONS);
+  const [templateKey, setTemplateKey] = useState(FALLBACK_TEMPLATE_OPTIONS[0].key);
+  const [sending, setSending] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [patchingConversation, setPatchingConversation] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [listOpen, setListOpen] = useState(true);
+  const [infoOpen, setInfoOpen] = useState(() => isInfoPanelInitiallyOpen(layoutMode));
+
   const [leadDetail, setLeadDetail] = useState<LeadDetail | null>(null);
   const [leadLoading, setLeadLoading] = useState(false);
   const [leadError, setLeadError] = useState("");
   const [tasks, setTasks] = useState<CrmTask[]>(() => getTaskBoardCache()?.data.tasks || []);
-  const [boardLeads, setBoardLeads] = useState<Lead[]>(() => getTaskBoardCache()?.data.leads || []);
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
-  const [messages, setMessages] = useState<Message[]>(() => initialMessages?.messages || []);
-  const [text, setText] = useState("");
-  const [to, setTo] = useState(initialMessages?.conversation.phone || initialConversations[0]?.phone || "");
-  const [search, setSearch] = useState("");
-  const [sending, setSending] = useState(false);
-  const [chatError, setChatError] = useState("");
-  const [inboxFilter, setInboxFilter] = useState<InboxFilter>("all");
-  const [messageMode, setMessageMode] = useState<MessageMode>("template");
-  const [templateKey, setTemplateKey] = useState<string>(FALLBACK_TEMPLATE_OPTIONS[0].key);
-  const [patchingConversation, setPatchingConversation] = useState(false);
+  const [boardLeads, setBoardLeads] = useState<Lead[]>(() => (getTaskBoardCache()?.data.leads || []) as Lead[]);
   const [actionBusyKey, setActionBusyKey] = useState("");
   const [completedActionKey, setCompletedActionKey] = useState("");
-  const [actionNotice, setActionNotice] = useState("");
-  const [paymentsOpen, setPaymentsOpen] = useState(true);
-  const [documentsOpen, setDocumentsOpen] = useState(false);
-  const [openPaymentMenuId, setOpenPaymentMenuId] = useState("");
-  const [templates, setTemplates] = useState<TemplateOption[]>(FALLBACK_TEMPLATE_OPTIONS);
-  const threadRef = useRef<HTMLDivElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  async function loadConversations(options: { force?: boolean } = {}) {
-    setChatError("");
-    const cached = getChatConversationsCache();
-    if (cached?.data?.length) {
-      const sorted = [...cached.data].sort(compareConversations);
-      setConversations(sorted);
-      setSelectedId((prev) => (prev && sorted.some((item) => item.id === prev) ? prev : sorted[0]?.id || null));
-      if (!options.force && isChatConversationsCacheFresh()) return;
+  selectedIdRef.current = selectedId;
+  const selectedConversation = conversations.find((conversation) => conversation.id === selectedId) || null;
+  const replyWindow = getReplyWindowState(selectedConversation);
+  const text = selectedId ? textDrafts[selectedId] || "" : "";
+
+  useEffect(() => {
+    setInfoOpen(isInfoPanelInitiallyOpen(layoutMode));
+  }, [layoutMode]);
+
+  const showNotice = useCallback((message: string) => {
+    setNotice(message);
+    window.setTimeout(() => setNotice((current) => (current === message ? "" : current)), 2600);
+  }, []);
+
+  const loadConversations = useCallback(async (options: { force?: boolean } = {}) => {
+    if (!options.force && isChatConversationsCacheFresh() && getChatConversationsCache()?.data?.length) {
+      setConversations(getChatConversationsCache()?.data || []);
+      setConversationsLoading(false);
+      return;
     }
-    const data = await api<Conversation[]>("/api/whatsapp/conversations");
-    const normalized = (Array.isArray(data) ? data : []).sort(compareConversations);
-    setChatConversationsCache(normalized);
-    setConversations(normalized);
-    setSelectedId((prev) => (prev && normalized.some((item) => item.id === prev) ? prev : normalized[0]?.id || null));
-  }
+    try {
+      const data = await api<Conversation[]>("/api/whatsapp/conversations");
+      const normalized = Array.isArray(data) ? data : [];
+      setChatConversationsCache(normalized);
+      setConversations(normalized);
+      setListError("");
+    } catch (error) {
+      setListError(mapChatError(error, "Impossibile aggiornare le conversazioni."));
+    } finally {
+      setConversationsLoading(false);
+    }
+  }, []);
+
+  const loadMessages = useCallback(async (conversationId: string) => {
+    const cached = getChatMessagesCache(conversationId);
+    if (cached?.data && selectedIdRef.current === conversationId) setMessages(cached.data.messages as Message[]);
+    try {
+      const payload = await api<{ conversation: Conversation; messages: Message[] }>(`/api/whatsapp/conversations/${conversationId}/messages`);
+      // The operator may have opened another chat while this request was in flight.
+      if (selectedIdRef.current !== conversationId) return;
+      setMessages(payload.messages || []);
+      if (payload.conversation?.id) {
+        setChatMessagesCache(payload.conversation.id, payload.conversation, payload.messages || []);
+        const opened = { ...payload.conversation, unreadCount: 0 };
+        setConversations((prev) => prev.map((item) => (item.id === opened.id ? { ...item, ...opened } : item)));
+        patchConversationInChatCache(opened.id, opened);
+      }
+      setChatError("");
+    } catch (error) {
+      if (selectedIdRef.current === conversationId) setChatError(mapChatError(error, "Impossibile caricare i messaggi."));
+    } finally {
+      if (selectedIdRef.current === conversationId) setMessagesLoading(false);
+    }
+  }, []);
 
   async function loadTaskBoard() {
     if (isTaskBoardCacheFresh() && getTaskBoardCache()?.data) {
       setTasks(getTaskBoardCache()?.data.tasks || []);
-      setBoardLeads(getTaskBoardCache()?.data.leads || []);
+      setBoardLeads((getTaskBoardCache()?.data.leads || []) as Lead[]);
       return;
     }
     const payload = await api<TaskBoardPayload>("/api/tasks/board");
-    setTasks(Array.isArray(payload?.tasks) ? payload.tasks : []);
-    setBoardLeads(Array.isArray(payload?.leads) ? payload.leads : []);
-    setTaskBoardCache(Array.isArray(payload?.tasks) ? payload.tasks : [], Array.isArray(payload?.leads) ? payload.leads : []);
+    const nextTasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
+    const nextLeads = Array.isArray(payload?.leads) ? payload.leads : [];
+    setTasks(nextTasks);
+    setBoardLeads(nextLeads);
+    setTaskBoardCache(nextTasks, nextLeads as never);
   }
 
   async function loadLeadContext(leadId?: string | null, options: { force?: boolean } = {}) {
@@ -284,29 +251,23 @@ export function ChatPage() {
       setLeadLoading(false);
       return;
     }
-
     const cached = !options.force ? getLeadDetailCacheEntry(targetLeadId) : null;
     if (cached && isLeadDetailCacheFresh(targetLeadId)) {
-      setLeadDetail(cached.data as LeadDetail);
+      setLeadDetail(cached.data as unknown as LeadDetail);
       setLeadLoading(false);
       return;
     }
-
     setLeadLoading(true);
     try {
       const payload = await api<LeadDetail>(`/api/leads/${targetLeadId}`);
       setLeadDetail(payload);
       setLeadDetailCacheEntry(targetLeadId, payload as never);
     } catch (error) {
-      setLeadError(error instanceof Error ? error.message : "Errore caricamento contesto pratica.");
+      setLeadError(mapChatError(error, "Impossibile caricare la pratica collegata."));
       setLeadDetail(null);
     } finally {
       setLeadLoading(false);
     }
-  }
-
-  async function refreshCurrentContext() {
-    await Promise.all([loadTaskBoard(), loadLeadContext(selectedConversation?.leadId, { force: true })]);
   }
 
   async function loadTemplates() {
@@ -316,102 +277,14 @@ export function ChatPage() {
     setTemplateKey((prev) => (normalized.some((item) => item.key === prev) ? prev : normalized[0].key));
   }
 
-  async function loadMessages(conversationId: string) {
-    setChatError("");
-    const cached = getChatMessagesCache(conversationId);
-    if (cached?.data) {
-      setMessages(cached.data.messages || []);
-      setTo(cached.data.conversation?.phone || "");
-      if (isChatMessagesCacheFresh(conversationId)) return;
-    }
-    const payload = await api<{ conversation: Conversation; messages: Message[] }>(`/api/whatsapp/conversations/${conversationId}/messages`);
-    setMessages(payload.messages || []);
-    setTo(payload.conversation?.phone || "");
-    if (payload.conversation?.id) {
-      setChatMessagesCache(payload.conversation.id, payload.conversation, payload.messages || []);
-      setConversations((prev) =>
-        prev.map((item) => (item.id === payload.conversation.id ? { ...item, ...payload.conversation, unreadCount: 0 } : item)).sort(compareConversations)
-      );
-      const nextConversations = (getChatConversationsCache()?.data || conversations).map((item) =>
-        item.id === payload.conversation.id ? { ...item, ...payload.conversation, unreadCount: 0 } : item
-      );
-      setChatConversationsCache(nextConversations);
-    }
-  }
-
-  async function patchConversation(patch: Partial<Conversation>) {
-    if (!selectedId || patchingConversation) return;
-    setPatchingConversation(true);
-    setChatError("");
-    const previousConversations = conversations;
-    try {
-      setConversations((prev) => prev.map((item) => (item.id === selectedId ? { ...item, ...patch } : item)));
-      patchConversationInChatCache(selectedId, patch);
-      const updated = await api<Conversation>(`/api/whatsapp/conversations/${selectedId}`, {
-        method: "PATCH",
-        body: JSON.stringify(patch)
-      });
-      setConversations((prev) => prev.map((item) => (item.id === updated.id ? updated : item)).sort(compareConversations));
-      patchConversationInChatCache(updated.id, updated);
-    } catch (error) {
-      setConversations(previousConversations);
-      setChatError(error instanceof Error ? error.message : "Errore aggiornamento conversazione.");
-    } finally {
-      setPatchingConversation(false);
-    }
-  }
-
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const selectedTemplate = templates.find((item) => item.key === templateKey) || templates[0] || FALLBACK_TEMPLATE_OPTIONS[0];
-    if (messageMode === "text" && !text.trim()) return;
-    if (messageMode === "template" && !selectedTemplate) return;
-    if (!to.trim() || sending) return;
-    const sentMode = messageMode;
-
-    setSending(true);
-    setChatError("");
-    try {
-      await api("/api/whatsapp/messages/send", {
-        method: "POST",
-        body: JSON.stringify({
-          conversationId: selectedId,
-          to,
-          text: messageMode === "text" ? text : selectedTemplate.body,
-          mode: messageMode,
-          templateKey: messageMode === "template" ? selectedTemplate.key : undefined,
-          templateName: messageMode === "template" ? selectedTemplate.name : undefined,
-          agentName: authUsername || "operatore react"
-        })
-      });
-      setText("");
-      if (sentMode === "template") {
-        const taskCreated = await createTemplateFollowUp(selectedTemplate);
-        showActionNotice(taskCreated ? "Template inviato. Follow-up automatico creato" : "Template inviato");
-      }
-      await loadConversations({ force: true });
-      if (selectedId) await loadMessages(selectedId);
-    } catch (error) {
-      setChatError(error instanceof Error ? error.message : "Errore durante l'invio del messaggio.");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  // Deep-link support for "open WhatsApp" from the Pratica page: ?customerId=/leadId= selects the
-  // existing conversation for that Customer if one is already loaded/known server-side, or (with
-  // ?phone=) creates an empty one so the operator lands ready to compose. Runs after the initial
-  // load so it can override the "select the first conversation" default, not race it.
+  // Deep link from the Pratica page (?customerId=/leadId=, optional ?phone= to create an empty
+  // conversation): asks the server rather than local state, which may still be the pre-fetch list.
   async function applyConversationDeepLink() {
     const targetCustomerId = String(searchParams.get("customerId") || "").trim();
     const targetLeadId = String(searchParams.get("leadId") || "").trim();
     const targetPhone = String(searchParams.get("phone") || "").trim();
     const targetCustomerName = String(searchParams.get("customerName") || "").trim();
     if (!targetCustomerId && !targetLeadId) return;
-
-    // Queried server-side rather than checked against local state: this runs right after
-    // loadConversations() kicks off its own async setConversations(), so the component's
-    // `conversations` closure here could still be the pre-fetch snapshot (stale-closure risk).
     const query = targetCustomerId ? `customerId=${encodeURIComponent(targetCustomerId)}` : `leadId=${encodeURIComponent(targetLeadId)}`;
     const matches = await api<Conversation[]>(`/api/whatsapp/conversations?${query}`);
     let target = Array.isArray(matches) && matches.length ? matches[0] : null;
@@ -427,50 +300,63 @@ export function ChatPage() {
       });
     }
     if (!target) return;
-    const resolvedTarget = target;
-    setConversations((prev) => (prev.some((item) => item.id === resolvedTarget.id) ? prev : [resolvedTarget, ...prev].sort(compareConversations)));
-    setSelectedId(resolvedTarget.id);
+    const resolved = target;
+    setConversations((prev) => (prev.some((item) => item.id === resolved.id) ? prev : [resolved, ...prev]));
+    selectConversation(resolved.id);
   }
 
   useEffect(() => {
     loadConversations({ force: true })
       .then(() => applyConversationDeepLink())
-      .catch((error: Error) => setChatError(error.message));
-    loadTaskBoard().catch((error: Error) => setLeadError(error.message));
+      .catch((error: unknown) => setListError(mapChatError(error)));
+    loadTaskBoard().catch((error: unknown) => setLeadError(mapChatError(error)));
     loadTemplates().catch(() => setTemplates(FALLBACK_TEMPLATE_OPTIONS));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Polling pauses while the tab is hidden (no point refreshing nobody is looking at it, and
+  // GET messages marks the open chat as read) and catches up as soon as it is visible again.
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      loadConversations({ force: true }).catch(() => null);
-      if (selectedId) loadMessages(selectedId).catch(() => null);
-    }, 15000);
-    return () => window.clearInterval(timer);
-  }, [selectedId]);
+    function refresh() {
+      if (document.visibilityState === "hidden") return;
+      void loadConversations({ force: true });
+      if (selectedIdRef.current) void loadMessages(selectedIdRef.current);
+    }
+    const timer = window.setInterval(refresh, POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [loadConversations, loadMessages]);
 
   useEffect(() => {
-    if (!selectedId) return;
-    loadMessages(selectedId).catch((error: Error) => setChatError(error.message));
-  }, [selectedId]);
-
-  const selectedConversation = conversations.find((conv) => conv.id === selectedId) || null;
-
-  useEffect(() => {
-    if (!selectedConversation) {
-      setMessageMode("template");
+    if (!selectedId) {
+      setMessages([]);
       return;
     }
-    setMessageMode(selectedConversation.hasOpenSession ? "text" : "template");
-  }, [selectedConversation?.id, selectedConversation?.hasOpenSession]);
+    setMessages((getChatMessagesCache(selectedId)?.data.messages as Message[]) || []);
+    setMessagesLoading(!getChatMessagesCache(selectedId)?.data);
+    void loadMessages(selectedId);
+  }, [selectedId, loadMessages]);
+
+  // Attachments are tied to the conversation they were picked for.
+  useEffect(() => {
+    setDrafts((current) => {
+      current.forEach((draft) => draft.source === "upload" && draft.previewUrl && URL.revokeObjectURL(draft.previewUrl));
+      return [];
+    });
+    setFileError("");
+    setChatError("");
+  }, [selectedId]);
 
   useEffect(() => {
-    if (messageMode !== "text") return;
-    textAreaRef.current?.focus();
-  }, [messageMode, selectedId]);
+    setMessageMode(replyWindow.open ? "text" : "template");
+  }, [selectedConversation?.id, replyWindow.open]);
 
   useEffect(() => {
-    loadLeadContext(selectedConversation?.leadId).catch((error: Error) => setLeadError(error.message));
+    void loadLeadContext(selectedConversation?.leadId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConversation?.leadId]);
 
   const currentLead = leadDetail?.lead || null;
@@ -479,34 +365,431 @@ export function ChatPage() {
     () => tasks.filter((task) => task.status === "open" && task.leadId && task.leadId === selectedConversation?.leadId).sort(sortOperationalTasks),
     [tasks, selectedConversation?.leadId]
   );
+  const missingDocumentsCount = useMemo(
+    () => (currentLead?.documents?.items || []).filter((item) => item.required && (!item.received || !item.verified)).length,
+    [currentLead]
+  );
+  const pendingPayments = useMemo(() => (currentLead?.payments?.items || []).filter((item) => item.required && item.status !== "verified"), [currentLead]);
 
-  const missingDocumentsCount = useMemo(() => {
-    const items = currentLead?.documents?.items || [];
-    return items.filter((item) => item.required && (!item.received || !item.verified)).length;
-  }, [currentLead]);
+  const suggestedTemplates = useMemo(() => {
+    const byTag = (tag: string) => templates.filter((item) => item.suggestionTag === tag);
+    if (pendingPayments.length && byTag("payments").length) return byTag("payments");
+    if (missingDocumentsCount && byTag("documents").length) return byTag("documents");
+    if (openTasks.length && byTag("task").length) return byTag("task");
+    // Always offer every approved template, suggested ones first.
+    return templates;
+  }, [missingDocumentsCount, openTasks.length, pendingPayments.length, templates]);
+  const templateChoices = useMemo(
+    () => [...suggestedTemplates, ...templates.filter((item) => !suggestedTemplates.includes(item))],
+    [suggestedTemplates, templates]
+  );
+  const selectedTemplate = templateChoices.find((item) => item.key === templateKey) || templateChoices[0] || null;
 
-  const pendingPayments = useMemo(() => {
-    const items = currentLead?.payments?.items || [];
-    return items.filter((item) => item.required && item.status !== "verified");
-  }, [currentLead]);
+  const practiceDocuments = useMemo<PracticeDocumentOption[]>(
+    () =>
+      (currentLead?.documents?.items || []).flatMap((item) =>
+        (item.attachments || [])
+          .filter((attachment): attachment is PracticeDocumentAttachment & { storageKey: string } => Boolean(attachment.storageKey))
+          .map((attachment) => ({ documentLabel: item.label || item.key, attachment }))
+      ),
+    [currentLead]
+  );
 
-  function showActionNotice(message: string) {
-    setActionNotice(message);
-    window.setTimeout(() => setActionNotice((current) => (current === message ? "" : current)), 2400);
+  const counts = useMemo(() => countConversationFilters(conversations, authUsername), [authUsername, conversations]);
+  const rows = useMemo<ConversationRow[]>(
+    () =>
+      filterConversations(conversations, { filter: inboxFilter, search, username: authUsername }).map((conversation) => ({
+        ...conversation,
+        operational: getLeadOperationalSummary(conversation.leadId ? boardLeadById.get(String(conversation.leadId)) : null)
+      })),
+    [authUsername, boardLeadById, conversations, inboxFilter, search]
+  );
+
+  const threadItems = useMemo(() => {
+    const markers = (leadDetail?.timeline || [])
+      .map((item) => getTimelineMarker(item))
+      .filter((marker): marker is ThreadMarker => Boolean(marker))
+      .slice(-8);
+    const pending = selectedId ? pendingByConversation[selectedId] || [] : [];
+    return buildThreadItems([...messages, ...pending], markers);
+  }, [leadDetail?.timeline, messages, pendingByConversation, selectedId]);
+
+  function selectConversation(conversationId: string) {
+    setSelectedId(conversationId);
+    if (shouldCloseListOnSelect(getChatLayoutMode(window.innerWidth))) setListOpen(false);
   }
+
+  function setText(value: string) {
+    if (!selectedId) return;
+    setTextDrafts((current) => ({ ...current, [selectedId]: value }));
+  }
+
+  // --- Conversation actions -----------------------------------------------------------------
+
+  async function patchConversation(patch: Record<string, unknown>, successNotice?: string) {
+    if (!selectedId || patchingConversation) return false;
+    const conversationId = selectedId;
+    const previous = conversations;
+    setPatchingConversation(true);
+    setChatError("");
+    const optimistic = { ...patch } as Partial<Conversation> & { markUnread?: boolean };
+    if (optimistic.markUnread) {
+      delete optimistic.markUnread;
+      optimistic.unreadCount = Math.max(1, Number(selectedConversation?.unreadCount || 0));
+    }
+    setConversations((prev) => prev.map((item) => (item.id === conversationId ? { ...item, ...optimistic } : item)));
+    try {
+      const updated = await api<Conversation>(`/api/whatsapp/conversations/${conversationId}`, { method: "PATCH", body: JSON.stringify(patch) });
+      setConversations((prev) => prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+      patchConversationInChatCache(updated.id, updated);
+      if (successNotice) showNotice(successNotice);
+      return true;
+    } catch (error) {
+      setConversations(previous);
+      setChatError(mapChatError(error, "Impossibile aggiornare la conversazione."));
+      return false;
+    } finally {
+      setPatchingConversation(false);
+    }
+  }
+
+  async function markUnread() {
+    const ok = await patchConversation({ markUnread: true }, "Conversazione segnata come non letta");
+    // Keeping it open would immediately mark it read again on the next refresh.
+    if (ok) {
+      setSelectedId(null);
+      setListOpen(true);
+    }
+  }
+
+  async function copyPhone(phone: string) {
+    try {
+      await navigator.clipboard.writeText(phone);
+      showNotice("Numero copiato");
+    } catch {
+      setChatError("Impossibile copiare il numero: copialo manualmente.");
+    }
+  }
+
+  function openPractice() {
+    if (selectedConversation?.leadId) navigate(buildPracticeUrl(String(selectedConversation.leadId), "overview"));
+  }
+
+  // --- Composer: attachments ----------------------------------------------------------------
+
+  const attachmentsDisabledReason = !selectedConversation?.leadId
+    ? "Per inviare allegati la conversazione deve essere collegata a una pratica."
+    : !online
+      ? "Sei offline: gli allegati si possono inviare quando torna la connessione."
+      : "";
+
+  function addFiles(files: File[], purpose: "image" | "document" | "quote") {
+    if (attachmentsDisabledReason) {
+      setFileError(attachmentsDisabledReason);
+      return;
+    }
+    const errors: string[] = [];
+    const accepted: DraftAttachment[] = [];
+    for (const file of files) {
+      if (drafts.length + accepted.length >= MAX_DRAFT_ATTACHMENTS) {
+        errors.push(`Puoi allegare al massimo ${MAX_DRAFT_ATTACHMENTS} file per invio.`);
+        break;
+      }
+      const validation = validateChatFile(file, purpose);
+      if (validation.ok === false) {
+        errors.push(validation.error);
+        continue;
+      }
+      accepted.push({
+        id: newLocalId("draft"),
+        source: "upload",
+        kind: purpose === "quote" ? "quote" : "file",
+        file,
+        name: file.name,
+        mimeType: validation.mimeType,
+        size: file.size,
+        previewUrl: PREVIEWABLE_IMAGE_TYPES.has(validation.mimeType) ? URL.createObjectURL(file) : undefined
+      });
+    }
+    if (accepted.length) setDrafts((current) => [...current, ...accepted]);
+    setFileError(errors.join(" "));
+    textAreaRef.current?.focus();
+  }
+
+  function pickPracticeDocument(option: PracticeDocumentOption) {
+    if (drafts.some((draft) => draft.source === "practice" && draft.storageKey === option.attachment.storageKey)) return;
+    setDrafts((current) => [
+      ...current,
+      {
+        id: newLocalId("draft"),
+        source: "practice",
+        kind: "practice_document",
+        name: option.attachment.name,
+        mimeType: option.attachment.mimeType || "application/octet-stream",
+        size: Number(option.attachment.size || 0),
+        storageKey: option.attachment.storageKey
+      }
+    ]);
+    setFileError("");
+  }
+
+  function removeDraft(draftId: string) {
+    setDrafts((current) =>
+      current.filter((draft) => {
+        if (draft.id !== draftId) return true;
+        if (draft.source === "upload" && draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
+        return false;
+      })
+    );
+  }
+
+  function onDragOver(event: DragEvent<HTMLElement>) {
+    if (!selectedConversation || messageMode !== "text" || !Array.from(event.dataTransfer.types).includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = attachmentsDisabledReason ? "none" : "copy";
+    setDragActive(true);
+  }
+
+  function onDragLeave(event: DragEvent<HTMLElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false);
+  }
+
+  function onDrop(event: DragEvent<HTMLElement>) {
+    if (!dragActive) return;
+    event.preventDefault();
+    setDragActive(false);
+    const files = Array.from(event.dataTransfer.files || []);
+    if (files.length) addFiles(files, "document");
+  }
+
+  // --- Sending ------------------------------------------------------------------------------
+
+  function addPending(conversationId: string, message: Message) {
+    setPendingByConversation((current) => ({ ...current, [conversationId]: [...(current[conversationId] || []), message] }));
+  }
+
+  function updatePending(conversationId: string, messageId: string, patch: Partial<Message> | null) {
+    setPendingByConversation((current) => {
+      const list = current[conversationId] || [];
+      const next = patch === null ? list.filter((item) => item.id !== messageId) : list.map((item) => (item.id === messageId ? { ...item, ...patch } : item));
+      return { ...current, [conversationId]: next };
+    });
+  }
+
+  function releasePreview(messageId: string) {
+    setLocalPreviews((current) => {
+      if (!current[messageId]) return current;
+      URL.revokeObjectURL(current[messageId]);
+      const next = { ...current };
+      delete next[messageId];
+      return next;
+    });
+  }
+
+  async function runJob(job: OutgoingJob) {
+    if (job.kind === "text") {
+      await api("/api/whatsapp/messages/send", {
+        method: "POST",
+        body: JSON.stringify({ conversationId: job.conversationId, to: job.to, mode: "text", text: job.text })
+      });
+      return;
+    }
+    if (job.kind === "template") {
+      await api("/api/whatsapp/messages/send", {
+        method: "POST",
+        body: JSON.stringify({
+          conversationId: job.conversationId,
+          to: job.to,
+          mode: "template",
+          text: job.template.body,
+          templateKey: job.template.key,
+          templateName: job.template.name
+        })
+      });
+      return;
+    }
+    const { draft } = job;
+    const stored =
+      draft.source === "upload"
+        ? await uploadChatFile(job.leadId, draft.file, draft.mimeType, draft.kind)
+        : { storageKey: draft.storageKey, name: draft.name, mimeType: draft.mimeType, size: draft.size };
+    await api("/api/whatsapp/messages/send", {
+      method: "POST",
+      body: JSON.stringify({
+        conversationId: job.conversationId,
+        to: job.to,
+        mode: "attachment",
+        attachment: {
+          storageKey: stored.storageKey,
+          filename: stored.name,
+          mimeType: stored.mimeType,
+          size: stored.size,
+          kind: draft.kind,
+          caption: job.caption
+        }
+      })
+    });
+  }
+
+  function buildPendingMessage(job: OutgoingJob, id: string): Message {
+    const base = { id, direction: "outbound" as const, createdAt: new Date().toISOString(), localState: "sending" as const, agentName: authUsername };
+    if (job.kind === "text") return { ...base, text: job.text, messageType: "text" };
+    if (job.kind === "template") return { ...base, text: job.template.body, messageType: "template", templateName: job.template.label };
+    return {
+      ...base,
+      text: job.caption,
+      messageType: "attachment",
+      attachment: {
+        direction: "outbound",
+        mediaType: job.draft.mimeType.startsWith("image/") ? "image" : "document",
+        filename: job.draft.name,
+        mimeType: job.draft.mimeType,
+        size: job.draft.size,
+        caption: job.caption,
+        kind: job.draft.kind
+      }
+    };
+  }
+
+  // Runs one send and reflects it in its pending bubble; returns whether it reached WhatsApp.
+  async function executeJob(job: OutgoingJob, messageId: string) {
+    try {
+      if (!navigator.onLine) throw new Error("Failed to fetch");
+      await runJob(job);
+      retryJobs.current.delete(messageId);
+      // Stays visible as "sent" until the thread reload brings the server copy (see finishSend);
+      // removing it here would make the message blink out for a moment.
+      updatePending(job.conversationId, messageId, { localState: undefined, status: "sent" });
+      if (job.kind === "template") {
+        const taskCreated = await createTemplateFollowUp(job.template);
+        showNotice(taskCreated ? "Template inviato. Follow-up creato." : "Template inviato");
+      }
+      return true;
+    } catch (error) {
+      retryJobs.current.set(messageId, job);
+      updatePending(job.conversationId, messageId, {
+        localState: "failed",
+        localError: mapChatError(error, "Messaggio non inviato. Riprova.")
+      });
+      return false;
+    }
+  }
+
+  async function finishSend(conversationId: string, messageIds: string[]) {
+    await loadConversations({ force: true });
+    if (selectedIdRef.current === conversationId) await loadMessages(conversationId);
+    const confirmed = messageIds.filter((id) => !retryJobs.current.has(id));
+    setPendingByConversation((current) => ({
+      ...current,
+      [conversationId]: (current[conversationId] || []).filter((item) => !confirmed.includes(item.id))
+    }));
+    confirmed.forEach(releasePreview);
+  }
+
+  async function sendJobs(jobs: OutgoingJob[]) {
+    if (!jobs.length) return;
+    const conversationId = jobs[0].conversationId;
+    const queued = jobs.map((job) => {
+      const id = newLocalId("msg");
+      addPending(conversationId, buildPendingMessage(job, id));
+      if (job.kind === "attachment" && job.draft.source === "upload" && job.draft.previewUrl) {
+        setLocalPreviews((current) => ({ ...current, [id]: job.draft.source === "upload" ? job.draft.previewUrl || "" : "" }));
+      }
+      return { job, id };
+    });
+    setSending(true);
+    try {
+      // Sequential on purpose: WhatsApp shows messages in the order they arrive.
+      for (const { job, id } of queued) {
+        const ok = await executeJob(job, id);
+        if (!ok) {
+          // Later items would arrive out of order; keep them as failed so they can be retried.
+          queued
+            .slice(queued.findIndex((item) => item.id === id) + 1)
+            .forEach((rest) => {
+              retryJobs.current.set(rest.id, rest.job);
+              updatePending(conversationId, rest.id, { localState: "failed", localError: "Non inviato: il messaggio precedente non e partito." });
+            });
+          break;
+        }
+      }
+    } finally {
+      setSending(false);
+      await finishSend(
+        conversationId,
+        queued.map((item) => item.id)
+      );
+    }
+  }
+
+  function submitComposer() {
+    if (!selectedConversation || sending) return;
+    const conversationId = selectedConversation.id;
+    const to = String(selectedConversation.phone || "").trim();
+    if (!to) {
+      setChatError("Numero del cliente mancante: impossibile inviare.");
+      return;
+    }
+    if (messageMode === "template") {
+      if (!selectedTemplate) return;
+      void sendJobs([{ kind: "template", conversationId, to, template: selectedTemplate }]);
+      return;
+    }
+    if (!replyWindow.open) {
+      setChatError("La finestra di 24 ore e chiusa: invia un template approvato per riaprire la conversazione.");
+      setMessageMode("template");
+      return;
+    }
+    const body = text.trim();
+    if (!body && !drafts.length) return;
+    const jobs: OutgoingJob[] = [];
+    const captionFits = body.length <= WHATSAPP_CAPTION_MAX;
+    drafts.forEach((draft, index) => {
+      jobs.push({
+        kind: "attachment",
+        conversationId,
+        to,
+        leadId: String(selectedConversation.leadId || ""),
+        draft,
+        caption: index === 0 && captionFits ? body : ""
+      });
+    });
+    if (body && (!drafts.length || !captionFits)) jobs.push({ kind: "text", conversationId, to, text: body });
+    // The composer clears immediately (like WhatsApp); the pending bubbles carry the progress,
+    // and an emptied composer is also what stops a double Enter from sending twice.
+    setDrafts([]);
+    setText("");
+    if (textAreaRef.current) textAreaRef.current.style.height = "";
+    setFileError("");
+    void sendJobs(jobs);
+  }
+
+  function retryMessage(messageId: string) {
+    const job = retryJobs.current.get(messageId);
+    if (!job || sending) return;
+    updatePending(job.conversationId, messageId, { localState: "sending", localError: undefined });
+    setSending(true);
+    void executeJob(job, messageId).finally(async () => {
+      setSending(false);
+      await finishSend(job.conversationId, [messageId]);
+    });
+  }
+
+  function discardMessage(messageId: string) {
+    const job = retryJobs.current.get(messageId);
+    retryJobs.current.delete(messageId);
+    releasePreview(messageId);
+    if (job) updatePending(job.conversationId, messageId, null);
+  }
+
+  // --- Practice context actions (unchanged behavior) ------------------------------------------
 
   function patchLeadPayment(paymentId: string, patch: Partial<Payment>) {
     setLeadDetail((current) => {
       if (!current?.lead?.payments?.items) return current;
       return {
         ...current,
-        lead: {
-          ...current.lead,
-          payments: {
-            ...current.lead.payments,
-            items: current.lead.payments.items.map((item) => (item.id === paymentId ? { ...item, ...patch } : item))
-          }
-        }
+        lead: { ...current.lead, payments: { ...current.lead.payments, items: current.lead.payments.items.map((item) => (item.id === paymentId ? { ...item, ...patch } : item)) } }
       };
     });
   }
@@ -516,19 +799,9 @@ export function ChatPage() {
       if (!current?.lead?.documents?.items) return current;
       return {
         ...current,
-        lead: {
-          ...current.lead,
-          documents: {
-            ...current.lead.documents,
-            items: current.lead.documents.items.map((item) => (item.key === documentId ? { ...item, ...patch } : item))
-          }
-        }
+        lead: { ...current.lead, documents: { ...current.lead.documents, items: current.lead.documents.items.map((item) => (item.key === documentId ? { ...item, ...patch } : item)) } }
       };
     });
-  }
-
-  function patchLocalTask(taskId: string, patch: Partial<CrmTask>) {
-    setTasks((current) => current.map((item) => (item.id === taskId ? { ...item, ...patch } : item)));
   }
 
   function makeDueAt(amount: "1h" | "tomorrow") {
@@ -542,14 +815,7 @@ export function ChatPage() {
     return due.toISOString();
   }
 
-  async function createSmartTask(input: {
-    kind: string;
-    title: string;
-    description: string;
-    priority: number;
-    dueAt: string;
-    meta?: Record<string, unknown>;
-  }) {
+  async function createSmartTask(input: { kind: string; title: string; description: string; priority: number; dueAt: string; meta?: Record<string, unknown> }) {
     if (!currentLead) return null;
     try {
       const task = await api<CrmTask>("/api/tasks", {
@@ -566,18 +832,19 @@ export function ChatPage() {
       upsertTaskInBoard(task);
       return task;
     } catch (error) {
-      setLeadError(error instanceof Error ? error.message : "Automazione task non completata.");
+      setLeadError(mapChatError(error, "Task automatico non creato."));
       return null;
     }
   }
 
   async function createTemplateFollowUp(template: TemplateOption) {
     const tag = template.suggestionTag || template.key;
+    const name = currentLead?.fullName || "";
     if (tag === "payments" || template.key === "payment_followup") {
       const payment = pendingPayments[0];
       return createSmartTask({
         kind: "payment_follow_up",
-        title: `Follow-up pagamento ${currentLead?.fullName || ""}`.trim(),
+        title: `Follow-up pagamento ${name}`.trim(),
         description: `Template pagamento inviato dalla chat. Verificare risposta cliente${payment?.label ? ` per ${payment.label}` : ""}.`,
         priority: 82,
         dueAt: makeDueAt("tomorrow"),
@@ -588,7 +855,7 @@ export function ChatPage() {
       const missingKeys = (currentLead?.documents?.items || []).filter((item) => item.required && (!item.received || !item.verified)).map((item) => item.key);
       return createSmartTask({
         kind: "document_follow_up",
-        title: `Follow-up documenti ${currentLead?.fullName || ""}`.trim(),
+        title: `Follow-up documenti ${name}`.trim(),
         description: "Template richiesta documenti inviato dalla chat. Verificare ricezione documenti mancanti.",
         priority: 72,
         dueAt: makeDueAt("tomorrow"),
@@ -598,7 +865,7 @@ export function ChatPage() {
     if (tag === "task") {
       return createSmartTask({
         kind: "chat_follow_up",
-        title: `Follow-up chat ${currentLead?.fullName || ""}`.trim(),
+        title: `Follow-up chat ${name}`.trim(),
         description: "Template operativo inviato dalla chat. Ricontrollare la conversazione.",
         priority: 65,
         dueAt: makeDueAt("tomorrow"),
@@ -608,7 +875,7 @@ export function ChatPage() {
     if (tag === "callback") {
       return createSmartTask({
         kind: "callback_reminder",
-        title: `Confermare richiamo ${currentLead?.fullName || ""}`.trim(),
+        title: `Confermare richiamo ${name}`.trim(),
         description: 'Template "Ricontattami" inviato dalla chat. Attendere la risposta del cliente e programmare il richiamo con data/ora.',
         priority: 75,
         dueAt: makeDueAt("tomorrow"),
@@ -618,7 +885,7 @@ export function ChatPage() {
     if (tag === "not_interested") {
       return createSmartTask({
         kind: "chat_follow_up",
-        title: `Confermare esito ${currentLead?.fullName || ""}`.trim(),
+        title: `Confermare esito ${name}`.trim(),
         description: 'Template "Non interessato" inviato dalla chat. Registrare l\'esito definitivo sulla pratica (motivo obbligatorio).',
         priority: 60,
         dueAt: makeDueAt("tomorrow"),
@@ -628,23 +895,7 @@ export function ChatPage() {
     return null;
   }
 
-  async function createPaymentVerificationTask(paymentId: string) {
-    const payment = (currentLead?.payments?.items || []).find((item) => item.id === paymentId);
-    return createSmartTask({
-      kind: "payment_verification",
-      title: `Verifica pagamento ${currentLead?.fullName || ""}`.trim(),
-      description: `Pagamento segnato come ricevuto dalla chat${payment?.label ? `: ${payment.label}` : ""}. Verificare incasso e chiudere il blocco.`,
-      priority: 88,
-      dueAt: makeDueAt("1h"),
-      meta: { paymentId, automation: "payment_received_verify" }
-    });
-  }
-
-  async function runContextAction(
-    key: string,
-    action: () => Promise<void>,
-    options: { optimistic?: () => void; notice?: string; afterSuccess?: () => Promise<void> } = {}
-  ) {
+  async function runContextAction(key: string, action: () => Promise<unknown>, options: { optimistic?: () => void; notice?: string; afterSuccess?: () => Promise<void> } = {}) {
     if (!currentLead || actionBusyKey) return;
     setActionBusyKey(key);
     setLeadError("");
@@ -652,12 +903,12 @@ export function ChatPage() {
       await action();
       options.optimistic?.();
       await options.afterSuccess?.();
-      if (options.notice) showActionNotice(options.notice);
-      await refreshCurrentContext();
+      if (options.notice) showNotice(options.notice);
+      await Promise.all([loadTaskBoard(), loadLeadContext(selectedConversation?.leadId, { force: true })]);
       setCompletedActionKey(key);
       window.setTimeout(() => setCompletedActionKey((current) => (current === key ? "" : current)), 2200);
     } catch (error) {
-      setLeadError(error instanceof Error ? error.message : "Errore aggiornamento contesto pratica.");
+      setLeadError(mapChatError(error, "Aggiornamento della pratica non riuscito."));
     } finally {
       setActionBusyKey("");
     }
@@ -666,30 +917,28 @@ export function ChatPage() {
   function markDocumentReceived(documentId: string) {
     return runContextAction(
       `document:${documentId}`,
-      () =>
-        api(`/api/leads/${currentLead?.id}/documents/${documentId}`, {
-          method: "PATCH",
-          body: JSON.stringify({ received: true, actor: authUsername || "chat" })
-        }),
-      {
-        optimistic: () => patchLeadDocument(documentId, { received: true }),
-        notice: "Documento segnato come ricevuto"
-      }
+      () => api(`/api/leads/${currentLead?.id}/documents/${documentId}`, { method: "PATCH", body: JSON.stringify({ received: true, actor: authUsername || "chat" }) }),
+      { optimistic: () => patchLeadDocument(documentId, { received: true }), notice: "Documento segnato come ricevuto" }
     );
   }
 
   function markPaymentReceived(paymentId: string) {
+    const payment = (currentLead?.payments?.items || []).find((item) => item.id === paymentId);
     return runContextAction(
       `payment-received:${paymentId}`,
-      () =>
-        api(`/api/leads/${currentLead?.id}/payments/${paymentId}`, {
-          method: "PATCH",
-          body: JSON.stringify({ status: "received", actor: authUsername || "chat" })
-        }),
+      () => api(`/api/leads/${currentLead?.id}/payments/${paymentId}`, { method: "PATCH", body: JSON.stringify({ status: "received", actor: authUsername || "chat" }) }),
       {
         optimistic: () => patchLeadPayment(paymentId, { status: "received" }),
-        afterSuccess: () => createPaymentVerificationTask(paymentId).then(() => undefined),
-        notice: "Pagamento segnato come ricevuto. Task verifica creata"
+        afterSuccess: () =>
+          createSmartTask({
+            kind: "payment_verification",
+            title: `Verifica pagamento ${currentLead?.fullName || ""}`.trim(),
+            description: `Pagamento segnato come ricevuto dalla chat${payment?.label ? `: ${payment.label}` : ""}. Verificare incasso e chiudere il blocco.`,
+            priority: 88,
+            dueAt: makeDueAt("1h"),
+            meta: { paymentId, automation: "payment_received_verify" }
+          }).then(() => undefined),
+        notice: "Pagamento segnato come ricevuto. Task di verifica creato"
       }
     );
   }
@@ -697,49 +946,24 @@ export function ChatPage() {
   function verifyPayment(paymentId: string) {
     return runContextAction(
       `payment-verified:${paymentId}`,
-      () =>
-        api(`/api/leads/${currentLead?.id}/payments/${paymentId}`, {
-          method: "PATCH",
-          body: JSON.stringify({ status: "verified", actor: authUsername || "chat" })
-        }),
-      {
-        optimistic: () => patchLeadPayment(paymentId, { status: "verified" }),
-        notice: "Pagamento verificato"
-      }
+      () => api(`/api/leads/${currentLead?.id}/payments/${paymentId}`, { method: "PATCH", body: JSON.stringify({ status: "verified", actor: authUsername || "chat" }) }),
+      { optimistic: () => patchLeadPayment(paymentId, { status: "verified" }), notice: "Pagamento verificato" }
     );
   }
 
   function completeTask(taskId: string) {
-    return runContextAction(
-      `task:${taskId}`,
-      () =>
-        api(`/api/tasks/${taskId}`, {
-          method: "PATCH",
-          body: JSON.stringify({ status: "done" })
-        }),
-      {
-        optimistic: () => patchLocalTask(taskId, { status: "done" }),
-        notice: "Task completata"
-      }
-    );
+    return runContextAction(`task:${taskId}`, () => api(`/api/tasks/${taskId}`, { method: "PATCH", body: JSON.stringify({ status: "done" }) }), {
+      optimistic: () => setTasks((current) => current.map((item) => (item.id === taskId ? { ...item, status: "done" } : item))),
+      notice: "Task completato"
+    });
   }
 
   function postponeTaskOneDay(taskId: string) {
-    const due = new Date();
-    due.setDate(due.getDate() + 1);
-    due.setHours(9, 0, 0, 0);
-    return runContextAction(`task-snooze:${taskId}`, () =>
-      api(`/api/tasks/${taskId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "open", dueAt: due.toISOString() })
-      })
+    return runContextAction(
+      `task-snooze:${taskId}`,
+      () => api(`/api/tasks/${taskId}`, { method: "PATCH", body: JSON.stringify({ status: "open", dueAt: makeDueAt("tomorrow") }) }),
+      { notice: "Task rimandato a domani" }
     );
-  }
-
-  function callCustomer() {
-    const phone = String(currentLead?.phone || selectedConversation?.phone || "").trim();
-    if (!phone) return;
-    window.location.href = `tel:${phone}`;
   }
 
   function scheduleCallback(payload: { followUpAt: string; callbackReason: string }) {
@@ -761,376 +985,173 @@ export function ChatPage() {
     );
   }
 
-  function requestDocuments() {
-    const template = templates.find((item) => item.suggestionTag === "documents") || templates.find((item) => item.key === "request_documents");
-    if (template) {
-      setTemplateKey(template.key);
-      setMessageMode("template");
-      setText(template.body);
-    }
-    textAreaRef.current?.focus();
+  function callCustomer() {
+    const phone = String(currentLead?.phone || selectedConversation?.phone || "").trim();
+    if (phone) window.location.href = `tel:${phone}`;
   }
 
-  function requestPaymentReminder() {
-    const template = templates.find((item) => item.suggestionTag === "payments") || templates.find((item) => item.key === "payment_followup");
-    if (template) {
-      setTemplateKey(template.key);
-      setMessageMode("template");
-      setText(template.body);
-    }
-    textAreaRef.current?.focus();
+  // Quick actions from the practice panel prefill the composer with the matching template.
+  function prepareTemplate(tag: "documents" | "payments", fallbackKey: string) {
+    const template = templates.find((item) => item.suggestionTag === tag) || templates.find((item) => item.key === fallbackKey);
+    if (template) setTemplateKey(template.key);
+    setMessageMode("template");
   }
 
-  const suggestedTemplates = useMemo(() => {
-    if (pendingPayments.length) {
-      const matches = templates.filter((item) => item.suggestionTag === "payments");
-      if (matches.length) return matches;
-    }
-    if (missingDocumentsCount) {
-      const matches = templates.filter((item) => item.suggestionTag === "documents");
-      if (matches.length) return matches;
-    }
-    if (openTasks.length) {
-      const matches = templates.filter((item) => item.suggestionTag === "task");
-      if (matches.length) return matches;
-    }
-    const generic = templates.filter((item) => item.suggestionTag === "generic");
-    return generic.length ? generic : templates;
-  }, [missingDocumentsCount, openTasks.length, pendingPayments.length, templates]);
+  // --- Render -------------------------------------------------------------------------------
 
-  useEffect(() => {
-    if (!suggestedTemplates.some((item) => item.key === templateKey)) {
-      setTemplateKey(suggestedTemplates[0]?.key || templates[0]?.key || FALLBACK_TEMPLATE_OPTIONS[0].key);
-    }
-  }, [suggestedTemplates, templateKey, templates]);
-
-  const sortedConversations = useMemo(
-    () =>
-      [...conversations].sort((a, b) => {
-        const priorityDelta = getConversationPriorityScore(b, authUsername) - getConversationPriorityScore(a, authUsername);
-        if (priorityDelta) return priorityDelta;
-        return compareConversations(a, b);
-      }),
-    [authUsername, conversations]
-  );
-
-  const filterCounts = useMemo(
-    () => ({
-      unread: sortedConversations.filter((item) => Number(item.unreadCount || 0) > 0).length,
-      mine: sortedConversations.filter((item) => authUsername && String(item.assignedTo || "") === authUsername).length,
-      unassigned: sortedConversations.filter((item) => !String(item.assignedTo || "").trim()).length,
-      resolved: sortedConversations.filter((item) => item.status === "resolved").length
-    }),
-    [authUsername, sortedConversations]
-  );
-
-  const visibleConversations = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return sortedConversations.filter((conv) => {
-      const hay = `${conv.customerName || ""} ${conv.phone || ""} ${conv.lastMessagePreview || ""}`.toLowerCase();
-      if (q && !hay.includes(q)) return false;
-      if (inboxFilter === "unread") return Number(conv.unreadCount || 0) > 0;
-      if (inboxFilter === "mine") return Boolean(authUsername) && String(conv.assignedTo || "") === authUsername;
-      if (inboxFilter === "unassigned") return !String(conv.assignedTo || "").trim();
-      if (inboxFilter === "resolved") return conv.status === "resolved";
-      return true;
-    });
-  }, [authUsername, inboxFilter, search, sortedConversations]);
-
-  const visibleConversationRows = useMemo(
-    () =>
-      visibleConversations.map((conversation) => ({
-        ...conversation,
-        operational: getLeadOperationalSummary(conversation.leadId ? boardLeadById.get(String(conversation.leadId)) : null)
-      })),
-    [boardLeadById, visibleConversations]
-  );
-
-  const selectedTemplate =
-    suggestedTemplates.find((item) => item.key === templateKey) || suggestedTemplates[0] || templates[0] || FALLBACK_TEMPLATE_OPTIONS[0];
-  const selectedHeaderName = currentLead?.fullName || selectedConversation?.customerName || selectedConversation?.phone || "Thread";
-  const selectedHeaderPhone = currentLead?.phone || selectedConversation?.phone || "-";
-  const canSendFreeText = Boolean(selectedConversation?.hasOpenSession);
-  const sessionNotice = selectedConversation?.hasOpenSession
-    ? `Finestra aperta fino a ${formatDateTime(selectedConversation.replyWindowExpiresAt)}`
-    : "Finestra WhatsApp chiusa. Invia un template per riaprire la conversazione.";
-  const threadItems = useMemo(() => {
-    const operationalMarkers = (leadDetail?.timeline || [])
-      .map((item) => {
-        const marker = getOperationalMarker(item);
-        return marker ? { type: "marker" as const, marker: { ...marker, createdAt: item.createdAt } } : null;
-      })
-      .filter(Boolean)
-      .slice(-8) as Array<{ type: "marker"; marker: { icon: string; label: string; createdAt: string } }>;
-    const feed = [
-      ...messages.map((message) => ({ type: "message" as const, message, createdAt: message.createdAt })),
-      ...operationalMarkers.map((item) => ({ ...item, createdAt: item.marker.createdAt }))
-    ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    const items: Array<
-      | { type: "day"; label: string }
-      | { type: "message"; message: Message }
-      | { type: "marker"; marker: { icon: string; label: string; createdAt: string } }
-    > = [];
-    let lastDay = "";
-    for (const item of feed) {
-      const currentDay = formatDayLabel(item.createdAt);
-      if (currentDay && currentDay !== lastDay) {
-        items.push({ type: "day", label: currentDay });
-        lastDay = currentDay;
-      }
-      if (item.type === "message") items.push({ type: "message", message: item.message });
-      else items.push({ type: "marker", marker: item.marker });
-    }
-    return items;
-  }, [leadDetail?.timeline, messages]);
-
-  useEffect(() => {
-    if (!threadRef.current) return;
-    threadRef.current.scrollTop = threadRef.current.scrollHeight;
-  }, [threadItems.length]);
+  const displayName = currentLead?.fullName || selectedConversation?.customerName || selectedConversation?.phone || "Contatto";
+  const displayPhone = currentLead?.phone || selectedConversation?.phone || "-";
+  const listVisible = listOpen || !selectedConversation;
+  const shellClass = [
+    "chat-shell",
+    `mode-${layoutMode}`,
+    listVisible ? "list-open" : "",
+    infoOpen && selectedConversation ? "info-open" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div className="chat-react-layout">
-      <aside className="panel">
-        <div className="chat-react-list-head">
-          <div>
-            <h3>Chat</h3>
-            <span className="chat-react-channel-badge">WhatsApp</span>
-          </div>
-          <span>{visibleConversationRows.length}</span>
-        </div>
-        <input
-          className="chat-react-search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Cerca per nome o numero..."
+    <div className={shellClass}>
+      <aside className="chat-pane chat-pane-list" aria-label="Elenco conversazioni">
+        <ConversationList
+          rows={rows}
+          counts={counts}
+          filter={inboxFilter}
+          search={search}
+          selectedId={selectedId}
+          authUsername={authUsername}
+          loading={conversationsLoading}
+          error={listError}
+          onFilterChange={setInboxFilter}
+          onSearchChange={setSearch}
+          onSelect={selectConversation}
+          onRetry={() => void loadConversations({ force: true })}
         />
-        <div className="chat-react-filters">
-          <button type="button" className={inboxFilter === "all" ? "active" : ""} onClick={() => setInboxFilter("all")}>
-            Tutte <span>{sortedConversations.length}</span>
-          </button>
-          <button type="button" className={inboxFilter === "unread" ? "active" : ""} onClick={() => setInboxFilter("unread")}>
-            Non lette <span>{filterCounts.unread}</span>
-          </button>
-          <button type="button" className={inboxFilter === "mine" ? "active" : ""} onClick={() => setInboxFilter("mine")}>
-            In carico <span>{filterCounts.mine}</span>
-          </button>
-          <button type="button" className={inboxFilter === "unassigned" ? "active" : ""} onClick={() => setInboxFilter("unassigned")}>
-            In attesa <span>{filterCounts.unassigned}</span>
-          </button>
-          <button type="button" className={inboxFilter === "resolved" ? "active" : ""} onClick={() => setInboxFilter("resolved")}>
-            Chiuse <span>{filterCounts.resolved}</span>
-          </button>
-        </div>
-        <div className="chat-react-list">
-          {visibleConversationRows.map((conv) => (
-            <button
-              key={conv.id}
-              type="button"
-              className={`chat-react-conv ${selectedId === conv.id ? "active" : ""}`}
-              onClick={() => setSelectedId(conv.id)}
-            >
-              <div className="chat-react-conv-top">
-                <span className="chat-react-conv-avatar">{getAvatarLabel(conv.customerName, conv.phone)}</span>
-                <div>
-                  <strong>{conv.customerName || conv.phone}</strong>
-                  <span className="chat-react-conv-subtitle">{conv.lastMessagePreview || "Nessun messaggio"}</span>
-                </div>
-                <div className="chat-react-conv-meta">
-                  <small>{formatShortTime(conv.lastMessageAt)}</small>
-                  {conv.unreadCount ? <em>{conv.unreadCount}</em> : null}
-                </div>
-              </div>
-              <div className="chat-react-conv-status-line">
-                <span className={`chat-react-status-pill ${getConversationStatusClass(conv.status)}`}>
-                  {getConversationStatusLabel(conv.status)}
-                </span>
-                {conv.operational.pendingPaymentCount ? <span className="chat-react-list-flag payment">EUR {conv.operational.pendingPaymentAmount}</span> : null}
-                {conv.operational.pendingPaymentCount ? <span className="chat-react-list-flag blockers">{conv.operational.pendingPaymentCount} bloccanti</span> : null}
-                {conv.operational.missingDocumentCount ? <span className="chat-react-list-flag docs">{conv.operational.missingDocumentCount} doc</span> : null}
-              </div>
-            </button>
-          ))}
-          {!visibleConversationRows.length ? <p className="muted">Nessuna conversazione trovata.</p> : null}
-        </div>
-        <button type="button" className="chat-react-settings">Impostazioni Chat</button>
       </aside>
+      {listVisible && selectedConversation ? <button type="button" className="chat-scrim list" aria-label="Chiudi elenco" onClick={() => setListOpen(false)} /> : null}
 
-      <section className="panel chat-react-main">
-        <div className="chat-react-thread-head">
-          <div>
-            <span className="chat-thread-avatar">{getAvatarLabel(selectedHeaderName, selectedHeaderPhone)}</span>
-            <div>
-              <h3>{selectedHeaderName}</h3>
-              <span className="muted">{selectedHeaderPhone}</span>
-            </div>
-          </div>
-          {selectedConversation ? (
-            <div className="chat-react-thread-meta">
-              <button type="button" aria-label="Etichetta conversazione">Tag</button>
-              <label className="ui-bookmark" aria-label="Aggiungi ai preferiti">
-                <input type="checkbox" />
-                <svg className="bookmark" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M6 3.5A2.5 2.5 0 0 1 8.5 1h7A2.5 2.5 0 0 1 18 3.5v18a.75.75 0 0 1-1.17.62L12 18.85l-4.83 3.27A.75.75 0 0 1 6 21.5v-18Z" />
-                </svg>
-              </label>
-              <button type="button" aria-label="Altre azioni">...</button>
-            </div>
-          ) : null}
-        </div>
-
-        {selectedConversation ? <div className={`chat-react-session-banner ${selectedConversation.hasOpenSession ? "open" : "closed"}`}>{sessionNotice}</div> : null}
-        {actionNotice ? <div className="chat-react-success">{actionNotice}</div> : null}
-        {chatError ? <div className="chat-react-error">{chatError}</div> : null}
-
-        <div className="chat-react-thread" ref={threadRef}>
-          {threadItems.map((item, index) =>
-            item.type === "day" ? (
-              <div key={`${item.label}-${index}`} className="chat-react-day-separator">
-                <span>{item.label}</span>
+      <section
+        className={`chat-pane chat-pane-thread ${dragActive ? "drag-active" : ""}`}
+        aria-label="Conversazione"
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {selectedConversation ? (
+          <>
+            <ChatHeader
+              conversation={selectedConversation}
+              displayName={displayName}
+              displayPhone={displayPhone}
+              replyWindow={replyWindow}
+              authUsername={authUsername}
+              busy={patchingConversation}
+              infoOpen={infoOpen}
+              hasLinkedPractice={Boolean(selectedConversation.leadId)}
+              onBack={() => setListOpen(true)}
+              onToggleInfo={() => setInfoOpen((open) => !open)}
+              onAssignToMe={() => void patchConversation({ assignedTo: authUsername }, "Conversazione presa in carico")}
+              onRelease={() => void patchConversation({ assignedTo: "" }, "Conversazione rilasciata")}
+              onMarkUnread={() => void markUnread()}
+              onSetStatus={(status) =>
+                void patchConversation(
+                  { status },
+                  status === "resolved" ? "Conversazione risolta" : status === "waiting_customer" ? "In attesa del cliente" : "Conversazione riaperta"
+                )
+              }
+              onOpenPractice={openPractice}
+              onCopyPhone={() => void copyPhone(displayPhone)}
+            />
+            {!online ? (
+              <div className="chat-banner offline" role="status">
+                <WifiOff size={15} aria-hidden="true" /> Sei offline: i messaggi non possono essere inviati finche la connessione non torna.
               </div>
-            ) : item.type === "marker" ? (
-              <div key={`${item.marker.createdAt}-${index}`} className="chat-react-op-marker">
-                <span>{item.marker.icon}</span>
-                <strong>{item.marker.label}</strong>
-                <small>{formatShortTime(item.marker.createdAt)}</small>
+            ) : null}
+            {chatError ? (
+              <div className="chat-banner error" role="alert">
+                <span>{chatError}</span>
+                <button type="button" className="chat-icon-button small" onClick={() => setChatError("")} aria-label="Chiudi avviso">
+                  <X size={14} aria-hidden="true" />
+                </button>
               </div>
-            ) : (
-              <div key={item.message.id} className={`chat-react-bubble-row ${item.message.direction === "outbound" ? "out" : "in"}`}>
-                <span className={`chat-react-avatar ${item.message.direction === "outbound" ? "agent" : "customer"}`}>
-                  {item.message.direction === "outbound"
-                    ? getAvatarLabel(authUser?.name || authUser?.username || "OP")
-                    : getAvatarLabel(selectedConversation?.customerName, selectedConversation?.phone)}
-                </span>
-                <article className={`chat-react-bubble ${item.message.direction === "outbound" ? "out" : "in"}`}>
-                  {item.message.attachment ? (
-                    <div className="chat-react-attachment">
-                      <svg className="chat-react-attachment-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                        <path d="M4 12.5 11.5 5a3.5 3.5 0 0 1 5 5L9 17.5a2 2 0 0 1-3-3L13 7.5" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                      <span className="chat-react-attachment-name">{item.message.attachment.filename || "Allegato"}</span>
-                    </div>
-                  ) : null}
-                  <p>{item.message.text}</p>
-                  <span>
-                    {item.message.messageType === "template" ? "Template • " : ""}
-                    {new Date(item.message.createdAt).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}
-                    {item.message.direction === "outbound" && item.message.status ? (
-                      <>
-                        {" • "}
-                        <em className={`chat-react-message-status ${getMessageStatusClass(item.message.status)}`}>
-                          {getMessageStatusLabel(item.message.status)}
-                        </em>
-                      </>
-                    ) : null}
-                  </span>
-                </article>
+            ) : null}
+            {notice ? (
+              <div className="chat-toast" role="status">
+                {notice}
               </div>
-            )
-          )}
-          {!messages.length ? <p className="muted">Nessun messaggio nella conversazione.</p> : null}
-        </div>
-
-        <form className="chat-react-send" onSubmit={sendMessage}>
-          <input value={to} onChange={(e) => setTo(e.target.value)} placeholder="Numero" disabled={Boolean(selectedConversation?.phone)} />
-          <div className="chat-react-composer">
-            <div className="chat-react-mode-switch">
-              <button
-                type="button"
-                className={messageMode === "text" ? "active" : ""}
-                disabled={!canSendFreeText}
-                onClick={() => setMessageMode("text")}
-              >
-                Testo libero
-              </button>
-              <button type="button" className={messageMode === "template" ? "active" : ""} onClick={() => setMessageMode("template")}>
-                Template
-              </button>
-            </div>
-
-            {messageMode === "template" ? (
-              <>
-                <select value={templateKey} onChange={(e) => setTemplateKey(e.target.value)}>
-                  {suggestedTemplates.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-                <textarea
-                  className="chat-react-message-box"
-                  value={selectedTemplate.body}
-                  readOnly
-                  rows={1}
-                  aria-label="Testo template"
-                />
-              </>
-            ) : (
-              <textarea
-                className="chat-react-message-box"
-                ref={textAreaRef}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Scrivi un messaggio..."
-                rows={1}
-                disabled={!canSendFreeText}
-                autoFocus={messageMode === "text"}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-              />
-            )}
-          </div>
-          <button
-            type="button"
-            className="chat-react-cancel"
-            onClick={() => setText("")}
-            disabled={sending}
-          >
-            Annulla
-          </button>
-          <button
-            type="submit"
-            disabled={sending || !to.trim() || (messageMode === "text" ? !text.trim() || !canSendFreeText : !selectedTemplate)}
-            aria-label={messageMode === "template" ? "Invia template" : "Invia messaggio"}
-          >
-            {sending ? "..." : ">"}
-          </button>
-        </form>
+            ) : null}
+            <MessageThread
+              conversationId={selectedConversation.id}
+              items={threadItems}
+              loading={messagesLoading}
+              localPreviews={localPreviews}
+              onRetry={retryMessage}
+              onDiscard={discardMessage}
+              onOpenPractice={selectedConversation.leadId ? openPractice : undefined}
+            />
+            <Composer
+              textAreaRef={textAreaRef}
+              mode={messageMode}
+              replyWindowOpen={replyWindow.open}
+              templates={templateChoices}
+              selectedTemplate={selectedTemplate}
+              text={text}
+              drafts={drafts}
+              practiceDocuments={practiceDocuments}
+              attachmentsDisabledReason={attachmentsDisabledReason}
+              fileError={fileError}
+              sending={sending}
+              onModeChange={(mode) => setMessageMode(mode === "text" && !replyWindow.open ? "template" : mode)}
+              onTemplateChange={setTemplateKey}
+              onTextChange={setText}
+              onAddFiles={addFiles}
+              onPickPracticeDocument={pickPracticeDocument}
+              onRemoveDraft={removeDraft}
+              onDismissFileError={() => setFileError("")}
+              onSubmit={submitComposer}
+            />
+            {dragActive ? (
+              <div className="chat-drop-overlay" aria-hidden="true">
+                <strong>Rilascia per allegare</strong>
+                <span>{attachmentsDisabledReason || "Immagini, PDF, Word, Excel o CSV fino a 8 MB"}</span>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <ChatEmptyState hasConversations={conversations.length > 0} />
+        )}
       </section>
 
-      <ChatDecisionEngine
-        lead={currentLead}
-        selectedConversation={selectedConversation}
-        openTasks={openTasks}
-        leadLoading={leadLoading}
-        leadError={leadError}
-        authUsername={authUsername}
-        patchingConversation={patchingConversation}
-        actionBusyKey={actionBusyKey}
-        completedActionKey={completedActionKey}
-        paymentsOpen={paymentsOpen}
-        documentsOpen={documentsOpen}
-        openPaymentMenuId={openPaymentMenuId}
-        onTogglePayments={() => setPaymentsOpen((current) => !current)}
-        onToggleDocuments={() => setDocumentsOpen((current) => !current)}
-        onTogglePaymentMenu={(paymentId) => setOpenPaymentMenuId((current) => (current === paymentId ? "" : paymentId))}
-        onClosePaymentMenu={() => setOpenPaymentMenuId("")}
-        onPatchConversation={patchConversation}
-        onCallCustomer={callCustomer}
-        onRequestDocuments={requestDocuments}
-        onRequestPaymentReminder={requestPaymentReminder}
-        onScheduleCallback={(payload) => void scheduleCallback(payload)}
-        callbackScheduling={actionBusyKey === "schedule-callback"}
-        onMarkDocumentReceived={(documentId) => void markDocumentReceived(documentId)}
-        onMarkPaymentReceived={(paymentId) => void markPaymentReceived(paymentId)}
-        onVerifyPayment={(paymentId) => void verifyPayment(paymentId)}
-        onCompleteTask={(taskId) => void completeTask(taskId)}
-        onPostponeTaskOneDay={(taskId) => void postponeTaskOneDay(taskId)}
-      />
+      {selectedConversation ? (
+        <>
+          {infoOpen ? <button type="button" className="chat-scrim info" aria-label="Chiudi dettagli" onClick={() => setInfoOpen(false)} /> : null}
+          <div className="chat-pane chat-pane-info">
+            <ChatDecisionEngine
+              lead={currentLead}
+              selectedConversation={selectedConversation}
+              openTasks={openTasks}
+              timeline={leadDetail?.timeline || []}
+              leadLoading={leadLoading}
+              leadError={leadError}
+              authUsername={authUsername}
+              actionBusyKey={actionBusyKey}
+              completedActionKey={completedActionKey}
+              onClose={() => setInfoOpen(false)}
+              onCallCustomer={callCustomer}
+              onRequestDocuments={() => prepareTemplate("documents", "request_documents")}
+              onRequestPaymentReminder={() => prepareTemplate("payments", "payment_followup")}
+              onScheduleCallback={(payload) => void scheduleCallback(payload)}
+              callbackScheduling={actionBusyKey === "schedule-callback"}
+              onMarkDocumentReceived={(documentId) => void markDocumentReceived(documentId)}
+              onMarkPaymentReceived={(paymentId) => void markPaymentReceived(paymentId)}
+              onVerifyPayment={(paymentId) => void verifyPayment(paymentId)}
+              onCompleteTask={(taskId) => void completeTask(taskId)}
+              onPostponeTaskOneDay={(taskId) => void postponeTaskOneDay(taskId)}
+            />
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

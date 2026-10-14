@@ -16,8 +16,17 @@ const {
   findConversationByCustomerId,
   markConversationRead,
   updateConversation,
-  updateMessageStatusByProviderId
+  updateMessageStatusByProviderId,
+  getMessageById
 } = require("../common/chatStore");
+const { createMetaSendError } = require("./meta-errors");
+const {
+  resolveOutboundMediaType,
+  normalizeAttachmentKind,
+  sanitizeAttachmentFilename,
+  isInlineSafeMime,
+  INBOUND_MEDIA_MAX_BYTES
+} = require("./media-rules");
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.WHATSAPP_SERVICE_PORT || 4306);
@@ -529,7 +538,7 @@ async function sendViaMeta(to, text) {
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Meta send failed (${response.status}): ${errText}`);
+    throw createMetaSendError(response.status, errText, "Invio testo");
   }
   const payload = await response.json();
   const providerMessageId =
@@ -562,7 +571,7 @@ async function sendTemplateViaMeta(to, templateName) {
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Meta template send failed (${response.status}): ${errText}`);
+    throw createMetaSendError(response.status, errText, "Invio template");
   }
   const payload = await response.json();
   const providerMessageId =
@@ -579,7 +588,7 @@ async function sendAttachmentViaMeta(to, attachment) {
   if (!WA_ACCESS_TOKEN || !WA_PHONE_NUMBER_ID) {
     return { simulated: true, providerMessageId: `sim_att_${Date.now()}` };
   }
-  const mediaType = attachment.mimeType && String(attachment.mimeType).startsWith("image/") ? "image" : "document";
+  const mediaType = attachment.mediaType === "image" ? "image" : "document";
   const url = `https://graph.facebook.com/${WA_GRAPH_VERSION}/${encodeURIComponent(WA_PHONE_NUMBER_ID)}/messages`;
   const response = await fetch(url, {
     method: "POST",
@@ -600,7 +609,7 @@ async function sendAttachmentViaMeta(to, attachment) {
   });
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Meta attachment send failed (${response.status}): ${errText}`);
+    throw createMetaSendError(response.status, errText, "Invio allegato");
   }
   const payload = await response.json();
   const providerMessageId =
@@ -805,6 +814,61 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Inbound media (photos/documents a customer sent) only arrive as a Meta mediaId. This
+    // resolves it through Meta's Media API and streams the bytes back to the CRM -- reachable only
+    // through the authenticated gateway (/api/whatsapp/* other than /webhook requires a session),
+    // and only for a mediaId already stored on one of our own messages, never an arbitrary id.
+    const mediaParams = routeMatch(pathname, "/messages/:messageId/media");
+    if (mediaParams && method === "GET") {
+      const message = await getMessageById(mediaParams.messageId);
+      const mediaId = message && message.attachment && message.attachment.mediaId;
+      if (!mediaId) {
+        sendJson(res, 404, { error: "Allegato non disponibile.", code: "media_not_found" });
+        return;
+      }
+      if (!WA_ACCESS_TOKEN) {
+        sendJson(res, 503, { error: "Download degli allegati WhatsApp non configurato.", code: "media_unavailable" });
+        return;
+      }
+      const authHeaders = { Authorization: `Bearer ${WA_ACCESS_TOKEN}` };
+      const metaResponse = await fetch(`https://graph.facebook.com/${WA_GRAPH_VERSION}/${encodeURIComponent(mediaId)}`, { headers: authHeaders });
+      if (!metaResponse.ok) {
+        // Meta keeps inbound media for a limited time; past that the id simply stops resolving.
+        sendJson(res, 410, { error: "Allegato non piu disponibile su WhatsApp.", code: "media_expired" });
+        return;
+      }
+      const meta = await metaResponse.json();
+      if (!meta || !meta.url) {
+        sendJson(res, 410, { error: "Allegato non piu disponibile su WhatsApp.", code: "media_expired" });
+        return;
+      }
+      if (Number(meta.file_size || 0) > INBOUND_MEDIA_MAX_BYTES) {
+        sendJson(res, 413, { error: "Allegato troppo grande per l'anteprima.", code: "media_too_large" });
+        return;
+      }
+      const binaryResponse = await fetch(meta.url, { headers: authHeaders });
+      if (!binaryResponse.ok) {
+        sendJson(res, 502, { error: "Download dell'allegato da WhatsApp non riuscito.", code: "media_download_failed" });
+        return;
+      }
+      const content = Buffer.from(await binaryResponse.arrayBuffer());
+      if (content.length > INBOUND_MEDIA_MAX_BYTES) {
+        sendJson(res, 413, { error: "Allegato troppo grande per l'anteprima.", code: "media_too_large" });
+        return;
+      }
+      const mimeType = String(meta.mime_type || message.attachment.mimeType || "application/octet-stream").split(";")[0].trim();
+      const filename = sanitizeAttachmentFilename(message.attachment.filename, `allegato-${message.id}`);
+      res.writeHead(200, {
+        "Content-Type": isInlineSafeMime(mimeType) ? mimeType : "application/octet-stream",
+        "Content-Length": String(content.length),
+        "Content-Disposition": `${isInlineSafeMime(mimeType) ? "inline" : "attachment"}; filename="${filename}"`,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=300"
+      });
+      res.end(content);
+      return;
+    }
+
     const convMessagesParams = routeMatch(pathname, "/conversations/:conversationId/messages");
     if (convMessagesParams && method === "GET") {
       let conversation = await getConversationById(convMessagesParams.conversationId);
@@ -824,9 +888,17 @@ const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const nextStatus = body.status ? String(body.status).trim() : undefined;
       const nextAssignedTo = body.assignedTo !== undefined ? String(body.assignedTo || "").trim() : undefined;
+      // "Segna come non letta": only ever raises the counter to at least 1, never an arbitrary
+      // client-chosen number, so it can't fake or hide real inbound volume.
+      let unreadPatch = {};
+      if (body.markUnread === true) {
+        const current = await getConversationById(convPatchParams.conversationId);
+        if (current) unreadPatch = { unreadCount: Math.max(1, Number(current.unreadCount || 0)) };
+      }
       const updated = await updateConversation(convPatchParams.conversationId, {
         ...(nextStatus ? { status: nextStatus } : {}),
-        ...(nextAssignedTo !== undefined ? { assignedTo: nextAssignedTo } : {})
+        ...(nextAssignedTo !== undefined ? { assignedTo: nextAssignedTo } : {}),
+        ...unreadPatch
       });
       if (!updated) {
         sendJson(res, 404, { error: "Conversazione non trovata." });
@@ -845,11 +917,13 @@ const server = http.createServer(async (req, res) => {
       const text = String(body.text || "").trim();
       const outboundAttachment = body.attachment && body.attachment.url ? {
         direction: "outbound",
-        mediaType: String(body.attachment.mimeType || "").startsWith("image/") ? "image" : "document",
+        mediaType: resolveOutboundMediaType(body.attachment.mimeType, body.attachment.size),
+        kind: normalizeAttachmentKind(body.attachment.kind),
         url: String(body.attachment.url),
-        filename: String(body.attachment.filename || ""),
+        filename: sanitizeAttachmentFilename(body.attachment.filename),
         mimeType: String(body.attachment.mimeType || ""),
-        caption: String(body.attachment.caption || ""),
+        size: Number(body.attachment.size || 0) || 0,
+        caption: String(body.attachment.caption || "").slice(0, 1024),
         documentStorageKey: String(body.attachment.storageKey || "")
       } : null;
       if (mode === "text" && !text) {
@@ -961,6 +1035,10 @@ const server = http.createServer(async (req, res) => {
 
     sendJson(res, 404, { error: "Endpoint non trovato." });
   } catch (error) {
+    if (error && error.isMetaSendError) {
+      sendJson(res, 502, { error: error.message, code: error.code });
+      return;
+    }
     sendJson(res, 500, { error: error.message || "Errore interno." });
   }
 });
