@@ -436,6 +436,8 @@ async function proxyRequest(
   const headers: Record<string, string> = {};
   if (req.headers["content-type"]) headers["content-type"] = req.headers["content-type"] as string;
   if (req.headers.authorization) headers.authorization = req.headers.authorization;
+  // Meta's HMAC signature; whatsapp-service verifies it against the raw body we forward as-is.
+  if (req.headers["x-hub-signature-256"]) headers["x-hub-signature-256"] = req.headers["x-hub-signature-256"] as string;
 
   const upstream = await fetch(`${targetBase}${targetPath}`, {
     method: req.method,
@@ -906,6 +908,12 @@ export const server = http.createServer(async (req, res) => {
     const route = mapApiRoute(pathname);
     if (!route) {
       sendJson(res, 404, { error: "Endpoint non trovato." });
+      return;
+    }
+    // Meta calls the WhatsApp webhook without a Leadium session: whatsapp-service authenticates
+    // it itself (verify token on GET, X-Hub-Signature-256 on POST). Only this exact path is public.
+    if (pathname === "/api/whatsapp/webhook") {
+      await proxyRequest(req, res, route.base, `${route.path}${url.search}`);
       return;
     }
     const session = getSessionFromRequest(req);
