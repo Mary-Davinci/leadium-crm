@@ -40,6 +40,7 @@ function renderList(props: Partial<Parameters<typeof ConversationList>[0]> = {})
       onSearchChange={noop}
       onSelect={noop}
       onRetry={noop}
+      onStartChat={async () => ""}
       {...props}
     />
   );

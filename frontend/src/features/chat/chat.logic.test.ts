@@ -10,6 +10,7 @@ import {
   getReplyWindowState,
   isInfoPanelInitiallyOpen,
   mapChatError,
+  normalizeNewChatPhone,
   shouldCloseListOnSelect,
   tokenizeMessageText,
   validateChatFile
@@ -180,5 +181,20 @@ describe("responsive layout", () => {
     expect(shouldCloseListOnSelect("medium")).toBe(false);
     expect(shouldCloseListOnSelect("narrow")).toBe(true);
     expect(shouldCloseListOnSelect("mobile")).toBe(true);
+  });
+});
+
+describe("new chat phone", () => {
+  it("normalizes to international digits and adds 39 to bare Italian mobiles", () => {
+    expect(normalizeNewChatPhone("+39 333 123 4567").phone).toBe("393331234567");
+    expect(normalizeNewChatPhone("0039 333 1234567").phone).toBe("393331234567");
+    expect(normalizeNewChatPhone("333 1234567").phone).toBe("393331234567");
+    expect(normalizeNewChatPhone("+44 7700 900123").phone).toBe("447700900123");
+  });
+
+  it("rejects empty or implausible numbers", () => {
+    expect(normalizeNewChatPhone("").error).not.toBe("");
+    expect(normalizeNewChatPhone("12345").error).not.toBe("");
+    expect(normalizeNewChatPhone("1234567890123456").error).not.toBe("");
   });
 });

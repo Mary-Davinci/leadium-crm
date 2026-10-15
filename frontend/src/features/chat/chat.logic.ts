@@ -287,6 +287,24 @@ export function mapChatError(error: unknown, fallback = "Operazione non riuscita
   return message;
 }
 
+// --- New chat --------------------------------------------------------------------------------
+
+/**
+ * Normalizes a number typed by the operator into the international digits-only format Meta
+ * expects. An Italian mobile typed without prefix (3xx, 10 digits) gets 39 prepended, so the
+ * same customer never ends up in two conversations with and without country code.
+ */
+export function normalizeNewChatPhone(input: string): { phone: string; error: string } {
+  let digits = String(input || "").replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (!digits) return { phone: "", error: "Inserisci il numero di telefono." };
+  if (digits.length === 10 && digits.startsWith("3")) digits = `39${digits}`;
+  if (digits.length < 8 || digits.length > 15) {
+    return { phone: "", error: "Numero non valido: usa il formato internazionale, es. +39 333 1234567." };
+  }
+  return { phone: digits, error: "" };
+}
+
 // --- Layout ----------------------------------------------------------------------------------
 
 export function getChatLayoutMode(width: number): ChatLayoutMode {

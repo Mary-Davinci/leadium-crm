@@ -15,6 +15,7 @@ import {
   getTimelineMarker,
   isInfoPanelInitiallyOpen,
   mapChatError,
+  normalizeNewChatPhone,
   shouldCloseListOnSelect,
   validateChatFile,
   type ThreadMarker
@@ -91,6 +92,7 @@ const FALLBACK_TEMPLATE_OPTIONS: TemplateOption[] = [
   { key: "booking_update", name: "booking_update", label: "Aggiornamento prenotazione", body: "Ciao, abbiamo un aggiornamento sulla tua prenotazione.", category: "utility" }
 ];
 
+const FIRST_CONTACT_TEMPLATE_KEY = "primo_contatto_cliente";
 const POLL_INTERVAL_MS = 15000;
 const MAX_DRAFT_ATTACHMENTS = 10;
 const WHATSAPP_CAPTION_MAX = 1024;
@@ -289,6 +291,27 @@ export function ChatPage() {
 
   // Deep link from the Pratica page (?customerId=/leadId=, optional ?phone= to create an empty
   // conversation): asks the server rather than local state, which may still be the pre-fetch list.
+  // "Nuova chat" from the list: opens the existing conversation for that number or creates an
+  // empty one, then preselects the first-contact template since the 24h window is closed.
+  async function startNewChat(rawPhone: string, customerName: string) {
+    const { phone, error } = normalizeNewChatPhone(rawPhone);
+    if (error) return error;
+    try {
+      const conversation = await api<Conversation>("/api/whatsapp/conversations/ensure", {
+        method: "POST",
+        body: JSON.stringify({ phone, customerName: customerName || undefined })
+      });
+      setConversations((prev) => (prev.some((item) => item.id === conversation.id) ? prev : [conversation, ...prev]));
+      setSearch("");
+      setInboxFilter("all");
+      if (templates.some((item) => item.key === FIRST_CONTACT_TEMPLATE_KEY)) setTemplateKey(FIRST_CONTACT_TEMPLATE_KEY);
+      selectConversation(conversation.id);
+      return "";
+    } catch (err) {
+      return mapChatError(err, "Impossibile aprire la chat. Riprova tra qualche secondo.");
+    }
+  }
+
   async function applyConversationDeepLink() {
     const targetCustomerId = String(searchParams.get("customerId") || "").trim();
     const targetLeadId = String(searchParams.get("leadId") || "").trim();
@@ -1040,6 +1063,7 @@ export function ChatPage() {
           onSearchChange={setSearch}
           onSelect={selectConversation}
           onRetry={() => void loadConversations({ force: true })}
+          onStartChat={startNewChat}
         />
       </aside>
       {listVisible && selectedConversation ? <button type="button" className="chat-scrim list" aria-label="Chiudi elenco" onClick={() => setListOpen(false)} /> : null}

@@ -344,6 +344,67 @@
   background: var(--chat-ok);
 }
 
+.chat-new-chat-toggle {
+  margin-left: auto;
+}
+
+.chat-new-chat {
+  display: grid;
+  gap: 8px;
+  margin: 0 12px 10px;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+}
+
+.chat-new-chat label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+}
+
+.chat-new-chat input {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.chat-new-chat input:focus-visible {
+  outline: none;
+  border-color: var(--action-primary);
+  box-shadow: var(--focus-ring);
+}
+
+.chat-new-chat-hint,
+.chat-new-chat-error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.chat-new-chat-hint {
+  color: var(--text-secondary);
+}
+
+.chat-new-chat-error {
+  color: var(--chat-danger);
+  font-weight: 700;
+}
+
+.chat-new-chat-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .chat-search {
   display: flex;
   align-items: center;

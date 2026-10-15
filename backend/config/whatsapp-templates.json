@@ -11,7 +11,7 @@
     "key": "reopen_contact",
     "name": "reopen_contact",
     "label": "Ricontatto pratica",
-    "body": "Ciao, ti ricontattiamo per aggiornarti sulla tua pratica.",
+    "body": "Ciao, ti ricontattiamo da Crocieriamo per aggiornarti sulla tua pratica.",
     "category": "followup",
     "suggestionTag": "task"
   },
@@ -19,7 +19,7 @@
     "key": "request_documents",
     "name": "request_documents",
     "label": "Richiesta documenti",
-    "body": "Ciao, ci servono i documenti mancanti per proseguire con la pratica.",
+    "body": "Ciao, ti contattiamo da Crocieriamo perché ci servono alcuni documenti mancanti per proseguire con la tua pratica.",
     "category": "utility",
     "suggestionTag": "documents"
   },
@@ -27,7 +27,7 @@
     "key": "payment_followup",
     "name": "payment_followup",
     "label": "Promemoria pagamento",
-    "body": "Ciao, ti contattiamo per il pagamento in sospeso della tua pratica.",
+    "body": "Ciao, ti contattiamo da Crocieriamo in merito a un pagamento ancora in sospeso relativo alla tua pratica.",
     "category": "utility",
     "suggestionTag": "payments"
   },
@@ -35,7 +35,7 @@
     "key": "booking_update",
     "name": "booking_update",
     "label": "Aggiornamento prenotazione",
-    "body": "Ciao, abbiamo un aggiornamento sulla tua prenotazione.",
+    "body": "Ciao, ti contattiamo da Crocieriamo perché abbiamo un aggiornamento sulla tua prenotazione.",
     "category": "utility",
     "suggestionTag": "generic"
   },
@@ -43,7 +43,7 @@
     "key": "reschedule_callback",
     "name": "reschedule_callback",
     "label": "Ricontattami",
-    "body": "Ciao, se preferisci essere richiamato in un altro momento facci sapere quando: ti richiamiamo noi.",
+    "body": "Ciao, ti contattiamo da Crocieriamo. Se preferisci essere richiamato in un altro momento, rispondi a questo messaggio indicandoci quando.",
     "category": "followup",
     "suggestionTag": "callback"
   },
@@ -51,7 +51,7 @@
     "key": "not_interested_ack",
     "name": "not_interested_ack",
     "label": "Non interessato",
-    "body": "Ciao, grazie per averci contattato. Se in futuro dovessi essere di nuovo interessato, siamo a disposizione.",
+    "body": "Ciao, grazie per aver contattato Crocieriamo. Se in futuro vorrai ricevere nuovamente informazioni, siamo a disposizione.",
     "category": "followup",
     "suggestionTag": "not_interested"
   }

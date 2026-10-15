@@ -1,5 +1,5 @@
-import { memo } from "react";
-import { Search, X } from "lucide-react";
+import { memo, useState, type FormEvent } from "react";
+import { MessageSquarePlus, Search, X } from "lucide-react";
 import { formatListTimestamp, getAvatarLabel, getConversationStatusLabel } from "../chat.logic";
 import type { Conversation, InboxFilter } from "../chat.types";
 
@@ -20,6 +20,8 @@ type ConversationListProps = {
   onSearchChange: (value: string) => void;
   onSelect: (conversationId: string) => void;
   onRetry: () => void;
+  /** Opens (or creates) the conversation for a typed number; resolves to an error message or "". */
+  onStartChat: (phone: string, customerName: string) => Promise<string>;
 };
 
 const FILTERS: Array<{ key: InboxFilter; label: string }> = [
@@ -115,14 +117,90 @@ export function ConversationList({
   onFilterChange,
   onSearchChange,
   onSelect,
-  onRetry
+  onRetry,
+  onStartChat
 }: ConversationListProps) {
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [newChatPhone, setNewChatPhone] = useState("");
+  const [newChatName, setNewChatName] = useState("");
+  const [newChatError, setNewChatError] = useState("");
+  const [newChatBusy, setNewChatBusy] = useState(false);
+
+  function closeNewChat() {
+    setNewChatOpen(false);
+    setNewChatPhone("");
+    setNewChatName("");
+    setNewChatError("");
+  }
+
+  async function submitNewChat(event: FormEvent) {
+    event.preventDefault();
+    if (newChatBusy) return;
+    setNewChatBusy(true);
+    setNewChatError("");
+    const error = await onStartChat(newChatPhone, newChatName.trim());
+    setNewChatBusy(false);
+    if (error) setNewChatError(error);
+    else closeNewChat();
+  }
+
   return (
     <div className="chat-list">
       <header className="chat-list-head">
         <h2>Chat</h2>
         <span className="chat-channel">WhatsApp</span>
+        <button
+          type="button"
+          className="chat-secondary-button small chat-new-chat-toggle"
+          aria-expanded={newChatOpen}
+          aria-controls="chat-new-chat-form"
+          onClick={() => (newChatOpen ? closeNewChat() : setNewChatOpen(true))}
+        >
+          <MessageSquarePlus size={14} aria-hidden="true" />
+          Nuova chat
+        </button>
       </header>
+      {newChatOpen ? (
+        <form id="chat-new-chat-form" className="chat-new-chat" onSubmit={submitNewChat} aria-label="Nuova chat WhatsApp">
+          <label>
+            <span>Numero</span>
+            <input
+              type="tel"
+              inputMode="tel"
+              autoComplete="off"
+              autoFocus
+              value={newChatPhone}
+              onChange={(event) => setNewChatPhone(event.target.value)}
+              placeholder="+39 333 1234567"
+              required
+            />
+          </label>
+          <label>
+            <span>Nome (facoltativo)</span>
+            <input
+              type="text"
+              autoComplete="off"
+              value={newChatName}
+              onChange={(event) => setNewChatName(event.target.value)}
+              placeholder="Nome e cognome"
+            />
+          </label>
+          <p className="chat-new-chat-hint">Il primo messaggio deve essere un template approvato: dopo l'apertura scegli il template e invia.</p>
+          {newChatError ? (
+            <p className="chat-new-chat-error" role="alert">
+              {newChatError}
+            </p>
+          ) : null}
+          <div className="chat-new-chat-actions">
+            <button type="button" className="chat-secondary-button small" onClick={closeNewChat}>
+              Annulla
+            </button>
+            <button type="submit" className="chat-primary-button small" disabled={newChatBusy || !newChatPhone.trim()}>
+              {newChatBusy ? "Apertura..." : "Apri chat"}
+            </button>
+          </div>
+        </form>
+      ) : null}
       <div className="chat-search">
         <Search size={15} aria-hidden="true" />
         <input
