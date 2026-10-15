@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom";
+import { buildCrmChatPath } from "../../../lib/whatsapp";
 import { Lead } from "../pratiche.types";
 
 export type PracticesQuickDetailProps = {
@@ -9,10 +11,6 @@ function getPhoneHref(phone?: string) {
   return cleaned ? `tel:${cleaned}` : "#";
 }
 
-function getWhatsAppHref(phone?: string) {
-  const cleaned = String(phone || "").replace(/\D/g, "");
-  return cleaned ? `https://wa.me/${cleaned}` : "#";
-}
 
 export function PracticesQuickDetail({ lead }: PracticesQuickDetailProps) {
   if (!lead) {
@@ -51,9 +49,9 @@ export function PracticesQuickDetail({ lead }: PracticesQuickDetailProps) {
         <a className="pr-drawer-action pr-drawer-action-primary" href={getPhoneHref(lead.phone)}>
           Chiama
         </a>
-        <a className="pr-drawer-action" href={getWhatsAppHref(lead.phone)} target="_blank" rel="noreferrer">
+        <Link className="pr-drawer-action" to={buildCrmChatPath(lead)}>
           WhatsApp
-        </a>
+        </Link>
       </footer>
     </div>
   );

@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { apiUrl } from "../lib/api-url";
 import { clearSession, getAuthToken, getAuthUser } from "../lib/auth";
 import { build3CXCallUri, clearPending3CXCall, createPending3CXCall, launch3CXUri } from "../lib/threecx";
-import { buildWhatsAppUrl } from "../lib/whatsapp";
+import { buildCrmChatPath } from "../lib/whatsapp";
 import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache, upsertTaskInBoard } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
 import { CallOutcome, Lead as ThreeCXLead } from "../features/practices/pratiche.types";
@@ -1187,35 +1187,16 @@ export function PraticaDetailPage() {
     }
   }
 
-  // Primary WhatsApp action for this release: opens wa.me (the operator's own WhatsApp Web/app),
-  // same as before the internal CRM chat integration existed. Product decision for this
-  // milestone: the internal chat stays as a foundation (whatsapp-service, conversation
-  // association, history, attachments, customer actions -- all untouched), but isn't the default
-  // entry point from the Pratica page yet. See openWhatsAppCrmChat for the secondary path.
+  // WhatsApp always opens the internal CRM chat (Cloud API, tracked on this practice). The chat page
+  // finds the existing conversation or creates an empty one for the lead's phone.
   function openWhatsApp() {
     if (!detail?.lead.id) return;
-    const url = buildWhatsAppUrl(detail.lead.phone || "", "");
-    if (!url) {
+    if (!detail.lead.phone) {
       setError("Numero cliente non disponibile per aprire WhatsApp.");
       return;
     }
-    const popup = window.open(url, "_blank", "noopener,noreferrer");
-    if (!popup) {
-      window.location.href = url;
-    }
-    void logWhatsAppActivity("whatsapp_opened", "Chat WhatsApp esterna (wa.me) aperta dalla pratica.", { channel: "whatsapp", target: "external" });
-  }
-
-  // Secondary, non-prominent path to the internal CRM chat foundation (Cloud API-backed, tracked,
-  // associated to the right lead/customer via /conversations/ensure). Only offered when the
-  // practice has a customerId to route into.
-  function openWhatsAppCrmChat() {
-    if (!detail?.lead.id || !detail.lead.customerId) return;
-    const params = new URLSearchParams({ customerId: detail.lead.customerId, leadId: detail.lead.id });
-    if (detail.lead.phone) params.set("phone", detail.lead.phone);
-    if (detail.lead.fullName) params.set("customerName", detail.lead.fullName);
     void logWhatsAppActivity("whatsapp_crm_chat_opened", "Chat WhatsApp CRM aperta dalla pratica.", { channel: "whatsapp", target: "crm_chat" });
-    navigate(`/chat?${params.toString()}`);
+    navigate(buildCrmChatPath(detail.lead));
   }
 
   useEffect(
@@ -2100,11 +2081,6 @@ export function PraticaDetailPage() {
                   <span>Nota</span>
                 </button>
               </div>
-              {detail.lead.customerId && detail.lead.phone ? (
-                <button type="button" className="pd-whatsapp-external-link" onClick={openWhatsAppCrmChat}>
-                  Apri chat CRM
-                </button>
-              ) : null}
             </div>
           </section>
 

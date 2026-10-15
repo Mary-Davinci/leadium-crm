@@ -9,6 +9,7 @@ import { getPriority, getPriorityScore, getSmartBucket, includesAny, normalizeLe
 import { api } from "../lib/api";
 import { getAuthUser } from "../lib/auth";
 import { build3CXCallUri, clearPending3CXCall, createPending3CXCall, launch3CXUri } from "../lib/threecx";
+import { buildCrmChatPath } from "../lib/whatsapp";
 import {
   CrmTask,
   getLeadDetailCacheEntry,
@@ -1122,7 +1123,7 @@ export function PratichePage() {
                 onOpen={(id) => navigate(buildPracticeUrl(id))}
                 onStartCall={handleStartCall}
                 onRegisterCall={(item) => handleRegisterCall(item.id)}
-                onWrite={(_lead) => navigate("/chat")}
+                onWrite={(item) => navigate(buildCrmChatPath(item))}
                 onQuickTask={handleCreateTask}
                 onStatusChange={handleInlineStatusChange}
                 onAssign={handleAssign}
