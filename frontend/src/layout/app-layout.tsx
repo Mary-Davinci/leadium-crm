@@ -72,7 +72,14 @@ export function AppLayout() {
           })}
         </nav>
         <div className="sidebar-signoff" aria-hidden="true">
-          <svg viewBox="0 0 224 90" fill="none"><path d="M-20 20C65 8 83 115 244 23" stroke="#0877ad" strokeWidth="22"/><path d="M-20 43C63 15 108 119 244 45" stroke="#096094" strokeWidth="9"/></svg>
+          {/* Each path repeats every 224 units across a 448-wide viewBox, so sliding the SVG by half
+              its width loops seamlessly. */}
+          <svg className="sidebar-wave sidebar-wave-back" viewBox="0 0 448 90" preserveAspectRatio="none" fill="none">
+            <path d="M0 46C37 26 75 26 112 46S187 66 224 46S299 26 336 46S411 66 448 46" stroke="#096094" strokeWidth="9" />
+          </svg>
+          <svg className="sidebar-wave sidebar-wave-front" viewBox="0 0 448 90" preserveAspectRatio="none" fill="none">
+            <path d="M0 34C37 14 75 14 112 34S187 54 224 34S299 14 336 34S411 54 448 34" stroke="#0877ad" strokeWidth="22" />
+          </svg>
         </div>
       </aside>
 
