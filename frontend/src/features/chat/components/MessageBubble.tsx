@@ -54,6 +54,7 @@ export const MessageBubble = memo(function MessageBubble({ message, localPreview
   const outbound = message.direction === "outbound";
   const text = getVisibleText(message);
   const failed = message.localState === "failed";
+  const deliveryFailed = !message.localState && message.status === "failed";
   const isTemplate = message.messageType === "template";
 
   return (
@@ -88,6 +89,11 @@ export const MessageBubble = memo(function MessageBubble({ message, localPreview
               <Trash2 size={13} aria-hidden="true" /> Elimina
             </button>
           ) : null}
+        </div>
+      ) : null}
+      {deliveryFailed ? (
+        <div className="chat-msg-failure" role="status">
+          <span>{message.statusError || "WhatsApp non ha consegnato il messaggio."}</span>
         </div>
       ) : null}
     </div>

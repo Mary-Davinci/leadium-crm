@@ -350,16 +350,20 @@ export async function updateConversation(conversationId: string, patch: any) {
   });
 }
 
-export async function updateMessageStatusByProviderId(providerMessageId: string, status: string) {
+// statusError carries Meta's delivery-failure reason (operator-facing text) for "failed" statuses,
+// which arrive asynchronously via webhook after the send call itself already returned 200.
+export async function updateMessageStatusByProviderId(providerMessageId: string, status: string, statusError = "") {
   if (!providerMessageId) return 0;
   const normalizedStatus = normalizeMessageStatus(status);
+  const patch: Record<string, unknown> = { status: normalizedStatus };
+  if (statusError) patch.statusError = statusError;
   if (!isMongoEnabled()) {
     const local = readLocal();
     let count = 0;
     local.messages = local.messages.map((m: any) => {
       if (m.providerMessageId === providerMessageId) {
         count += 1;
-        return { ...m, status: normalizedStatus };
+        return { ...m, ...patch };
       }
       return m;
     });
@@ -368,6 +372,6 @@ export async function updateMessageStatusByProviderId(providerMessageId: string,
   }
   await ensureMongoIndexes();
   const db = await getMongoDb();
-  const res = await db.collection("wa_messages").updateMany({ providerMessageId }, { $set: { status: normalizedStatus } });
+  const res = await db.collection("wa_messages").updateMany({ providerMessageId }, { $set: patch });
   return res.modifiedCount || 0;
 }

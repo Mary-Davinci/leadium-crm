@@ -7,6 +7,9 @@ export type MetaErrorCode =
   | "window_closed"
   | "undeliverable"
   | "recipient_not_allowed"
+  | "marketing_blocked"
+  | "payment"
+  | "account"
   | "auth"
   | "media"
   | "template"
@@ -18,6 +21,9 @@ const FRIENDLY_MESSAGES: Record<MetaErrorCode, string> = {
   window_closed: "La finestra di 24 ore e chiusa: invia un template approvato per riaprire la conversazione.",
   undeliverable: "Messaggio non consegnabile: il numero potrebbe non avere WhatsApp attivo.",
   recipient_not_allowed: "Questo numero non e abilitato a ricevere messaggi dall'account WhatsApp in uso.",
+  marketing_blocked: "Meta non ha consegnato il template marketing: il cliente non riceve messaggi promozionali o ne ha ricevuti troppi. Usa un template Utility.",
+  payment: "Messaggio non consegnato: metodo di pagamento WhatsApp Business mancante o non valido. Avvisa un amministratore.",
+  account: "Account WhatsApp Business non abilitato all'invio (numero o nome visualizzato non verificati). Avvisa un amministratore.",
   auth: "Connessione a WhatsApp non valida o scaduta. Avvisa un amministratore.",
   media: "WhatsApp non ha accettato l'allegato. Controlla formato e dimensione del file.",
   template: "Template non disponibile o non approvato su WhatsApp.",
@@ -35,6 +41,9 @@ export function classifyMetaError(httpStatus: number, metaCode?: number | null):
   if (code === 131047) return "window_closed";
   if (code === 131026) return "undeliverable";
   if (code === 131030) return "recipient_not_allowed";
+  if (code === 131049 || code === 131050) return "marketing_blocked";
+  if (code === 131042) return "payment";
+  if (code === 131031 || code === 131037 || code === 131045 || code === 368) return "account";
   if (code === 131052 || code === 131053) return "media";
   if (code === 131051) return "unsupported";
   if (code >= 132000 && code < 133000) return "template";

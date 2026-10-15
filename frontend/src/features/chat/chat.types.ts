@@ -15,6 +15,8 @@ export type ChatAttachment = CrmChatMessageAttachment;
 
 export type Message = CrmChatMessage & {
   agentName?: string;
+  // Delivery-failure reason reported later by Meta's webhook (message saved, then status "failed").
+  statusError?: string;
   // Client-only state for a message that has not been confirmed by the server yet.
   localState?: "sending" | "failed";
   localError?: string;

@@ -19,7 +19,7 @@ const {
   updateMessageStatusByProviderId,
   getMessageById
 } = require("../common/chatStore");
-const { createMetaSendError } = require("./meta-errors");
+const { classifyMetaError, createMetaSendError, getFriendlyMetaMessage } = require("./meta-errors");
 const {
   resolveOutboundMediaType,
   normalizeAttachmentKind,
@@ -265,6 +265,19 @@ function extractInboundAttachment(message) {
   };
 }
 
+// A send can return 200 and still fail at delivery: Meta then posts a "failed" status with the
+// reason in errors[]. Logs the raw reason and returns the operator-facing text ("" otherwise).
+function describeStatusFailure(status) {
+  if (String(status?.status || "").toLowerCase() !== "failed") return "";
+  const error = Array.isArray(status.errors) && status.errors[0] ? status.errors[0] : {};
+  const metaCode = Number.isFinite(Number(error.code)) ? Number(error.code) : null;
+  const detail = String(error.error_data?.details || error.message || error.title || "").slice(0, 300);
+  const code = classifyMetaError(0, metaCode);
+  // eslint-disable-next-line no-console
+  console.error(`[whatsapp-service] Consegna fallita: message=${status.id} metaCode=${metaCode ?? "-"} code=${code} detail=${detail}`);
+  return getFriendlyMetaMessage(code);
+}
+
 function getReplyWindowExpiresAt(createdAt) {
   return new Date(new Date(createdAt || Date.now()).getTime() + 24 * 60 * 60 * 1000).toISOString();
 }
@@ -462,7 +475,7 @@ async function handleInboundWebhook(payload) {
 
       for (const status of statuses) {
         if (status && status.id && status.status) {
-          statusCount += await updateMessageStatusByProviderId(status.id, status.status);
+          statusCount += await updateMessageStatusByProviderId(status.id, status.status, describeStatusFailure(status));
         }
       }
 
