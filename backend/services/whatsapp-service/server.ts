@@ -42,8 +42,13 @@ if (!APP_SECRET && process.env.NODE_ENV !== "test") {
 const WA_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || "";
 const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 const WA_GRAPH_VERSION = process.env.WHATSAPP_GRAPH_VERSION || "v25.0";
-const WA_TEMPLATE_CONFIG_PATH =
-  process.env.WHATSAPP_TEMPLATE_CONFIG_PATH || path.join(__dirname, "..", "..", "config", "whatsapp-templates.json");
+// The service runs from services/ under tsx and from dist/services/ once built, so the bundled
+// config sits two or three levels up depending on how it was started.
+const WA_TEMPLATE_CONFIG_PATH = [
+  process.env.WHATSAPP_TEMPLATE_CONFIG_PATH,
+  path.join(__dirname, "..", "..", "config", "whatsapp-templates.json"),
+  path.join(__dirname, "..", "..", "..", "config", "whatsapp-templates.json")
+].find((candidate) => candidate && fs.existsSync(candidate));
 
 const DEFAULT_TEMPLATE_CONFIG = [
   {

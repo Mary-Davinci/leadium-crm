@@ -1,5 +1,13 @@
 [
   {
+    "key": "primo_contatto_cliente",
+    "name": "primo_contatto_cliente",
+    "label": "Primo contatto cliente",
+    "body": "Ciao , ti contattiamo da Crocieriamo in merito alla tua richiesta. Quando vuoi, puoi rispondere direttamente a questo messaggio e un nostro operatore ti assisterà.",
+    "category": "utility",
+    "suggestionTag": "first_contact"
+  },
+  {
     "key": "reopen_contact",
     "name": "reopen_contact",
     "label": "Ricontatto pratica",
