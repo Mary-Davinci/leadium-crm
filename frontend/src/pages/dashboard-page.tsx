@@ -116,6 +116,12 @@ export function DashboardPage() {
   const trendMax = Math.max(2, ...trend.map((item) => item.count));
   const points = trend.map((item, index) => `${38 + index * 604 / (days - 1)},${162 - item.count / trendMax * 128}`).join(" ");
   const toContact = activeLeads.filter((lead) => lead.status === "Da contattare").length;
+  const todayLabel = new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" }).toLocaleUpperCase("it-IT");
+  const daySummary = !syncedAt
+    ? "Stiamo preparando la tua giornata…"
+    : !toContact && !overdue.length
+      ? "Nessun lead da contattare e nessuna attività in ritardo: buon lavoro."
+      : `Oggi hai ${toContact} lead da contattare e ${overdue.length} attività in ritardo.`;
   function openTask(task: Task) {
     if (task.leadId) navigate(buildPracticeUrl(task.leadId, getPracticeFocusFromTask(task), getPracticeUrlOptionsFromTask(task)));
     else navigate(isAdmin ? "/tasks" : "/pratiche");
@@ -132,9 +138,20 @@ export function DashboardPage() {
     <div className="cruise-dashboard" aria-busy={loading}>
       <section className="cd-welcome">
         <img className="cd-welcome-image" src="/brand/cruise.jpg" alt="" />
-        <div><span className="cd-eyebrow">LA TUA GIORNATA, A BORDO</span>
-          <h1>{new Date().getHours() < 14 ? "Buongiorno" : "Buon pomeriggio"}, {isAdmin ? "Team Crocieriamo" : user?.name || "Crocieriamo"}!</h1>
-          <p>Ogni nuovo lead è un viaggio da vivere insieme.</p>
+        <div className="cd-welcome-copy"><span className="cd-eyebrow">{todayLabel}</span>
+          <h1>Benvenuto, {user?.name || user?.username || "Crocieriamo"}</h1>
+          <p>{daySummary}</p>
+        </div>
+        <img className="cd-welcome-logo" src="/brand/crocieriamo.png" alt="Crocieriamo" />
+        {/* Same seamless two-layer wave as the sidebar: each path repeats every 224 units across a
+            448-wide viewBox, so sliding by half its width loops. */}
+        <div className="cd-welcome-sea" aria-hidden="true">
+          <svg className="cd-welcome-wave back" viewBox="0 0 448 40" preserveAspectRatio="none" fill="none">
+            <path d="M0 22C37 10 75 10 112 22S187 34 224 22S299 10 336 22S411 34 448 22" stroke="#096094" strokeWidth="5" />
+          </svg>
+          <svg className="cd-welcome-wave front" viewBox="0 0 448 40" preserveAspectRatio="none" fill="none">
+            <path d="M0 28C37 16 75 16 112 28S187 40 224 28S299 16 336 28S411 40 448 28" stroke="#0877ad" strokeWidth="12" />
+          </svg>
         </div>
       </section>
       <div className="cd-sync" role="status"><span>{loading ? "Aggiornamento in corso…" : syncedAt ? `Aggiornato alle ${new Date(syncedAt).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })} · ${isAdmin ? "Vista team" : "Le tue attività"}` : "Dati non disponibili"}</span><button className="cd-link" onClick={() => void load(true)} disabled={loading}><RefreshCw size={13} />Aggiorna</button></div>

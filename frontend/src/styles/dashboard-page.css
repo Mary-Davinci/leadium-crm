@@ -2,11 +2,21 @@
 .cruise-dashboard button { cursor: pointer; font: inherit; }
 .cruise-dashboard button:disabled { opacity: .5; cursor: wait; }
 .cruise-dashboard :is(button, input, select):focus-visible { outline: 2px solid #167bbd; outline-offset: 3px; }
-.cd-welcome { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 150px; padding: 20px 24px; border-radius: 10px; overflow: hidden; background: #edf6fc; }
-.cd-welcome-image { position: absolute; inset: 0 0 0 auto; width: 40%; height: 100%; object-fit: cover; object-position: right center; mask-image: linear-gradient(90deg, transparent, #000 45%); pointer-events: none; }
-.cd-welcome > div { position: relative; z-index: 1; }
-.cd-welcome h1 { margin: 5px 0 7px; font-size: clamp(21px, 2vw, 29px); letter-spacing: -.7px; line-height: 1.2; }
-.cd-welcome p { color: #526f92; font-size: 14px; margin: 0; }
+/* Night-sea hero: navy like the sidebar, cruise photo blended on the right, the sidebar's wave below. */
+.cd-welcome { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 150px; padding: 20px 28px 34px; border-radius: 10px; overflow: hidden; background: linear-gradient(120deg, #0f2d63 0%, #173f86 55%, #1c4f9c 100%); color: #fff; }
+.cd-welcome-image { position: absolute; inset: 0 0 0 auto; width: 46%; height: 100%; object-fit: cover; object-position: right 55%; opacity: .5; mix-blend-mode: luminosity; -webkit-mask-image: linear-gradient(90deg, transparent, #000 55%); mask-image: linear-gradient(90deg, transparent, #000 55%); pointer-events: none; }
+.cd-welcome-copy { position: relative; z-index: 1; min-width: 0; }
+.cd-welcome h1 { margin: 5px 0 7px; color: #fff; font-size: clamp(21px, 2vw, 29px); letter-spacing: -.7px; line-height: 1.2; }
+.cd-welcome p { color: #c9dbf5; font-size: 14px; margin: 0; }
+.cd-welcome .cd-eyebrow { color: #9fd0ff; }
+.cd-welcome-logo { position: relative; z-index: 1; flex: 0 0 auto; width: 170px; height: auto; }
+.cd-welcome-sea { position: absolute; left: 0; right: 0; bottom: -6px; height: 44px; overflow: hidden; pointer-events: none; animation: cd-sea-swell 8s ease-in-out infinite; }
+.cd-welcome-wave { position: absolute; left: 0; bottom: 0; width: 200%; height: 40px; will-change: translate; }
+.cd-welcome-wave.front { animation: cd-sea-drift 16s linear infinite; }
+.cd-welcome-wave.back { animation: cd-sea-drift 26s linear infinite reverse; }
+@keyframes cd-sea-drift { from { translate: 0 0; } to { translate: -50% 0; } }
+@keyframes cd-sea-swell { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) { .cd-welcome-sea, .cd-welcome-wave { animation: none; } }
 .cd-eyebrow { color: #2779a1; font-size: 10px; font-weight: 750; letter-spacing: 1px; }
 .cd-sync { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: -5px; color: var(--cd-muted); font-size: 11px; padding: 0 3px; }
 .cruise-dashboard .cd-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px; padding: 2px; border: 0; background: transparent; color: #176bb3; font-size: 11px; white-space: nowrap; }
@@ -81,8 +91,8 @@
 .cd-empty { color: var(--cd-muted); font-size: 12px; padding: 24px 4px; line-height: 1.7; }
 @media (min-width: 1500px) { .cd-task { min-height: 64px; } .cd-task-copy strong { font-size: 13px; } .cd-task-end { display: flex; align-items: center; gap: 14px; } }
 @media (max-width: 1200px) { .cd-grid { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); grid-template-areas: "priorities team" "trend upcoming" "activity activity"; } .cd-kpi { padding: 14px 12px; gap: 9px; } .cd-kpi > .cd-icon { width: 35px; height: 35px; flex-basis: 35px; } .cd-kpi-copy > span { font-size: 11px; } }
-@media (max-width: 960px) { .cd-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cd-kpi-copy > span { font-size: 13px; } .cd-task > .cd-avatar { display: none; } .cd-welcome-image { width: 45%; opacity: .45; } }
-@media (max-width: 640px) { .cruise-dashboard { gap: 10px; } .cd-welcome { padding: 20px 16px; min-height: 150px; } .cd-welcome-image { width: 55%; opacity: .22; }
+@media (max-width: 960px) { .cd-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cd-kpi-copy > span { font-size: 13px; } .cd-task > .cd-avatar { display: none; } .cd-welcome-image { width: 55%; opacity: .35; } .cd-welcome-logo { width: 130px; } }
+@media (max-width: 640px) { .cruise-dashboard { gap: 10px; } .cd-welcome { padding: 20px 16px 34px; min-height: 150px; } .cd-welcome-image { width: 70%; opacity: .22; } .cd-welcome-logo { display: none; }
 
 .cd-welcome h1 { font-size: 23px; } .cd-welcome p { font-size: 12px; } .cd-kpis { gap: 9px; } .cd-kpi { padding: 12px; } .cd-kpi > .cd-icon { width: 30px; height: 30px; flex-basis: 30px; } .cd-kpi > .cd-icon svg { width: 18px; } .cd-kpi-copy > strong { font-size: 26px; } .cd-kpi-copy > span { font-size: 11px; } .cd-kpi-copy > small { font-size: 9px; } .cd-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "priorities" "team" "trend" "upcoming" "activity"; gap: 10px; } 
 .cd-panel { padding: 14px; } .cd-heading h2 { font-size: 15px; } .cd-task { gap: 7px; } .cd-task-end { max-width: 80px; text-align: right; } .cd-task-copy strong { font-size: 11px; } .cd-panel-footer { font-size: 9px; } }
