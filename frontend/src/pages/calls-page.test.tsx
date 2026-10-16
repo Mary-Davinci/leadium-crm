@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CallsPage } from "./calls-page";
+import { CallsPage, ThreeCxObservedDnTypes } from "./calls-page";
 import { api } from "../lib/api";
 
 let storage: Map<string, string>;
@@ -11,6 +11,30 @@ beforeEach(() => {
     getItem: (key: string) => storage.get(key) || null,
     setItem: (key: string, value: string) => storage.set(key, value),
     removeItem: (key: string) => storage.delete(key)
+  });
+});
+
+describe("observed DN types", () => {
+  const renderTypes = (types?: Record<string, string>) => renderToStaticMarkup(<dl><ThreeCxObservedDnTypes types={types} /></dl>);
+  for (const types of [undefined, {}]) it(`shows the empty state for ${types ? "empty" : "missing"} maps`, () => {
+    expect(renderTypes(types)).toContain("Nessun DN osservato");
+  });
+  it("shows all eight authorized DNs in operational order, preserving exact type strings", () => {
+    const dns = ["901", "913", "910", "911", "912", "920", "921", "922"];
+    const html = renderTypes(Object.fromEntries(dns.map(dn => [dn, `Fixture TYPE::${dn}`])));
+    expect(html).toContain("observedDnTypes");
+    let lastIndex = -1;
+    for (const dn of dns) {
+      const index = html.indexOf(`${dn} → Fixture TYPE::${dn}`);
+      expect(index).toBeGreaterThan(lastIndex);
+      lastIndex = index;
+    }
+    expect(html).not.toContain("Nessun DN osservato");
+  });
+  it("renders text safely and excludes unrelated keys or non-string payloads", () => {
+    const html = renderTypes({ "901": "<script>fixture</script>", "913": { participant: "hidden-fixture" }, "999": "unmonitored", access_token: "token-fixture" } as unknown as Record<string, string>);
+    expect(html).toContain("901 → &lt;script&gt;fixture&lt;/script&gt;");
+    for (const hidden of ["<script>", "hidden-fixture", "unmonitored", "token-fixture", "913 →"]) expect(html).not.toContain(hidden);
   });
 });
 afterEach(() => { vi.unstubAllGlobals(); });

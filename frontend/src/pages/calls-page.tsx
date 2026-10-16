@@ -36,7 +36,23 @@ type ThreeCxDiagnostics = {
   lastEventAt: string | null;
   lastCallId: string | null;
   lastError: string | null;
+  observedDnTypes?: Record<string, string>;
 };
+
+export function ThreeCxObservedDnTypes({ types }: { types?: Record<string, string> }) {
+  const observed = ["901", "913", "910", "911", "912", "920", "921", "922"]
+    .filter((dn) => typeof types?.[dn] === "string");
+  return (
+    <div>
+      <dt>observedDnTypes</dt>
+      <dd>
+        {observed.length
+          ? observed.map((dn) => <div key={dn}>{dn} → {types![dn]}</div>)
+          : "Nessun DN osservato"}
+      </dd>
+    </div>
+  );
+}
 
 const OUTCOME_LABELS: Record<CallOutcome, string> = {
   completed: "Completata",
@@ -228,6 +244,7 @@ export function CallsPage() {
               <div><dt>lastEventAt</dt><dd>{diagnostics.lastEventAt ? new Date(diagnostics.lastEventAt).toLocaleString("it-IT") : "—"}</dd></div>
               <div><dt>lastCallId</dt><dd>{diagnostics.lastCallId || "—"}</dd></div>
               <div><dt>lastError</dt><dd>{diagnostics.lastError || "—"}</dd></div>
+              <ThreeCxObservedDnTypes types={diagnostics.observedDnTypes} />
             </dl>
           ) : null}
         </section>
