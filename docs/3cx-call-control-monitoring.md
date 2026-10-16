@@ -29,9 +29,9 @@ The connection is renewed before token expiry. There is no XAPI request or addit
 - `GET /callcontrol/{dn}` — snapshot and entity type.
 - `GET /callcontrol/{dn}/participants/{id}` — full participant state.
 
-`dn` is hardcoded to **901, 913, 910, 911, 912**. Even if the principal sees extra entities,
+`dn` is hardcoded to **901, 913, 910, 911, 912, 920, 921, 922**. Even if the principal sees extra entities,
 their notifications cannot trigger reads or call processing. A root notification reconciles
-only those five DNs. No WebSocket application requests are sent; protocol ping/pong only.
+only those eight DNs. No WebSocket application requests are sent; protocol ping/pong only.
 TLS certificate validation remains enabled. Redirects are rejected, HTTP and handshake timeouts
 are 10 seconds, internal delivery timeout 15 seconds. Reconnect/auth failures use exponential
 backoff (1–60 seconds plus jitter). Heartbeat is 15 seconds; reconciliation is 10 seconds.
@@ -55,12 +55,18 @@ the `MakeCall` pseudo-party. Direction first observed is retained across queue h
 Already connected snapshots have no reliable direction/history and are treated conservatively.
 Outbound prefers the external `party_dn`, inbound the external `party_caller_id`.
 Only plausible external telephone numbers are accepted; internal peers, short DNs and
-MakeCall pseudo-parties cannot become customers. This also excludes all five monitored DNs.
+MakeCall pseudo-parties cannot become customers. This also excludes all eight monitored DNs.
 If an API-originated call never exposes its destination, no customer number is invented.
+The first valid external customer number is retained across later internal/forwarded legs;
+a later leg cannot replace it with a DID or another external number. Initial direction is retained.
 
-The authoritative DN `type` distinguishes Extension from Queue/RingGroup/RoutePoint.
-Only an Extension reaching Connected/Hold/Held establishes an observed agent answer.
-A connected queue alone is not a human answer. The answering extension is preferred as agent.
+The Crocieriamo topology declares **901/913 as agents**, **910/911/912 as queues**, and
+**920/921/922 as digital receptionists** (day/night/holidays). These are observer classifications,
+not PBX configuration changes. Receptionists are classified RoutePoint/DigitalReceptionist,
+and cannot become agents even if a generic type is returned. Only 901/913, with a reported
+Extension type, reaching Connected/Hold/Held establish an observed agent answer.
+A connected IVR or queue alone is not a human answer. The answering extension is preferred
+as agent; an IVR/queue-only missed call does not invent an agent identifier.
 Once all known legs end, a 3-second grace period and fresh allowlisted snapshots accommodate
 handover before finalizing. A call continuing entirely outside the monitored set is not visible;
 the listener does not claim global PBX completion beyond this observation boundary.
@@ -92,6 +98,14 @@ An incomplete observation, sequence gap, lost participant before its first read 
 outage marks the call uncertain: its checkpoint is retained as a quarantined final with
 `event:null`, and it produces no guessed business outcome. Calls starting and ending entirely
 during downtime cannot be recovered by these active-state endpoints.
+The snapshot of a new handover leg does not itself invalidate an already observed call;
+unknown call starts, real stream gaps and reconnects remain fail-safe. Quarantined records now
+retain reason codes such as `missing_external_number`, `missing_direction`, `unknown_start`,
+`stream_gap`, `disconnected`, `checkpoint_recovery`, `participant_disappeared`, `unsupported_status`,
+`unverified_agent_type` (an agent connection whose DN type could not be confirmed).
+The same safe codes are appended to lastError, without numbers, tokens or raw provider messages.
+A later successfully delivered final clears a previous incomplete-observation error. Existing
+quarantined calls are not replayed or backfilled automatically.
 
 Mapping: observed agent answer → `completed`; fully observed disappearance without answer →
 `no_answer`. The documented participant statuses do not distinguish busy: the monitor does
@@ -140,11 +154,18 @@ telephone numbers and URLs are never included. No credentials are returned by `/
 
 Keep THREECX_ENABLED=false until an explicitly authorized rollout. Verify token permission,
 TLS reachability and entity types with the configured service principal, without enabling XAPI
-or changing Zoho. Check inbound/outbound calls on 901/913/910, queue handovers on 911/912,
+or changing Zoho. Check inbound/outbound calls on 901/913 and the full path
+`DID -> 920/921/922 -> 911/912 -> 910 -> 901/913`, including calls that end in a queue,
 unanswered calls, holds, native ID stability, reconnect and service restart. Compare observed
 times with PBX records; check unmatched or quarantined cases. Do not assume exact PBX timings
 or busy cause information exists. No real tenant access, deployment or activation is required
 to run the mock regression tests.
+The Service Principal must already be authorized to read **920/921/922**, in addition to the
+previous five entities. This implementation does not grant permissions or alter the tenant.
+An HTTP 403 produces a safe DN-specific error and stops incomplete monitoring rather than
+silently asserting full coverage. The previous generic error alone cannot prove that a missing
+920 leg caused a specific real call to be withheld; it can also indicate a missing customer or
+a transport gap. Regression replay of the supplied topology demonstrates the missing-IVR case.
 
 ## Sources verified for the implementation
 

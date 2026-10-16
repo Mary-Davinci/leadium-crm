@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { MONITORED_DNS, emptyMonitorState, finalizeCalls, legKey, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
+import { MONITORED_DNS, emptyMonitorState, finalizeCalls, legKey, markCallIncomplete, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
 import { MonitorStore } from "./threecx-store";
 
 export type MonitorConfig = { enabled: boolean; baseUrl: string; clientId: string; configured: boolean; credential: () => string };
@@ -22,6 +22,8 @@ type Dependencies = {
   retryMs?: number; tickMs?: number; timeoutMs?: number;
 };
 const allowed = new Set<string>(MONITORED_DNS);
+// Only locally constructed messages can reach diagnostics; never a provider response body.
+class MonitorReadError extends Error {}
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
   if (signal.aborted) return resolve();
   const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
@@ -69,16 +71,17 @@ export class ThreeCxMonitor {
     this.status.lastCallId = "***" + (value.length > 4 ? value.slice(-4) : value.length > 1 ? value.slice(-1) : "");
   }
   private enqueue(work: () => Promise<void>) {
-    this.queue = this.queue.then(async () => { if (!this.abort.signal.aborted) await work(); }).catch(() => {
+    this.queue = this.queue.then(async () => { if (!this.abort.signal.aborted) await work(); }).catch((error: unknown) => {
       // Never interpolate provider messages, response bodies, URLs, tokens or errors.
-      this.status.lastError = "3CX event processing failed";
+      this.status.lastError = error instanceof MonitorReadError ? error.message : "3CX event processing failed";
       this.socket?.terminate();
     });
     return this.queue;
   }
   private async request(path: string, auth = false): Promise<any> {
     if (!this.config.enabled || this.abort.signal.aborted) throw new Error("Monitor disabled");
-    if (!auth && !/^\/callcontrol\/(901|913|910|911|912)(?:\/participants\/\d+)?$/.test(path)) throw new Error("Monitoring path rejected");
+    const entity = path.match(/^\/callcontrol\/(\d+)(?:\/participants\/\d+)?$/);
+    if (!auth && (!entity || !allowed.has(entity[1]))) throw new Error("Monitoring path rejected");
     const controller = new AbortController();
     const cancel = () => controller.abort(); this.abort.signal.addEventListener("abort", cancel, { once: true });
     const timer = setTimeout(cancel, this.deps.timeoutMs || 10000);
@@ -91,7 +94,10 @@ export class ThreeCxMonitor {
         ...(auth ? { body: new URLSearchParams({ grant_type: "client_credentials", client_id: this.config.clientId, client_secret: credential }) } : {})
       });
       if (!auth && response.status === 404) return null;
-      if (!response.ok) throw new Error(auth ? "3CX authentication failed" : "3CX read failed");
+      if (!response.ok) {
+        if (!auth) throw new MonitorReadError(`3CX monitoring read unavailable for DN ${entity[1]} (HTTP ${response.status})`);
+        throw new Error("3CX authentication failed");
+      }
       return await response.json();
     } finally { clearTimeout(timer); this.abort.signal.removeEventListener("abort", cancel); }
   }
@@ -131,13 +137,13 @@ export class ThreeCxMonitor {
     const event = packet?.event;
     if (!event || !Number.isInteger(event.event_type)) return;
     const entity = String(event.entity || "");
-    const match = entity.match(/^\/callcontrol\/(901|913|910|911|912)(?:\/participants(?:\/(\d+))?)?$/);
+    const match = entity.match(/^\/callcontrol\/(\d+)(?:\/participants(?:\/(\d+))?)?$/);
     // Consume sequence for ALL notifications (including other DNs / DTMF) without fetching them.
     const sequence = Number.isSafeInteger(packet.sequence) ? packet.sequence : null;
     if (sequence !== null && this.sequence !== null && sequence <= this.sequence) return;
     const gap = sequence !== null && this.sequence !== null && sequence !== this.sequence + 1;
     if (sequence !== null) this.sequence = sequence;
-    if (gap) this.enqueue(async () => { for (const call of Object.values(this.state.calls)) call.uncertain = true; await this.reconcile(true); });
+    if (gap) this.enqueue(async () => { for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "stream_gap"); await this.reconcile(true); });
     if (entity === "/callcontrol" && [0, 1].includes(event.event_type)) { this.status.lastEventAt = this.iso(); this.enqueue(() => this.reconcile(false)); return; }
     if (!match || !allowed.has(match[1]) || ![0, 1].includes(event.event_type)) return;
     this.status.lastEventAt = this.iso();
@@ -166,6 +172,7 @@ export class ThreeCxMonitor {
         final.delivered = true;
         await this.deps.store.save(this.state);
         delete this.state.finals[callId];
+        if (this.status.lastError?.startsWith("3CX incomplete call observation;")) this.status.lastError = null;
         this.deliveryFailures = 0;
       } catch {
         this.status.lastError = "3CX internal event delivery failed";
@@ -213,7 +220,7 @@ export class ThreeCxMonitor {
         finalizeCalls(this.state, this.now());
         await this.deps.store.save(this.state);
         for (const [id, final] of Object.entries(this.state.finals)) if (final.delivered) {
-          if (!final.event) this.status.lastError = "3CX incomplete call observation; final event withheld";
+          if (!final.event) this.status.lastError = "3CX incomplete call observation; final event withheld [" + (final.incompleteReasons || ["incomplete_observation"]).join(", ") + "]";
           delete this.state.finals[id];
         }
         await this.flush();
@@ -222,7 +229,7 @@ export class ThreeCxMonitor {
     socket.terminate(); await this.queue;
     this.status.connected = false;
     // Calls continuing through a stream outage have incomplete observation, never guess a miss.
-    for (const call of Object.values(this.state.calls)) call.uncertain = true;
+    for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "disconnected");
     await this.deps.store.save(this.state);
   }
   private async run() {
@@ -235,17 +242,17 @@ export class ThreeCxMonitor {
           if (!state) throw new Error("Monitor lease unavailable");
           this.state = state; this.lease = true;
           for (const id of Object.keys(this.state.calls)) if (await this.deps.store.hasFinal(id)) delete this.state.calls[id];
-          for (const call of Object.values(this.state.calls)) call.uncertain = true;
+          for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "checkpoint_recovery");
         }
         await this.flush();
         await this.cycle();
-      } catch {
-        if (!this.abort.signal.aborted) this.status.lastError = "3CX monitoring unavailable (configuration, authentication, transport or checkpoint)";
+      } catch (error: unknown) {
+        if (!this.abort.signal.aborted) this.status.lastError = error instanceof MonitorReadError ? error.message : "3CX monitoring unavailable (configuration, authentication, transport or checkpoint)";
       } finally {
         this.status.connected = false; this.socket?.terminate(); this.socket = null; this.token = "";
         await this.queue;
         if (this.lease) {
-          for (const call of Object.values(this.state.calls)) call.uncertain = true;
+          for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "disconnected");
           try { await this.deps.store.save(this.state); await this.deps.store.release(); } catch { this.status.lastError = "3CX checkpoint unavailable"; }
           this.lease = false;
         }

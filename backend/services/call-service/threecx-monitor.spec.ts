@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ThreeCxMonitor, monitorConfig } from "./threecx-monitor";
-import { emptyMonitorState, finalizeCalls, MonitorState, observeParticipant, removeParticipant, MONITORED_DNS } from "./threecx-normalizer";
+import { classifyMonitoredDn, emptyMonitorState, finalizeCalls, MonitorState, observeParticipant, removeParticipant, MONITORED_DNS } from "./threecx-normalizer";
 import { createMonitorStore, MonitorStore } from "./threecx-store";
 import * as mongo from "../common/mongo";
 
@@ -32,7 +32,7 @@ class FakeSocket extends EventEmitter {
   terminate() { if (!this.terminated) { this.terminated = true; this.readyState = 3; this.emit("close"); } }
   ping() { this.pings++; this.emit("pong"); }
 }
-function fixture(options: { authStatus?: number; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
+function fixture(options: { authStatus?: number; deniedDn?: string; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
   let time = Date.parse("2026-10-16T10:00:00Z"), sequence = 0;
   const requests: Array<{ path: string; method: string }> = [];
   const sockets: FakeSocket[] = [], deliveries: any[] = [];
@@ -53,11 +53,13 @@ function fixture(options: { authStatus?: number; enabled?: boolean; store?: Memo
         return new Response(JSON.stringify(options.authStatus ? { error: SECRET } : { access_token: TOKEN, expires_in: 3600 }), { status: options.authStatus || 200 });
       }
       assert.equal(init.method, "GET"); assert.equal(init.headers.Authorization, "Bearer " + TOKEN);
-      const m = pathname.match(/^\/callcontrol\/(901|913|910|911|912)(?:\/participants\/(\d+))?$/);
+      const m = pathname.match(/^\/callcontrol\/(901|913|910|911|912|920|921|922)(?:\/participants\/(\d+))?$/);
       assert.ok(m, "Only allowlisted read endpoints may be requested");
       const [, dn, id] = m;
+      if (dn === options.deniedDn) return new Response(JSON.stringify({ error: SECRET }), { status: 403 });
       if (id) return new Response(JSON.stringify(participants.get(dn + "/" + id) || null), { status: participants.has(dn + "/" + id) ? 200 : 404 });
-      return new Response(JSON.stringify({ dn, type: ["911", "912"].includes(dn) ? "Queue" : "Extension", participants: [...participants.values()].filter(p => p.dn === dn) }));
+      const type = ({ "910": "Queue", "911": "Queue", "912": "Queue", "920": "RoutePoint", "921": "DigitalReceptionist", "922": "IVR" } as Record<string, string>)[dn] || "Extension";
+      return new Response(JSON.stringify({ dn, type, participants: [...participants.values()].filter(p => p.dn === dn) }));
     }) as typeof fetch,
     socket: (url, token) => {
       assert.equal(url, "wss://pbx.test:5001/callcontrol/ws"); assert.equal(token, TOKEN);
@@ -68,12 +70,12 @@ function fixture(options: { authStatus?: number; enabled?: boolean; store?: Memo
   const packet = (dn: string, id: number, type: number) => sockets[sockets.length - 1]!.emit("message", JSON.stringify({ sequence: ++sequence, event: { event_type: type, entity: `/callcontrol/${dn}/participants/${id}` } }));
   return { monitor, store, sockets, requests, deliveries, participants,
     advance: (ms: number) => { time += ms; },
-    async start() { monitor.start(); if (options.enabled !== false && !options.authStatus) await until(() => requests.filter(r => /^\/callcontrol\/\d+$/.test(r.path)).length >= 5, "initial snapshots"); },
+    async start() { monitor.start(); if (options.enabled !== false && !options.authStatus) await until(() => requests.filter(r => /^\/callcontrol\/\d+$/.test(r.path)).length >= MONITORED_DNS.length && store.saves > 0, "initial snapshots"); },
     async upsert(dn: string, id: number, callid: number, status: string, extra: any = {}) {
       participants.set(dn + "/" + id, { id, dn, callid, legid: id, status, party_dn: "+393339999999", party_caller_id: "+393331234567", party_dn_type: "Line", ...extra });
-      const previous = store.saves; packet(dn, id, 0); await until(() => store.saves > previous, "upsert persisted");
+      packet(dn, id, 0); await until(() => store.state.calls[String(callid)]?.legs[dn + "/" + id]?.status === status || Boolean(store.state.finals[String(callid)]), "upsert persisted");
     },
-    async remove(dn: string, id: number) { participants.delete(dn + "/" + id); const previous = store.saves; packet(dn, id, 1); await until(() => store.saves > previous, "remove persisted"); },
+    async remove(dn: string, id: number) { participants.delete(dn + "/" + id); packet(dn, id, 1); await until(() => !Object.values(store.state.calls).some(call => call.legs[dn + "/" + id]?.active), "remove persisted"); },
     async finish(expected = 1) { time += 4000; await until(() => deliveries.length >= expected, "final delivery"); await until(() => Object.values(store.state.finals).filter(row => row.delivered).length >= expected, "final acknowledged"); }
   };
 }
@@ -99,15 +101,23 @@ async function main() {
     await f.monitor.stop(); assert.equal(f.sockets.length, 0); assert.ok(f.requests.length < 10);
     assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET)); assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(TOKEN));
   });
+  await test("IVR outside Service Principal permissions fails closed with a safe DN-specific error", async () => {
+    const f = fixture({ deniedDn: "920" }); f.monitor.start();
+    try {
+      await until(() => Boolean(f.monitor.diagnostics().lastError?.includes("DN 920 (HTTP 403)")), "permission diagnostic");
+      assert.equal(f.deliveries.length, 0); assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
+      assert.ok(f.requests.every(request => request.path === "/connect/token" || request.method === "GET"));
+    } finally { await f.monitor.stop(); }
+  });
   await test("OAuth success and exact read allowlist; diagnostics schema and graceful shutdown", async () => {
     const f = fixture(); await f.start(); assert.equal(f.monitor.diagnostics().connected, true);
     assert.deepEqual(Object.keys(f.monitor.diagnostics()).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError"].sort());
-    assert.equal(new Set(f.requests.filter(r => r.method === "GET").map(r => r.path)).size, 5);
+    assert.equal(new Set(f.requests.filter(r => r.method === "GET").map(r => r.path)).size, 8);
     const socket = f.sockets[0]; socket.emit("message", JSON.stringify({ sequence: 1, event: { event_type: 0, entity: "/callcontrol/999/participants/1" } }));
     await wait(10); assert.ok(f.requests.every(r => r.path === "/connect/token" || MONITORED_DNS.some(dn => r.path.startsWith("/callcontrol/" + dn))));
     await f.monitor.stop(); const size = f.requests.length; await wait(20); assert.equal(f.requests.length, size); assert.ok(socket.terminated); assert.equal(f.store.owner, false);
   });
-  for (const dn of ["901", "913", "910"]) await test("inbound answered with native callid and agent " + dn, async () => {
+  for (const dn of ["901", "913"]) await test("inbound answered with native callid and agent " + dn, async () => {
     const f = fixture(); await f.start();
     try {
       await f.upsert(dn, 1, 123456, "Ringing"); f.advance(2000);
@@ -134,6 +144,88 @@ async function main() {
     const f = fixture(); await f.start();
     try { await f.upsert("911", 1, 444, "Ringing"); await f.remove("911", 1); f.advance(1000); await f.upsert("913", 2, 444, "Ringing");
       await f.upsert("913", 2, 444, "Connected"); f.advance(2000); await f.remove("913", 2); await f.finish(); assert.equal(f.deliveries[0].agent, "913"); assert.equal(f.deliveries[0].disposition, "completed");
+    } finally { await f.monitor.stop(); }
+  });
+  await test("Crocieriamo inbound 920 -> 911 -> 910 -> 901: one completed call, original customer, final agent", async () => {
+    const f = fixture(); await f.start();
+    const internalPeer = (dn: string, type: string) => ({ party_dn: dn, party_caller_id: "", party_dn_type: type });
+    try {
+      await f.upsert("920", 20, 920901, "Ringing"); f.advance(1000);
+      await f.upsert("920", 20, 920901, "Connected");
+      assert.equal(f.store.state.calls["920901"].answeredAt, undefined);
+      assert.equal(f.store.state.calls["920901"].agent, undefined);
+      f.advance(2000); await f.upsert("911", 11, 920901, "Connected", internalPeer("920", "RoutePoint")); await f.remove("920", 20);
+      f.advance(3000); await f.upsert("910", 10, 920901, "Connected", internalPeer("911", "Queue")); await f.remove("911", 11);
+      assert.equal(f.store.state.calls["920901"].answeredAt, undefined);
+      f.advance(4000); await f.upsert("901", 1, 920901, "Ringing", internalPeer("910", "Queue")); await f.remove("910", 10);
+      f.advance(5000);
+      await f.upsert("901", 1, 920901, "Connected", { party_dn: "+3902111222333", party_caller_id: "+3902111222333", originated_by_dn: "901" });
+      const answeredAt = f.store.state.calls["920901"].answeredAt;
+      assert.equal(answeredAt, "2026-10-16T10:00:15.000Z");
+      f.advance(65000); await f.remove("901", 1); await f.finish();
+      assert.equal(f.deliveries.length, 1);
+      const e = f.deliveries[0]; assert.equal(e.callId, "920901"); assert.equal(e.from, "+393331234567");
+      assert.equal(e.direction, "inbound"); assert.equal(e.agent, "901"); assert.equal(e.disposition, "completed");
+      assert.equal(e.startedAt, "2026-10-16T10:00:00.000Z"); assert.equal(e.answeredAt, answeredAt); assert.equal(e.durationSeconds, 65);
+      assert.equal(f.monitor.diagnostics().lastError, null);
+    } finally { await f.monitor.stop(); }
+  });
+  for (const ivr of ["920", "921", "922"]) await test("inbound " + ivr + " -> 912 -> 910 without agent: no_answer, never IVR/queue answered", async () => {
+    const f = fixture(); await f.start();
+    const callid = Number(ivr) * 1000;
+    try {
+      await f.upsert(ivr, 20, callid, "Ringing"); await f.upsert(ivr, 20, callid, "Connected");
+      await f.upsert("912", 12, callid, "Connected", { party_dn: ivr, party_caller_id: "", party_dn_type: "DigitalReceptionist" });
+      await f.remove(ivr, 20);
+      await f.upsert("910", 10, callid, "Connected", { party_dn: "912", party_caller_id: "", party_dn_type: "Queue" });
+      await f.remove("912", 12); f.advance(10000); await f.remove("910", 10); await f.finish();
+      const e = f.deliveries[0]; assert.equal(e.callId, String(callid)); assert.equal(e.from, "+393331234567");
+      assert.equal(e.direction, "inbound"); assert.equal(e.disposition, "no_answer"); assert.equal(e.durationSeconds, 0);
+      assert.equal(e.answeredAt, undefined); assert.equal(e.agent, undefined); assert.equal(f.deliveries.length, 1);
+    } finally { await f.monitor.stop(); }
+  });
+  await test("topology classification: 920/921/922 receptionist, 910/911/912 queue, only 901/913 agents", () => {
+    for (const dn of ["920", "921", "922"]) for (const type of ["RoutePoint", "DigitalReceptionist", "IVR", "Extension"]) {
+      assert.ok(["RoutePoint", "DigitalReceptionist"].includes(classifyMonitoredDn(dn, type)));
+      const state = emptyMonitorState(); observeParticipant(state, { dn, id: 1, callid: 123, status: "Connected" }, new Date().toISOString(), false, type);
+      assert.equal(state.calls["123"].answeredAt, undefined); assert.equal(state.calls["123"].agent, undefined);
+    }
+    for (const dn of ["910", "911", "912"]) {
+      assert.equal(classifyMonitoredDn(dn, "Extension"), "Queue");
+      const state = emptyMonitorState(); observeParticipant(state, { dn, id: 1, callid: 123, status: "Connected" }, new Date().toISOString(), false, "Extension");
+      assert.equal(state.calls["123"].answeredAt, undefined);
+    }
+    for (const dn of ["901", "913"]) { assert.equal(classifyMonitoredDn(dn, "Extension"), "Agent"); assert.equal(classifyMonitoredDn(dn, "Unknown"), "Unknown"); }
+    const state = emptyMonitorState(), at = "2026-10-16T10:00:00Z";
+    observeParticipant(state, { dn: "901", id: 1, callid: 128, status: "Ringing", party_caller_id: "+393331234567" }, at, false, "Unknown");
+    observeParticipant(state, { dn: "901", id: 1, callid: 128, status: "Connected" }, at, false, "Unknown");
+    removeParticipant(state, "901", 1, at); finalizeCalls(state, Date.parse(at) + 4000);
+    assert.equal(state.finals["128"].event, null, "unknown agent type must not be coerced into no_answer");
+    assert.ok(state.finals["128"].incompleteReasons.includes("unverified_agent_type"));
+  });
+  await test("snapshot of a handover leg preserves a known IVR call; genuine unknown starts remain quarantined", () => {
+    const at = "2026-10-16T10:00:00.000Z", later = "2026-10-16T10:00:01.000Z";
+    const state = emptyMonitorState();
+    observeParticipant(state, { dn: "920", id: 20, callid: 124, status: "Ringing", party_caller_id: "+393331234567", party_dn_type: "Line" }, at, false, "RoutePoint");
+    observeParticipant(state, { dn: "901", id: 1, callid: 124, status: "Connected", party_dn: "910", party_dn_type: "Queue" }, later, true, "Extension");
+    assert.equal(state.calls["124"].uncertain, undefined);
+    removeParticipant(state, "920", 20, later); removeParticipant(state, "901", 1, later); finalizeCalls(state, Date.parse(later) + 4000);
+    assert.equal(state.finals["124"].event?.disposition, "completed");
+    const unknown = emptyMonitorState();
+    observeParticipant(unknown, { dn: "901", id: 1, callid: 125, status: "Connected", party_caller_id: "+393331234567" }, at, true, "Extension");
+    removeParticipant(unknown, "901", 1, later); finalizeCalls(unknown, Date.parse(later) + 4000);
+    assert.equal(unknown.finals["125"].event, null); assert.ok(unknown.finals["125"].incompleteReasons.includes("unknown_start"));
+  });
+  await test("missing first external leg remains fail-safe and identifies missing_external_number", async () => {
+    const f = fixture(); await f.start();
+    try {
+      await f.upsert("911", 11, 126, "Ringing", { party_dn: "920", party_dn_type: "RoutePoint", party_caller_id: "" });
+      await f.upsert("901", 1, 126, "Connected", { party_dn: "910", party_dn_type: "Queue", party_caller_id: "" });
+      await f.remove("911", 11); await f.remove("901", 1); f.advance(4000);
+      await until(() => Boolean(f.store.state.finals["126"]), "quarantined missing external party");
+      assert.equal(f.deliveries.length, 0); assert.ok(f.monitor.diagnostics().lastError.includes("missing_external_number"));
+      await f.upsert("901", 2, 127, "Ringing"); await f.remove("901", 2); await f.finish();
+      assert.equal(f.monitor.diagnostics().lastError, null, "a new successful final must not display an old incomplete-call error");
     } finally { await f.monitor.stop(); }
   });
   await test("native callid dedup survives repeated notifications, reconnect and restart", async () => {
