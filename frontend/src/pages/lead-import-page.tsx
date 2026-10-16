@@ -77,7 +77,7 @@ function normalizePhone(phone: string) {
   return String(phone || "").replace(/\D+/g, "");
 }
 
-function normalizeEmail(email: string) {
+function normalizeEmail(email: unknown) {
   return cleanText(email).toLowerCase();
 }
 

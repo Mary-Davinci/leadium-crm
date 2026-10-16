@@ -2341,7 +2341,7 @@ export function PraticaDetailPage() {
                     </div>
                     <div className="pd-doc-row-actions">
                       {item.attachments?.length ? (
-                        <button type="button" className="pd-doc-attachment-link" onClick={() => void openDocumentAttachment(item.attachments[0])}>
+                        <button type="button" className="pd-doc-attachment-link" onClick={() => void openDocumentAttachment(item.attachments![0])}>
                           <span className="pd-doc-download-button">
                             <span className="pd-doc-download-surface pd-doc-download-docs" aria-hidden="true">
                               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -2363,7 +2363,7 @@ export function PraticaDetailPage() {
                           type="button"
                           className="pd-doc-delete-button"
                           disabled={isClosedReadOnly}
-                          onClick={() => void removeDocumentAttachment(item.key, item.attachments[0].id)}
+                          onClick={() => void removeDocumentAttachment(item.key, item.attachments![0].id)}
                           aria-label="Rimuovi documento"
                           title="Rimuovi documento"
                         >
