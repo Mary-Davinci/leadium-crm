@@ -23,6 +23,8 @@ async function main() {
   const gateway = require("../api-gateway/server");
   gateway.__setTestSession("3cx-admin", { id: "a", username: "admin", role: "admin" });
   gateway.__setTestSession("3cx-op", { id: "o", username: "operatore", role: "operatore" });
+  gateway.__setTestSession("3cx-super", { id: "s", username: "super", role: "super_admin" });
+  gateway.__setTestSession("3cx-expired", { id: "e", username: "expired-admin", role: "admin" }, -1);
   const base = await listen(gateway.server);
   try {
     const anon = await fetch(base + "/api/3cx/diagnostics"); assert.equal(anon.status, 401);
@@ -32,6 +34,18 @@ async function main() {
     assert.equal(body.enabled, false); assert.equal(body.connected, false);
     assert.deepEqual(Object.keys(body).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError"].sort());
     console.log("PASS 3CX diagnostics: anonymous 401, operator 403, admin 200; disabled listener");
+    for (const token of ["3cx-admin", "3cx-super", "3cx-op"]) {
+      const calls = await fetch(base + "/api/calls?limit=250", { headers: { Authorization: "Bearer " + token } });
+      assert.equal(calls.status, 200);
+      assert.ok(Array.isArray(await calls.json()));
+    }
+    assert.equal((await fetch(base + "/api/3cx/diagnostics", { headers: { Authorization: "Bearer 3cx-super" } })).status, 200);
+    for (const token of ["", "3cx-expired", "3cx-admin-from-previous-process"]) for (const route of ["/api/calls?limit=250", "/api/3cx/diagnostics"]) {
+      const response = await fetch(base + route, { headers: token ? { Authorization: "Bearer " + token } : {} });
+      assert.equal(response.status, 401);
+      assert.equal((await response.json() as any).error, "Non autorizzato.");
+    }
+    console.log("PASS calls/diagnostics auth: admin/super/operator rules; missing, expired and previous-process sessions rejected");
     const created = await fetch(leadUrl + "/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fullName: "Fixture 3CX", phone: "+393331234567" }) });
     const customer = await created.json() as any;
     const event = { callId: "native-final-1", from: customer.phone, disposition: "answered", agent: "901" };

@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { buildPracticeUrl } from "../features/practices/practice-links";
 import { api } from "../lib/api";
+import { getAuthToken, getAuthUser } from "../lib/auth";
 import "../styles/calls-page.css";
 
 type CallOutcome = "completed" | "no_answer" | "busy" | "call_back" | "interested" | "not_interested";
@@ -25,6 +26,16 @@ type CallLogItem = {
   actor: string;
   note?: string;
   lead?: CallLead | null;
+};
+
+type ThreeCxDiagnostics = {
+  enabled: boolean;
+  configured: boolean;
+  connected: boolean;
+  lastConnectedAt: string | null;
+  lastEventAt: string | null;
+  lastCallId: string | null;
+  lastError: string | null;
 };
 
 const OUTCOME_LABELS: Record<CallOutcome, string> = {
@@ -74,6 +85,8 @@ function getDuration(startedAt?: string, endedAt?: string) {
 
 export function CallsPage() {
   const navigate = useNavigate();
+  const user = getAuthUser();
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
   const [calls, setCalls] = useState<CallLogItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -84,6 +97,17 @@ export function CallsPage() {
   const [lastLeadId, setLastLeadId] = useState("");
   const [lastDisposition, setLastDisposition] = useState("");
   const [testOpen, setTestOpen] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<ThreeCxDiagnostics | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState("");
+
+  function returnToLoginIfSessionInvalid() {
+    // api() already clears local credentials on 401. Don't leave the cached admin header
+    // visible after the gateway has lost/expired that session. No global auth change.
+    if (getAuthToken()) return false;
+    navigate("/login", { replace: true, state: { from: { pathname: "/calls" } } });
+    return true;
+  }
 
   async function loadCalls() {
     setLoading(true);
@@ -92,6 +116,7 @@ export function CallsPage() {
       const rows = await api<CallLogItem[]>("/api/calls?limit=250");
       setCalls(Array.isArray(rows) ? rows : []);
     } catch (loadError) {
+      if (returnToLoginIfSessionInvalid()) return;
       setError(loadError instanceof Error ? loadError.message : "Errore caricamento chiamate.");
     } finally {
       setLoading(false);
@@ -101,6 +126,25 @@ export function CallsPage() {
   useEffect(() => {
     loadCalls().catch(() => null);
   }, []);
+
+  async function loadDiagnostics() {
+    if (!isAdmin) return;
+    setDiagnosticsLoading(true);
+    setDiagnosticsError("");
+    try {
+      setDiagnostics(await api<ThreeCxDiagnostics>("/api/3cx/diagnostics"));
+    } catch (loadError) {
+      setDiagnostics(null);
+      if (returnToLoginIfSessionInvalid()) return;
+      setDiagnosticsError(loadError instanceof Error ? loadError.message : "Stato 3CX non disponibile.");
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (isAdmin) void loadDiagnostics();
+  }, [isAdmin]);
 
   async function sendWebhook(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -154,9 +198,11 @@ export function CallsPage() {
           <p>Controllo chiamate 3CX, esiti, clienti collegati e follow-up.</p>
         </div>
         <div className="calls-hero-actions">
-          <button type="button" className="secondary" onClick={() => setTestOpen((current) => !current)}>
-            {testOpen ? "Nascondi test webhook" : "Test webhook 3CX"}
-          </button>
+          {isAdmin ? (
+            <button type="button" className="secondary" aria-expanded={testOpen} aria-controls="calls-legacy-webhook" onClick={() => setTestOpen((current) => !current)}>
+              {testOpen ? "Nascondi test tecnico" : "Strumento tecnico/admin: test webhook 3CX legacy"}
+            </button>
+          ) : null}
           <button type="button" onClick={() => void loadCalls()}>
             Aggiorna
           </button>
@@ -164,6 +210,28 @@ export function CallsPage() {
       </section>
 
       {error ? <p className="calls-error">{error}</p> : null}
+
+      {isAdmin ? (
+        <section className="panel calls-diagnostics" aria-labelledby="calls-3cx-title" aria-busy={diagnosticsLoading}>
+          <div className="calls-diagnostics-heading">
+            <h4 id="calls-3cx-title">Stato 3CX</h4>
+            <button type="button" className="secondary" disabled={diagnosticsLoading} onClick={() => void loadDiagnostics()}>Aggiorna stato</button>
+          </div>
+          {diagnosticsLoading ? <p className="muted" role="status">Caricamento stato 3CX...</p> : null}
+          {diagnosticsError ? <p className="calls-error" role="alert">{diagnosticsError}</p> : null}
+          {diagnostics ? (
+            <dl className="calls-diagnostics-fields">
+              <div><dt>enabled</dt><dd>{String(diagnostics.enabled)}</dd></div>
+              <div><dt>configured</dt><dd>{String(diagnostics.configured)}</dd></div>
+              <div><dt>connected</dt><dd>{String(diagnostics.connected)}</dd></div>
+              <div><dt>lastConnectedAt</dt><dd>{diagnostics.lastConnectedAt ? new Date(diagnostics.lastConnectedAt).toLocaleString("it-IT") : "—"}</dd></div>
+              <div><dt>lastEventAt</dt><dd>{diagnostics.lastEventAt ? new Date(diagnostics.lastEventAt).toLocaleString("it-IT") : "—"}</dd></div>
+              <div><dt>lastCallId</dt><dd>{diagnostics.lastCallId || "—"}</dd></div>
+              <div><dt>lastError</dt><dd>{diagnostics.lastError || "—"}</dd></div>
+            </dl>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="calls-kpis">
         {kpis.map((item) => (
@@ -223,10 +291,10 @@ export function CallsPage() {
         </div>
       </section>
 
-      {testOpen ? (
-        <section className="calls-grid">
+      {isAdmin && testOpen ? (
+        <section className="calls-grid" id="calls-legacy-webhook">
           <section className="panel">
-            <h3>Webhook 3CX Test</h3>
+            <h3>Webhook 3CX legacy — strumento tecnico/admin</h3>
             <form onSubmit={sendWebhook} className="calls-webhook-form">
               <textarea rows={12} value={payload} onChange={(e) => setPayload(e.target.value)} />
               <button type="submit">Invia evento</button>
