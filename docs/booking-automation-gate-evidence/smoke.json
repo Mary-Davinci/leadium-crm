@@ -1,0 +1,331 @@
+{
+  "templateComposer": [
+    {
+      "width": 1440,
+      "practiceOverflow": {
+        "client": 1440,
+        "scroll": 1440
+      },
+      "geometry": {
+        "client": 1440,
+        "scroll": 1440,
+        "controls": [
+          {
+            "sel": ".chat-composer",
+            "x": 581,
+            "y": 569.625,
+            "w": 522,
+            "h": 313.375,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": "#chat-template-select",
+            "x": 593,
+            "y": 600.625,
+            "w": 450,
+            "h": 40,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": ".chat-template-params input",
+            "x": 593,
+            "y": 664.625,
+            "w": 498,
+            "h": 32,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": "button[aria-label=\"Invia template\"]",
+            "x": 1051,
+            "y": 600.625,
+            "w": 40,
+            "h": 40,
+            "within": true,
+            "uncovered": true
+          }
+        ]
+      },
+      "errors": [],
+      "optOutUI": "PASS",
+      "variables": "PASS",
+      "quoteRequired": "PASS"
+    },
+    {
+      "width": 1100,
+      "practiceOverflow": {
+        "client": 1100,
+        "scroll": 1100
+      },
+      "geometry": {
+        "client": 1100,
+        "scroll": 1100,
+        "controls": [
+          {
+            "sel": ".chat-composer",
+            "x": 541,
+            "y": 569.625,
+            "w": 542,
+            "h": 313.375,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": "#chat-template-select",
+            "x": 553,
+            "y": 600.625,
+            "w": 470,
+            "h": 40,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": ".chat-template-params input",
+            "x": 553,
+            "y": 664.625,
+            "w": 518,
+            "h": 32,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": "button[aria-label=\"Invia template\"]",
+            "x": 1031,
+            "y": 600.625,
+            "w": 40,
+            "h": 40,
+            "within": true,
+            "uncovered": true
+          }
+        ]
+      },
+      "errors": [],
+      "optOutUI": "PASS",
+      "variables": "PASS",
+      "quoteRequired": "PASS"
+    },
+    {
+      "width": 390,
+      "practiceOverflow": {
+        "client": 390,
+        "scroll": 390
+      },
+      "geometry": {
+        "client": 390,
+        "scroll": 390,
+        "controls": [
+          {
+            "sel": ".chat-composer",
+            "x": 11,
+            "y": 500,
+            "w": 368,
+            "h": 333,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": "#chat-template-select",
+            "x": 17,
+            "y": 529,
+            "w": 308,
+            "h": 40,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": ".chat-template-params input",
+            "x": 17,
+            "y": 593,
+            "w": 356,
+            "h": 32,
+            "within": true,
+            "uncovered": true
+          },
+          {
+            "sel": "button[aria-label=\"Invia template\"]",
+            "x": 333,
+            "y": 529,
+            "w": 40,
+            "h": 40,
+            "within": true,
+            "uncovered": true
+          }
+        ]
+      },
+      "errors": [],
+      "optOutUI": "PASS",
+      "variables": "PASS",
+      "quoteRequired": "PASS"
+    }
+  ],
+  "practiceBadgeAndTextComposer": [
+    {
+      "width": 1440,
+      "practiceBadge": "PASS"
+    },
+    {
+      "width": 1100,
+      "practiceBadge": "PASS"
+    },
+    {
+      "width": 390,
+      "practiceBadge": "PASS"
+    },
+    {
+      "width": 1440,
+      "textComposer": "PASS",
+      "controls": [
+        {
+          "x": 593,
+          "y": 837,
+          "w": 36,
+          "h": 36,
+          "label": "Inserisci emoji",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 633,
+          "y": 837,
+          "w": 36,
+          "h": 36,
+          "label": "Allega",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 673,
+          "y": 833,
+          "w": 334,
+          "h": 40,
+          "label": "chat-message-input",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 1011,
+          "y": 837,
+          "w": 36,
+          "h": 36,
+          "label": "Usa un template",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 1051,
+          "y": 833,
+          "w": 40,
+          "h": 40,
+          "label": "Invia messaggio",
+          "within": true,
+          "uncovered": true
+        }
+      ]
+    },
+    {
+      "width": 1100,
+      "textComposer": "PASS",
+      "controls": [
+        {
+          "x": 553,
+          "y": 837,
+          "w": 36,
+          "h": 36,
+          "label": "Inserisci emoji",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 593,
+          "y": 837,
+          "w": 36,
+          "h": 36,
+          "label": "Allega",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 633,
+          "y": 833,
+          "w": 354,
+          "h": 40,
+          "label": "chat-message-input",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 991,
+          "y": 837,
+          "w": 36,
+          "h": 36,
+          "label": "Usa un template",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 1031,
+          "y": 833,
+          "w": 40,
+          "h": 40,
+          "label": "Invia messaggio",
+          "within": true,
+          "uncovered": true
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "textComposer": "PASS",
+      "controls": [
+        {
+          "x": 17,
+          "y": 789,
+          "w": 36,
+          "h": 36,
+          "label": "Inserisci emoji",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 57,
+          "y": 789,
+          "w": 36,
+          "h": 36,
+          "label": "Allega",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 97,
+          "y": 767,
+          "w": 192,
+          "h": 58,
+          "label": "chat-message-input",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 293,
+          "y": 789,
+          "w": 36,
+          "h": 36,
+          "label": "Usa un template",
+          "within": true,
+          "uncovered": true
+        },
+        {
+          "x": 333,
+          "y": 785,
+          "w": 40,
+          "h": 40,
+          "label": "Invia messaggio",
+          "within": true,
+          "uncovered": true
+        }
+      ]
+    }
+  ],
+  "environment": "Real local Vite frontend and real backend services; JSON fixture store; test session hook; Meta disabled. Production login, Mongo concurrency, external Meta delivery and 3CX tenant not exercised."
+}
