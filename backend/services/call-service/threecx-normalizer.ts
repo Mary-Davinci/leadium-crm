@@ -8,9 +8,11 @@ const receptionists = new Set(["920", "921", "922"]);
 
 /** Tenant topology, not a PBX configuration change. Infrastructure can never be an agent. */
 export function classifyMonitoredDn(dn: string, reportedType: string) {
-  if (receptionists.has(dn)) return reportedType.toLowerCase() === "routepoint" ? "RoutePoint" : "DigitalReceptionist";
-  if (queues.has(dn)) return "Queue";
-  if (agents.has(dn) && reportedType.toLowerCase() === "extension") return "Agent";
+  const type = reportedType.toLowerCase();
+  if (receptionists.has(dn) && type === "routepoint") return "RoutePoint";
+  if (receptionists.has(dn) && ["wivr", "digitalreceptionist", "ivr"].includes(type)) return "DigitalReceptionist";
+  if (queues.has(dn) && ["wqueue", "queue"].includes(type)) return "Queue";
+  if (agents.has(dn) && ["wextension", "extension"].includes(type)) return "Agent";
   return "Unknown";
 }
 
@@ -75,7 +77,7 @@ export function observeParticipant(state: MonitorState, p: Participant, at: stri
     ? externalNumber(p.party_dn) || externalNumber(p.party_caller_id)
     : externalNumber(p.party_caller_id) || externalNumber(p.party_dn);
   // Never treat an internal peer's caller-id as a customer; trunk/line peers may have a DN.
-  if (!/^(Extension|Queue|RingGroup|RoutePoint|DigitalReceptionist|IVR)$/i.test((p.party_dn_type || "").replace(/\s/g, "")) && party) call.customer ||= party;
+  if (!/^(Wextension|Wqueue|Wivr|Extension|Queue|RingGroup|RoutePoint|DigitalReceptionist|IVR)$/i.test((p.party_dn_type || "").replace(/\s/g, "")) && party) call.customer ||= party;
   const isAgent = classifyMonitoredDn(p.dn, dnType) === "Agent";
   if (agents.has(p.dn) && !isAgent && ["Connected", "Hold", "Held"].includes(p.status)) markCallIncomplete(call, "unverified_agent_type");
   if (isAgent && (!call.agent || ["Connected", "Hold", "Held"].includes(p.status))) call.agent = p.dn;

@@ -11,6 +11,11 @@ import * as mongo from "../common/mongo";
 process.env.NODE_ENV = "test";
 const SECRET = "fixture-secret-never-log";
 const TOKEN = "fixture-token-never-log";
+// Exact GET /callcontrol/{dn} type values observed on the Crocieriamo tenant.
+const TENANT_DN_TYPES: Record<string, string> = {
+  "901": "Wextension", "913": "Wextension", "910": "Wqueue", "911": "Wqueue", "912": "Wqueue",
+  "920": "Wivr", "921": "Wivr", "922": "Wivr"
+};
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 let count = 0;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -155,8 +160,8 @@ async function main() {
       assert.equal(f.deliveries.length, 0);
     } finally { await f.monitor.stop(); }
   });
-  for (const dn of ["901", "913"]) await test("inbound answered with native callid and agent " + dn, async () => {
-    const f = fixture(); await f.start();
+  for (const reportedDnTypes of [undefined, TENANT_DN_TYPES]) for (const dn of ["901", "913"]) await test("inbound answered with native callid and agent " + dn + (reportedDnTypes ? " Wextension" : " Extension"), async () => {
+    const f = fixture({ reportedDnTypes }); await f.start();
     try {
       await f.upsert(dn, 1, 123456, "Ringing"); f.advance(2000);
       await f.upsert(dn, 1, 123456, "Connected"); f.advance(95000); await f.remove(dn, 1); await f.finish();
@@ -184,18 +189,19 @@ async function main() {
       await f.upsert("913", 2, 444, "Connected"); f.advance(2000); await f.remove("913", 2); await f.finish(); assert.equal(f.deliveries[0].agent, "913"); assert.equal(f.deliveries[0].disposition, "completed");
     } finally { await f.monitor.stop(); }
   });
-  await test("Crocieriamo inbound 920 -> 911 -> 910 -> 901: one completed call, original customer, final agent", async () => {
-    const f = fixture(); await f.start();
+  for (const reportedDnTypes of [undefined, TENANT_DN_TYPES]) await test("Crocieriamo inbound 920 -> 911 -> 910 -> 901: one completed call, original customer, final agent" + (reportedDnTypes ? " (real W types)" : " (legacy types)"), async () => {
+    const f = fixture({ reportedDnTypes }); await f.start();
+    if (reportedDnTypes) assert.deepEqual(f.monitor.diagnostics().observedDnTypes, TENANT_DN_TYPES);
     const internalPeer = (dn: string, type: string) => ({ party_dn: dn, party_caller_id: "", party_dn_type: type });
     try {
       await f.upsert("920", 20, 920901, "Ringing"); f.advance(1000);
       await f.upsert("920", 20, 920901, "Connected");
       assert.equal(f.store.state.calls["920901"].answeredAt, undefined);
       assert.equal(f.store.state.calls["920901"].agent, undefined);
-      f.advance(2000); await f.upsert("911", 11, 920901, "Connected", internalPeer("920", "RoutePoint")); await f.remove("920", 20);
-      f.advance(3000); await f.upsert("910", 10, 920901, "Connected", internalPeer("911", "Queue")); await f.remove("911", 11);
+      f.advance(2000); await f.upsert("911", 11, 920901, "Connected", internalPeer("920", reportedDnTypes?.["920"] || "RoutePoint")); await f.remove("920", 20);
+      f.advance(3000); await f.upsert("910", 10, 920901, "Connected", internalPeer("911", reportedDnTypes?.["911"] || "Queue")); await f.remove("911", 11);
       assert.equal(f.store.state.calls["920901"].answeredAt, undefined);
-      f.advance(4000); await f.upsert("901", 1, 920901, "Ringing", internalPeer("910", "Queue")); await f.remove("910", 10);
+      f.advance(4000); await f.upsert("901", 1, 920901, "Ringing", internalPeer("910", reportedDnTypes?.["910"] || "Queue")); await f.remove("910", 10);
       f.advance(5000);
       await f.upsert("901", 1, 920901, "Connected", { party_dn: "+3902111222333", party_caller_id: "+3902111222333", originated_by_dn: "901" });
       const answeredAt = f.store.state.calls["920901"].answeredAt;
@@ -208,28 +214,28 @@ async function main() {
       assert.equal(f.monitor.diagnostics().lastError, null);
     } finally { await f.monitor.stop(); }
   });
-  for (const ivr of ["920", "921", "922"]) await test("inbound " + ivr + " -> 912 -> 910 without agent: no_answer, never IVR/queue answered", async () => {
-    const f = fixture(); await f.start();
+  for (const reportedDnTypes of [undefined, TENANT_DN_TYPES]) for (const ivr of ["920", "921", "922"]) await test("inbound " + ivr + " -> 911 -> 910 without agent: no_answer, never IVR/queue answered" + (reportedDnTypes ? " (real W types)" : " (legacy types)"), async () => {
+    const f = fixture({ reportedDnTypes }); await f.start();
     const callid = Number(ivr) * 1000;
     try {
       await f.upsert(ivr, 20, callid, "Ringing"); await f.upsert(ivr, 20, callid, "Connected");
-      await f.upsert("912", 12, callid, "Connected", { party_dn: ivr, party_caller_id: "", party_dn_type: "DigitalReceptionist" });
+      await f.upsert("911", 11, callid, "Connected", { party_dn: ivr, party_caller_id: "", party_dn_type: reportedDnTypes?.[ivr] || "DigitalReceptionist" });
       await f.remove(ivr, 20);
-      await f.upsert("910", 10, callid, "Connected", { party_dn: "912", party_caller_id: "", party_dn_type: "Queue" });
-      await f.remove("912", 12); f.advance(10000); await f.remove("910", 10); await f.finish();
+      await f.upsert("910", 10, callid, "Connected", { party_dn: "911", party_caller_id: "", party_dn_type: reportedDnTypes?.["911"] || "Queue" });
+      await f.remove("911", 11); f.advance(10000); await f.remove("910", 10); await f.finish();
       const e = f.deliveries[0]; assert.equal(e.callId, String(callid)); assert.equal(e.from, "+393331234567");
       assert.equal(e.direction, "inbound"); assert.equal(e.disposition, "no_answer"); assert.equal(e.durationSeconds, 0);
       assert.equal(e.answeredAt, undefined); assert.equal(e.agent, undefined); assert.equal(f.deliveries.length, 1);
     } finally { await f.monitor.stop(); }
   });
   await test("topology classification: 920/921/922 receptionist, 910/911/912 queue, only 901/913 agents", () => {
-    for (const dn of ["920", "921", "922"]) for (const type of ["RoutePoint", "DigitalReceptionist", "IVR", "Extension"]) {
+    for (const dn of ["920", "921", "922"]) for (const type of ["RoutePoint", "DigitalReceptionist", "IVR", "Wivr"]) {
       assert.ok(["RoutePoint", "DigitalReceptionist"].includes(classifyMonitoredDn(dn, type)));
       const state = emptyMonitorState(); observeParticipant(state, { dn, id: 1, callid: 123, status: "Connected" }, new Date().toISOString(), false, type);
       assert.equal(state.calls["123"].answeredAt, undefined); assert.equal(state.calls["123"].agent, undefined);
     }
     for (const dn of ["910", "911", "912"]) {
-      assert.equal(classifyMonitoredDn(dn, "Extension"), "Queue");
+      assert.equal(classifyMonitoredDn(dn, "Queue"), "Queue");
       const state = emptyMonitorState(); observeParticipant(state, { dn, id: 1, callid: 123, status: "Connected" }, new Date().toISOString(), false, "Extension");
       assert.equal(state.calls["123"].answeredAt, undefined);
     }
@@ -240,6 +246,33 @@ async function main() {
     removeParticipant(state, "901", 1, at); finalizeCalls(state, Date.parse(at) + 4000);
     assert.equal(state.finals["128"].event, null, "unknown agent type must not be coerced into no_answer");
     assert.ok(state.finals["128"].incompleteReasons.includes("unverified_agent_type"));
+  });
+  await test("exact tenant type mapping stays DN-scoped; unknown and mismatched types never become agents", () => {
+    for (const dn of MONITORED_DNS) {
+      assert.equal(classifyMonitoredDn(dn, TENANT_DN_TYPES[dn]), ["901", "913"].includes(dn) ? "Agent" : ["910", "911", "912"].includes(dn) ? "Queue" : "DigitalReceptionist");
+      for (const type of ["", "Unknown", "Wextension-extra", "SomeWextension", " Wextension", "Wextension "]) assert.equal(classifyMonitoredDn(dn, type), "Unknown");
+      if (!["901", "913"].includes(dn)) for (const type of ["Wextension", "Extension"]) assert.equal(classifyMonitoredDn(dn, type), "Unknown");
+    }
+    assert.equal(classifyMonitoredDn("999", "Wextension"), "Unknown");
+    const at = "2026-10-16T10:00:00Z";
+    for (const dn of ["901", "913"]) for (const type of ["Wqueue", "Wivr", "Unknown", "Wextension-extra"]) {
+      const state = emptyMonitorState();
+      observeParticipant(state, { dn, id: 1, callid: 128, status: "Ringing", party_caller_id: "+393331234567", party_dn_type: "Line" }, at, false, type);
+      observeParticipant(state, { dn, id: 1, callid: 128, status: "Connected" }, at, false, type);
+      assert.equal(state.calls["128"].answeredAt, undefined); assert.equal(state.calls["128"].agent, undefined);
+      removeParticipant(state, dn, 1, at); finalizeCalls(state, Date.parse(at) + 4000);
+      assert.equal(state.finals["128"].event, null); assert.ok(state.finals["128"].incompleteReasons.includes("unverified_agent_type"));
+    }
+  });
+  await test("real W peer types cannot supply an internal peer caller-id as the customer", () => {
+    const at = "2026-10-16T10:00:00Z";
+    for (const type of ["Wextension", "Wqueue", "Wivr"]) {
+      const state = emptyMonitorState();
+      observeParticipant(state, { dn: "901", id: 1, callid: 129, status: "Ringing", party_dn: "911", party_dn_type: type, party_caller_id: "+3902111222333" }, at, false, "Wextension");
+      observeParticipant(state, { dn: "901", id: 1, callid: 129, status: "Connected" }, at, false, "Wextension");
+      removeParticipant(state, "901", 1, at); finalizeCalls(state, Date.parse(at) + 4000);
+      assert.equal(state.finals["129"].event, null); assert.ok(state.finals["129"].incompleteReasons.includes("missing_external_number"));
+    }
   });
   await test("snapshot of a handover leg preserves a known IVR call; genuine unknown starts remain quarantined", () => {
     const at = "2026-10-16T10:00:00.000Z", later = "2026-10-16T10:00:01.000Z";

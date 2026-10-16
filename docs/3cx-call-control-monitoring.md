@@ -64,7 +64,19 @@ The Crocieriamo topology declares **901/913 as agents**, **910/911/912 as queues
 **920/921/922 as digital receptionists** (day/night/holidays). These are observer classifications,
 not PBX configuration changes. Receptionists are classified RoutePoint/DigitalReceptionist,
 and cannot become agents even if a generic type is returned. Only 901/913, with a reported
-Extension type, reaching Connected/Hold/Held establish an observed agent answer.
+Wextension type (or the tested legacy Extension type), reaching Connected/Hold/Held
+establish an observed agent answer. Exact tenant-reported types are mapped as follows:
+
+| DNs | Tenant type | Classification | Tested legacy types |
+| --- | --- | --- | --- |
+| 901, 913 | Wextension | Agent | Extension |
+| 910, 911, 912 | Wqueue | Queue | Queue |
+| 920, 921, 922 | Wivr | DigitalReceptionist | DigitalReceptionist, IVR, RoutePoint (classified RoutePoint) |
+
+Comparisons are case-insensitive exact matches, restricted to the corresponding DNs.
+Unknown or mismatched types return Unknown; a connected 901/913 with an unrecognized type
+still quarantines the final event with `unverified_agent_type`. No wildcard or W-prefix rule
+is used. Wextension/Wqueue/Wivr internal peers cannot supply a customer number.
 A connected IVR or queue alone is not a human answer. The answering extension is preferred
 as agent; an IVR/queue-only missed call does not invent an agent identifier.
 Once all known legs end, a 3-second grace period and fresh allowlisted snapshots accommodate
@@ -153,10 +165,9 @@ and temporarily `observedDnTypes` for diagnosing the tenant's actual DN type str
 strings, without enum assumptions or classification changes. No additional request is made
 when the admin reads diagnostics. Unobserved DNs are omitted; disabled monitoring returns `{}`.
 Only the type field is exposed: no participant payload, customer number, API key or token.
-The field is available in the JSON response of `/api/3cx/diagnostics`; the current Calls UI
-continues showing its existing seven status fields. Inspect the admin request's JSON response
-to collect the real types before changing agent classification. No tenant values are assumed
-or claimed by the local mock tests.
+The field remains available in the JSON response of `/api/3cx/diagnostics` and the admin-only
+Calls UI. Regression fixtures cover the Wextension/Wqueue/Wivr values reported by the operator
+from this tenant's diagnostics; tests do not connect to the tenant or alter PBX configuration.
 
 The ID is partially masked. Errors are fixed strings; raw provider errors/bodies, tokens, keys,
 telephone numbers and URLs are never included. No credentials are returned by `/health`.
