@@ -22,6 +22,17 @@ export type Message = CrmChatMessage & {
   localError?: string;
 };
 
+export type TemplateParameterOption = {
+  name: string;
+  label: string;
+  component: "body" | "button_url";
+  index: number;
+  kind?: "text" | "url";
+  required?: boolean;
+  // Lead field the server prefills the value from when the operator leaves it empty.
+  source?: "productInterest" | "quoteUrl" | "fullName";
+};
+
 export type TemplateOption = {
   key: string;
   name: string;
@@ -29,6 +40,30 @@ export type TemplateOption = {
   body: string;
   category: "utility" | "followup";
   suggestionTag?: string;
+  // Booking templates (additive; legacy templates simply omit them).
+  parameters?: TemplateParameterOption[];
+  metaCategory?: string;
+  metaStatus?: string;
+  automationMode?: "manual_only" | "automatic_allowed";
+};
+
+/** GET /api/whatsapp/automation/state: derived Booking automation state for the selected lead. */
+export type WhatsappAutomationInfo = {
+  leadId: string | null;
+  state: {
+    firstContactSentAt: string | null;
+    lastTemplateKey: string | null;
+    lastTemplateSentAt: string | null;
+    followupStep: number;
+    customerRepliedAt: string | null;
+    paused: boolean;
+    stoppedReason: string | null;
+    stoppedReasonLabel: string | null;
+    doNotContact: { active?: boolean; reason?: string | null; setAt?: string; setBy?: string } | null;
+    automationEnabled: boolean;
+  } | null;
+  suggestions: Array<{ key: string; reason: string }>;
+  templates: Record<string, { allowed: boolean; code?: string; reason?: string }>;
 };
 
 export type TimelineItem = {

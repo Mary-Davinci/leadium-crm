@@ -1,7 +1,7 @@
 import { ChangeEvent, FormEvent, RefObject, useRef } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { FileText, FolderOpen, Image, LayoutTemplate, Paperclip, Receipt, SendHorizontal, Smile, X } from "lucide-react";
-import { ATTACHMENT_ACCEPT, formatFileSize, getAttachmentFamily, getAttachmentKindLabel, getAttachmentTypeLabel } from "../chat.logic";
+import { ATTACHMENT_ACCEPT, formatFileSize, getAttachmentFamily, getAttachmentKindLabel, getAttachmentTypeLabel, renderTemplatePreview } from "../chat.logic";
 import type { DraftAttachment, MessageMode, PracticeDocumentOption, TemplateOption } from "../chat.types";
 
 type FilePurpose = "image" | "document" | "quote";
@@ -12,6 +12,11 @@ type ComposerProps = {
   replyWindowOpen: boolean;
   templates: TemplateOption[];
   selectedTemplate: TemplateOption | null;
+  // Values for the selected template's Meta variables ({{1}}, URL...), keyed by parameter name.
+  templateParams: Record<string, string>;
+  // Why the server would refuse this template for this lead (opt-out, already sent, ...), if so.
+  templateBlockedReason: string;
+  onTemplateParamChange: (name: string, value: string) => void;
   text: string;
   drafts: DraftAttachment[];
   practiceDocuments: PracticeDocumentOption[];
@@ -64,6 +69,9 @@ export function Composer({
   replyWindowOpen,
   templates,
   selectedTemplate,
+  templateParams,
+  templateBlockedReason,
+  onTemplateParamChange,
   text,
   drafts,
   practiceDocuments,
@@ -140,14 +148,41 @@ export function Composer({
             {templates.map((template) => (
               <option key={template.key} value={template.key}>
                 {template.label}
+                {template.metaStatus === "pending" ? " (in approvazione Meta)" : ""}
               </option>
             ))}
           </select>
-          <button type="submit" className="chat-send-button" disabled={sending || !selectedTemplate} aria-label="Invia template">
+          <button type="submit" className="chat-send-button" disabled={sending || !selectedTemplate || Boolean(templateBlockedReason)} aria-label="Invia template">
             <SendHorizontal size={19} aria-hidden="true" />
           </button>
         </div>
-        {selectedTemplate?.body ? <p className="chat-template-preview">{selectedTemplate.body}</p> : null}
+        {selectedTemplate?.parameters?.length ? (
+          <div className="chat-template-params">
+            {selectedTemplate.parameters.map((param) => (
+              <label key={param.name}>
+                <span>
+                  {param.label}
+                  {param.required === false ? " (facoltativo)" : ""}
+                </span>
+                <input
+                  type={param.kind === "url" ? "url" : "text"}
+                  inputMode={param.kind === "url" ? "url" : "text"}
+                  value={templateParams[param.name] || ""}
+                  onChange={(event) => onTemplateParamChange(param.name, event.target.value)}
+                  placeholder={param.kind === "url" ? "https://..." : param.source ? "Dal dato della pratica, se presente" : ""}
+                />
+              </label>
+            ))}
+          </div>
+        ) : null}
+        {templateBlockedReason ? (
+          <p className="chat-inline-alert warning" role="status">
+            {templateBlockedReason}
+          </p>
+        ) : selectedTemplate?.metaStatus === "pending" ? (
+          <p className="chat-template-note">Template in approvazione su Meta: l'invio funziona solo dopo l'approvazione.</p>
+        ) : null}
+        {selectedTemplate?.body ? <p className="chat-template-preview">{renderTemplatePreview(selectedTemplate, templateParams)}</p> : null}
       </form>
     );
   }

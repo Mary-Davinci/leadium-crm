@@ -1,3 +1,4 @@
+import type { WhatsappAutomationInfo } from "../features/chat/chat.types";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
@@ -24,6 +25,8 @@ type Workflow = {
 
 type Lead = {
   id: string;
+  // Explicit opt-out: no WhatsApp templates are sent (set/cleared from the chat contact panel).
+  doNotContact?: { active?: boolean; reason?: string | null } | null;
   fullName: string;
   phone: string;
   email?: string;
@@ -771,6 +774,18 @@ export function PraticaDetailPage() {
   const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
   const activityActor = authUser?.name?.trim() || authUser?.username || "operatore pratiche";
   const [detail, setDetail] = useState<LeadDetail | null>(null);
+  const [whatsappInfo, setWhatsappInfo] = useState<WhatsappAutomationInfo | null>(null);
+  const [whatsappInfoError, setWhatsappInfoError] = useState(false);
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    setWhatsappInfo(null);
+    setWhatsappInfoError(false);
+    api<WhatsappAutomationInfo>("/api/whatsapp/automation/state?leadId=" + encodeURIComponent(id))
+      .then(info => { if (!cancelled) setWhatsappInfo(info); })
+      .catch(() => { if (!cancelled) setWhatsappInfoError(true); });
+    return () => { cancelled = true; };
+  }, [id]);
   const [customerSummary, setCustomerSummary] = useState<{ ltv: number; purchaseCount: number } | null>(null);
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [assignees, setAssignees] = useState<string[]>([]);
@@ -2036,6 +2051,11 @@ export function PraticaDetailPage() {
               <div className="pd-badges">
                 <span className={`pd-status ${statusClass}`}>{getStatusLabel(detail.lead.status)}</span>
                 <span className={`pd-priority pd-priority-${priority}`}>{getPriorityLabel(priority)}</span>
+                {detail.lead.doNotContact?.active ? (
+                  <span className="pd-attempts pd-attempts-alert" title={detail.lead.doNotContact.reason || undefined}>
+                    Non contattare
+                  </span>
+                ) : null}
                 {detail.lead.callAttempts ? (
                   <span className={`pd-attempts ${detail.lead.secondAttemptPending ? "pd-attempts-alert" : ""}`}>
                     {detail.lead.secondAttemptPending
@@ -2044,6 +2064,23 @@ export function PraticaDetailPage() {
                   </span>
                 ) : null}
               </div>
+              <section className="pd-whatsapp-automation" aria-label="Automazione WhatsApp">
+                <strong>Automazione WhatsApp</strong>
+                {whatsappInfo?.state ? (
+                  <>
+                    <span>{whatsappInfo.state.doNotContact?.active
+                      ? "Non contattare: nessun template viene inviato."
+                      : whatsappInfo.state.stoppedReason
+                        ? "Solleciti fermi: " + (whatsappInfo.state.stoppedReasonLabel || whatsappInfo.state.stoppedReason)
+                        : "Nessun blocco ai solleciti WhatsApp."}</span>
+                    <span>{whatsappInfo.state.automationEnabled ? "Invio automatico attivo per i template abilitati." : "Invio automatico disattivato: template solo manuali."}</span>
+                    <span>{whatsappInfo.state.firstContactSentAt
+                      ? "Primo contatto: " + new Date(whatsappInfo.state.firstContactSentAt).toLocaleString("it-IT")
+                      : "Primo contatto non ancora inviato."}</span>
+                    <span>Gestisci template e blocco contatto dalla chat WhatsApp.</span>
+                  </>
+                ) : <span role="status">{whatsappInfoError ? "Stato non disponibile. Apri la chat WhatsApp per riprovare." : "Caricamento stato WhatsApp..."}</span>}
+              </section>
               <div className="pd-hero-actions">
                 <button type="button" className="pd-hero-action pd-hero-action-call" disabled={busy} onClick={startCall}>
                   <svg viewBox="0 0 24 24" aria-hidden="true">

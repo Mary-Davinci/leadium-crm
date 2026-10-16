@@ -1,5 +1,5 @@
 // Pure chat helpers (no React, no network) so the inbox rules can be unit tested.
-import type { AttachmentKind, ChatAttachment, ChatLayoutMode, Conversation, InboxFilter, Message } from "./chat.types";
+import type { AttachmentKind, ChatAttachment, ChatLayoutMode, Conversation, InboxFilter, Message, TemplateOption } from "./chat.types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -287,6 +287,22 @@ export function mapChatError(error: unknown, fallback = "Operazione non riuscita
   return message;
 }
 
+// --- Templates with Meta variables -----------------------------------------------------------
+
+/**
+ * Preview of a template body with its {{n}} variables filled in. Empty values stay visible as
+ * the field label in brackets, so the operator sees what is still missing before sending.
+ */
+export function renderTemplatePreview(template: Pick<TemplateOption, "body" | "parameters"> | null, values: Record<string, string>) {
+  let text = String(template?.body || "");
+  for (const param of template?.parameters || []) {
+    if (param.component !== "body") continue;
+    const value = String(values[param.name] || "").trim();
+    text = text.split(`{{${param.index}}}`).join(value || `[${param.label}]`);
+  }
+  return text;
+}
+
 // --- New chat --------------------------------------------------------------------------------
 
 /**
@@ -322,4 +338,21 @@ export function shouldCloseListOnSelect(mode: ChatLayoutMode) {
 
 export function isInfoPanelInitiallyOpen(mode: ChatLayoutMode) {
   return mode === "wide";
+}
+
+/** Block incomplete Meta variables before creating an outgoing job. Server validates again. */
+export function getTemplateParameterError(template: TemplateOption | null, values: Record<string, string>): string {
+  for (const parameter of template?.parameters || []) {
+    const value = String(values[parameter.name] || "").trim();
+    if (!value && parameter.required !== false) return "Compila " + parameter.label + ".";
+    if (value && parameter.kind === "url") {
+      try {
+        const url = new URL(value);
+        if (!["http:", "https:"].includes(url.protocol)) return "Inserisci un link preventivo http:// o https:// valido.";
+      } catch {
+        return "Inserisci un link preventivo http:// o https:// valido.";
+      }
+    }
+  }
+  return "";
 }

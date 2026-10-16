@@ -11,6 +11,8 @@ import {
   isInfoPanelInitiallyOpen,
   mapChatError,
   normalizeNewChatPhone,
+  renderTemplatePreview,
+  getTemplateParameterError,
   shouldCloseListOnSelect,
   tokenizeMessageText,
   validateChatFile
@@ -196,5 +198,41 @@ describe("new chat phone", () => {
     expect(normalizeNewChatPhone("").error).not.toBe("");
     expect(normalizeNewChatPhone("12345").error).not.toBe("");
     expect(normalizeNewChatPhone("1234567890123456").error).not.toBe("");
+  });
+});
+
+describe("template preview", () => {
+  const template = {
+    body: "Ciao, abbiamo ricevuto la tua richiesta per {{1}}.",
+    parameters: [{ name: "destination", label: "Prodotto / destinazione", component: "body" as const, index: 1 }]
+  };
+
+  it("replaces {{1}} with the operator value", () => {
+    expect(renderTemplatePreview(template, { destination: "Fiordi" })).toBe("Ciao, abbiamo ricevuto la tua richiesta per Fiordi.");
+  });
+
+  it("shows the missing field label instead of an empty variable", () => {
+    expect(renderTemplatePreview(template, {})).toContain("[Prodotto / destinazione]");
+  });
+
+  it("leaves legacy templates without variables unchanged", () => {
+    expect(renderTemplatePreview({ body: "Testo fisso" }, {})).toBe("Testo fisso");
+  });
+});
+
+describe("required Meta variables before sending", () => {
+  const template = { key: "quote_ready", name: "quote_ready", label: "Preventivo", body: "{{1}}", category: "utility" as const,
+    parameters: [{ name: "quote_url", label: "Link preventivo", component: "body" as const, index: 1, kind: "url" as const, required: true }] };
+  it("blocks empty, malformed and unsafe quote URLs", () => {
+    for (const quote_url of ["", "preventivo.pdf", "javascript:alert(1)", "https://"]) {
+      expect(getTemplateParameterError(template, { quote_url })).not.toBe("");
+    }
+    expect(getTemplateParameterError(template, { quote_url: "https://example.com/quote" })).toBe("");
+  });
+  it("requires destination only when declared by the selected template", () => {
+    const destination = { ...template, parameters: [{ ...template.parameters[0], name: "destination", kind: "text" as const }] };
+    expect(getTemplateParameterError(destination, {})).not.toBe("");
+    expect(getTemplateParameterError(destination, { destination: "Fiordi" })).toBe("");
+    expect(getTemplateParameterError({ ...template, parameters: [] }, {})).toBe("");
   });
 });

@@ -3465,3 +3465,18 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
     gap: 4px;
   }
 }
+
+/* Booking automation: summary in the existing customer context; actions stay in Chat. */
+.pd-whatsapp-automation {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 0;
+  color: var(--text-secondary, #5f7595);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.pd-whatsapp-automation strong {
+  color: var(--text-strong, #213b62);
+  font-size: 13px;
+}

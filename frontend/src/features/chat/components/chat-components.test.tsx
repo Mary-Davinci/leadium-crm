@@ -113,6 +113,9 @@ function renderComposer(props: Partial<Parameters<typeof Composer>[0]> = {}) {
       replyWindowOpen
       templates={templates}
       selectedTemplate={templates[0]}
+      templateParams={{}}
+      templateBlockedReason=""
+      onTemplateParamChange={noop}
       text=""
       drafts={[]}
       practiceDocuments={[]}
@@ -133,6 +136,29 @@ function renderComposer(props: Partial<Parameters<typeof Composer>[0]> = {}) {
 }
 
 describe("Composer", () => {
+  const firstContact: TemplateOption = {
+    key: "lead_first_contact",
+    name: "lead_first_contact",
+    label: "Booking · Primo contatto",
+    body: "Richiesta per {{1}}.",
+    category: "followup",
+    metaStatus: "pending",
+    parameters: [{ name: "destination", label: "Prodotto / destinazione", component: "body", index: 1, kind: "text", required: true }]
+  };
+
+  it("asks for the template variables and previews them filled in", () => {
+    const html = renderComposer({ mode: "template", templates: [firstContact], selectedTemplate: firstContact, templateParams: { destination: "Fiordi" } });
+    expect(html).toContain("Prodotto / destinazione");
+    expect(html).toContain("Richiesta per Fiordi.");
+    expect(html).toContain("in approvazione Meta");
+  });
+
+  it("blocks the send with the reason when the server would refuse it (opt-out)", () => {
+    const html = renderComposer({ mode: "template", templateBlockedReason: "Il cliente ha chiesto di non essere contattato." });
+    expect(html).toContain("Il cliente ha chiesto di non essere contattato.");
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""[^>]*aria-label="Invia template"/);
+  });
+
   it("offers emoji, attachments and a disabled send button while empty", () => {
     const html = renderComposer();
     expect(html).toContain('aria-label="Inserisci emoji"');

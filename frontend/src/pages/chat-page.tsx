@@ -16,6 +16,8 @@ import {
   isInfoPanelInitiallyOpen,
   mapChatError,
   normalizeNewChatPhone,
+  renderTemplatePreview,
+  getTemplateParameterError,
   shouldCloseListOnSelect,
   validateChatFile,
   type ThreadMarker
@@ -30,13 +32,15 @@ import type {
   PracticeDocumentAttachment,
   PracticeDocumentOption,
   TemplateOption,
-  TimelineItem
+  TimelineItem,
+  WhatsappAutomationInfo
 } from "../features/chat/chat.types";
 import { ChatEmptyState } from "../features/chat/components/ChatEmptyState";
 import { ChatHeader } from "../features/chat/components/ChatHeader";
 import { Composer } from "../features/chat/components/Composer";
 import { ConversationList, type ConversationRow } from "../features/chat/components/ConversationList";
 import { MessageThread } from "../features/chat/components/MessageThread";
+import { WhatsappAutomationSection } from "../features/chat/components/WhatsappAutomationSection";
 import {
   CrmTask,
   getChatConversationsCache,
@@ -71,8 +75,15 @@ type TaskBoardPayload = {
 
 // A send the operator started; kept so a failed message can be retried exactly as it was.
 type OutgoingJob =
-  | { kind: "text"; conversationId: string; to: string; text: string }
-  | { kind: "template"; conversationId: string; to: string; template: TemplateOption }
+  | { kind: "text"; conversationId: string; to: string; text: string; idempotencyKey: string }
+  | {
+      kind: "template";
+      conversationId: string;
+      to: string;
+      template: TemplateOption;
+      params: Record<string, string>;
+      idempotencyKey: string;
+    }
   | {
       kind: "attachment";
       conversationId: string;
@@ -169,6 +180,9 @@ export function ChatPage() {
   const [messageMode, setMessageMode] = useState<MessageMode>("text");
   const [templates, setTemplates] = useState<TemplateOption[]>(FALLBACK_TEMPLATE_OPTIONS);
   const [templateKey, setTemplateKey] = useState(FALLBACK_TEMPLATE_OPTIONS[0].key);
+  const [templateParams, setTemplateParams] = useState<Record<string, string>>({});
+  const [automationInfo, setAutomationInfo] = useState<WhatsappAutomationInfo | null>(null);
+  const [automationBusy, setAutomationBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState("");
   const [notice, setNotice] = useState("");
@@ -388,6 +402,16 @@ export function ChatPage() {
   }, [selectedConversation?.id, replyWindow.open]);
 
   useEffect(() => {
+    void loadAutomationInfo(selectedConversation?.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConversation?.id, selectedConversation?.leadId]);
+
+  // Variables belong to one template and one customer: start empty when either changes.
+  useEffect(() => {
+    setTemplateParams({});
+  }, [templateKey, selectedConversation?.id]);
+
+  useEffect(() => {
     void loadLeadContext(selectedConversation?.leadId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConversation?.leadId]);
@@ -417,6 +441,11 @@ export function ChatPage() {
     [suggestedTemplates, templates]
   );
   const selectedTemplate = templateChoices.find((item) => item.key === templateKey) || templateChoices[0] || null;
+  const selectedTemplateCheck = selectedTemplate ? automationInfo?.templates?.[selectedTemplate.key] : undefined;
+  const templateBlockedReason =
+    selectedTemplateCheck && !selectedTemplateCheck.allowed && ["opt_out", "already_sent"].includes(String(selectedTemplateCheck.code))
+      ? String(selectedTemplateCheck.reason || "")
+      : getTemplateParameterError(selectedTemplate, templateParams);
 
   const practiceDocuments = useMemo<PracticeDocumentOption[]>(
     () =>
@@ -623,7 +652,7 @@ export function ChatPage() {
     if (job.kind === "text") {
       await api("/api/whatsapp/messages/send", {
         method: "POST",
-        body: JSON.stringify({ conversationId: job.conversationId, to: job.to, mode: "text", text: job.text })
+        body: JSON.stringify({ conversationId: job.conversationId, to: job.to, mode: "text", text: job.text, idempotencyKey: job.idempotencyKey })
       });
       return;
     }
@@ -636,7 +665,9 @@ export function ChatPage() {
           mode: "template",
           text: job.template.body,
           templateKey: job.template.key,
-          templateName: job.template.name
+          templateName: job.template.name,
+          templateParams: job.params,
+          idempotencyKey: job.idempotencyKey
         })
       });
       return;
@@ -670,7 +701,7 @@ export function ChatPage() {
   function buildPendingMessage(job: OutgoingJob, id: string): Message {
     const base = { id, direction: "outbound" as const, createdAt: new Date().toISOString(), localState: "sending" as const, agentName: authUsername };
     if (job.kind === "text") return { ...base, text: job.text, messageType: "text" };
-    if (job.kind === "template") return { ...base, text: job.template.body, messageType: "template", templateName: job.template.label };
+    if (job.kind === "template") return { ...base, text: renderTemplatePreview(job.template, job.params), messageType: "template", templateName: job.template.label };
     return {
       ...base,
       text: job.caption,
@@ -713,6 +744,7 @@ export function ChatPage() {
 
   async function finishSend(conversationId: string, messageIds: string[]) {
     await loadConversations({ force: true });
+    void loadAutomationInfo(conversationId);
     if (selectedIdRef.current === conversationId) await loadMessages(conversationId);
     const confirmed = messageIds.filter((id) => !retryJobs.current.has(id));
     setPendingByConversation((current) => ({
@@ -767,8 +799,10 @@ export function ChatPage() {
       return;
     }
     if (messageMode === "template") {
-      if (!selectedTemplate) return;
-      void sendJobs([{ kind: "template", conversationId, to, template: selectedTemplate }]);
+      if (!selectedTemplate || templateBlockedReason) return;
+      void sendJobs([
+        { kind: "template", conversationId, to, template: selectedTemplate, params: { ...templateParams }, idempotencyKey: newLocalId("send") }
+      ]);
       return;
     }
     if (!replyWindow.open) {
@@ -790,7 +824,7 @@ export function ChatPage() {
         caption: index === 0 && captionFits ? body : ""
       });
     });
-    if (body && (!drafts.length || !captionFits)) jobs.push({ kind: "text", conversationId, to, text: body });
+    if (body && (!drafts.length || !captionFits)) jobs.push({ kind: "text", conversationId, to, text: body, idempotencyKey: newLocalId("send") });
     // The composer clears immediately (like WhatsApp); the pending bubbles carry the progress,
     // and an emptied composer is also what stops a double Enter from sending twice.
     setDrafts([]);
@@ -1027,6 +1061,40 @@ export function ChatPage() {
   }
 
   // Quick actions from the practice panel prefill the composer with the matching template.
+  // Booking automation state of the selected lead (opt-out, follow-up stop reason, suggestions,
+  // per-template send check). Re-read after every send and after an opt-out change.
+  async function loadAutomationInfo(conversationId?: string | null) {
+    if (!conversationId) {
+      setAutomationInfo(null);
+      return;
+    }
+    try {
+      const info = await api<WhatsappAutomationInfo>(`/api/whatsapp/automation/state?conversationId=${encodeURIComponent(conversationId)}`);
+      if (selectedIdRef.current === conversationId) setAutomationInfo(info);
+    } catch {
+      setAutomationInfo(null);
+    }
+  }
+
+  async function setDoNotContact(active: boolean, reason: string) {
+    const leadId = currentLead?.id || selectedConversation?.leadId;
+    if (!leadId || automationBusy) return;
+    setAutomationBusy(true);
+    setChatError("");
+    try {
+      await api(`/api/leads/${leadId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ doNotContact: { active, reason }, actor: authUsername })
+      });
+      showNotice(active ? "Cliente segnato come \"non contattare\"." : "Blocco \"non contattare\" rimosso.");
+      await Promise.all([loadLeadContext(leadId, { force: true }), loadAutomationInfo(selectedConversation?.id)]);
+    } catch (error) {
+      setChatError(mapChatError(error, "Impossibile aggiornare il blocco di contatto."));
+    } finally {
+      setAutomationBusy(false);
+    }
+  }
+
   function prepareTemplate(tag: "documents" | "payments", fallbackKey: string) {
     const template = templates.find((item) => item.suggestionTag === tag) || templates.find((item) => item.key === fallbackKey);
     if (template) setTemplateKey(template.key);
@@ -1133,6 +1201,9 @@ export function ChatPage() {
               replyWindowOpen={replyWindow.open}
               templates={templateChoices}
               selectedTemplate={selectedTemplate}
+              templateParams={templateParams}
+              templateBlockedReason={templateBlockedReason}
+              onTemplateParamChange={(name, value) => setTemplateParams((current) => ({ ...current, [name]: value }))}
               text={text}
               drafts={drafts}
               practiceDocuments={practiceDocuments}
@@ -1185,6 +1256,18 @@ export function ChatPage() {
               onVerifyPayment={(paymentId) => void verifyPayment(paymentId)}
               onCompleteTask={(taskId) => void completeTask(taskId)}
               onPostponeTaskOneDay={(taskId) => void postponeTaskOneDay(taskId)}
+              automationSection={
+                <WhatsappAutomationSection
+                  info={automationInfo}
+                  templates={templates}
+                  busy={automationBusy}
+                  onUseTemplate={(key) => {
+                    setTemplateKey(key);
+                    setMessageMode("template");
+                  }}
+                  onSetDoNotContact={(active, reason) => void setDoNotContact(active, reason)}
+                />
+              }
             />
           </div>
         </>

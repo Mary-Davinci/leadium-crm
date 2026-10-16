@@ -272,6 +272,134 @@
   color: var(--chat-danger);
 }
 
+.chat-inline-alert.warning {
+  background: var(--chat-warn-bg);
+  color: var(--chat-warn);
+}
+
+/* Booking templates: Meta variables, approval note and the WhatsApp automation panel section. */
+.chat-template-params {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.chat-template-params label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+}
+
+.chat-template-params input {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.chat-template-params input:focus-visible {
+  outline: none;
+  border-color: var(--action-primary);
+  box-shadow: var(--focus-ring);
+}
+
+.chat-template-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.chat-wa-automation {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-wa-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+}
+
+.chat-wa-badge.blocked {
+  background: var(--chat-danger-bg);
+  color: var(--chat-danger);
+}
+
+.chat-wa-badge.active {
+  background: var(--chat-ok-bg);
+  color: var(--chat-ok);
+}
+
+.chat-wa-badge.stopped {
+  background: var(--chat-warn-bg);
+  color: var(--chat-warn);
+}
+
+.chat-wa-facts {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.chat-wa-suggestions {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-wa-suggestions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--font-size-xs);
+}
+
+.chat-wa-suggestions li span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chat-wa-suggestions li small {
+  color: var(--text-secondary);
+}
+
+.chat-wa-optout {
+  display: grid;
+  gap: 6px;
+}
+
+.chat-wa-optout input {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.chat-wa-optout-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .chat-skeleton {
   display: block;
   border-radius: 6px;
@@ -1962,4 +2090,25 @@
   .chat-info-toggle svg {
     transition: none;
   }
+}
+
+/* Grid children must shrink: long Meta names otherwise push Send outside the mobile pane. */
+.chat-composer {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+.chat-template-row,
+.chat-template-params,
+.chat-template-params label {
+  min-width: 0;
+}
+.chat-template-params input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.chat-template-preview {
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow-y: auto;
 }

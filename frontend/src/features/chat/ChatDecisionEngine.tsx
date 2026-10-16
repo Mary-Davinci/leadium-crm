@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { CalendarClock, ChevronDown, EllipsisVertical, ExternalLink, Phone, X } from "lucide-react";
@@ -48,6 +48,8 @@ type ChatDecisionEngineProps = {
   onVerifyPayment: (paymentId: string) => void;
   onCompleteTask: (taskId: string) => void;
   onPostponeTaskOneDay: (taskId: string) => void;
+  // WhatsApp opt-out / follow-up state, shown right under the contact so it is never missed.
+  automationSection?: ReactNode;
 };
 
 function formatEuroAmount(value: number) {
@@ -93,7 +95,8 @@ export function ChatDecisionEngine({
   onMarkPaymentReceived,
   onVerifyPayment,
   onCompleteTask,
-  onPostponeTaskOneDay
+  onPostponeTaskOneDay,
+  automationSection
 }: ChatDecisionEngineProps) {
   const navigate = useNavigate();
   const decision = useMemo(() => getDecisionSnapshot(lead, openTasks), [lead, openTasks]);
@@ -149,6 +152,8 @@ export function ChatDecisionEngine({
             </div>
           </dl>
         </section>
+
+        {automationSection}
 
         <section className="chat-info-section">
           <h4>Pratica collegata</h4>
