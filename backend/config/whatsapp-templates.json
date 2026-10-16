@@ -66,7 +66,7 @@
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "lead_first_contact",
     "name": "lead_first_contact",
@@ -90,7 +90,7 @@
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "lead_no_answer_followup",
     "name": "lead_no_answer_followup",
@@ -117,7 +117,7 @@
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "lead_qualification",
     "name": "lead_qualification",
@@ -129,7 +129,7 @@
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "call_no_answer",
     "name": "call_no_answer",
@@ -165,7 +165,7 @@
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "quote_followup",
     "name": "quote_followup",
@@ -177,11 +177,11 @@
       "after": "quote_ready",
       "afterHours": 48
     },
-    "body": "Ciao, ti contattiamo per sapere se hai avuto modo di valutare la proposta che ti abbiamo inviato.\n\nSe c'? qualcosa che vorresti rivedere, come il prezzo, le date o la soluzione proposta, possiamo verificare insieme le alternative disponibili."
+    "body": "Ciao, ti contattiamo per sapere se hai avuto modo di valutare la proposta che ti abbiamo inviato.\n\nSe c'è qualcosa che vorresti rivedere, come il prezzo, le date o la soluzione proposta, possiamo verificare insieme le alternative disponibili."
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "budget_alternative",
     "name": "budget_alternative",
@@ -196,7 +196,7 @@
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "interested_undecided",
     "name": "interested_undecided",
@@ -211,7 +211,7 @@
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "final_recovery",
     "name": "final_recovery",
@@ -228,7 +228,7 @@
   },
   {
     "language": "it",
-    "metaStatus": "pending",
+    "metaStatus": "approved",
     "automationMode": "manual_only",
     "key": "contact_closure",
     "name": "contact_closure",

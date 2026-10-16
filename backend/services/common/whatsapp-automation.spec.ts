@@ -49,7 +49,7 @@ function main() {
     "lead_qualification": "Ciao! Per individuare la proposta più adatta alle tue esigenze, avremmo bisogno di alcune informazioni:\n\n- Destinazione o tipo di viaggio che stai cercando.\n- Periodo indicativo della partenza.\n- Numero di persone che viaggeranno.\n\nPuoi risponderci direttamente qui: ti aiuteremo a individuare la soluzione più adatta.",
     "call_no_answer": "Ciao, abbiamo provato a contattarti telefonicamente in merito alla tua richiesta a Crocieriamo.\n\nSe preferisci, possiamo proseguire direttamente qui su WhatsApp oppure concordare un momento più comodo per sentirci.",
     "quote_ready": "Ciao, abbiamo preparato la proposta relativa alla tua richiesta!\n\nPuoi consultarla al seguente link:\n\n{{1}}\n\nSe desideri maggiori informazioni o vuoi valutare eventuali alternative, siamo a disposizione per aiutarti.",
-    "quote_followup": "Ciao, ti contattiamo per sapere se hai avuto modo di valutare la proposta che ti abbiamo inviato.\n\nSe c'? qualcosa che vorresti rivedere, come il prezzo, le date o la soluzione proposta, possiamo verificare insieme le alternative disponibili.",
+    "quote_followup": "Ciao, ti contattiamo per sapere se hai avuto modo di valutare la proposta che ti abbiamo inviato.\n\nSe c'è qualcosa che vorresti rivedere, come il prezzo, le date o la soluzione proposta, possiamo verificare insieme le alternative disponibili.",
     "budget_alternative": "Ciao, se la proposta ricevuta supera il budget che avevi previsto, possiamo verificare se esistono alternative più adatte alle tue esigenze.\n\nSe vuoi, indicaci il budget indicativo che desideri rispettare e valuteremo le opzioni disponibili.",
     "interested_undecided": "Ciao, siamo a disposizione se desideri chiarire qualche dettaglio prima di prendere una decisione.\n\nSe ti fa comodo, possiamo concordare un momento per rivedere insieme la proposta e rispondere alle tue domande.\n\nQuando preferisci essere ricontattato?",
     "final_recovery": "Ciao, ti ricontattiamo un'ultima volta in merito alla tua richiesta a Crocieriamo.\n\nSe sei ancora interessato, puoi risponderci direttamente qui e riprenderemo la valutazione della tua richiesta.\n\nSe invece hai già risolto o non desideri proseguire, non continueremo a inviarti solleciti relativi a questa pratica.",
@@ -59,7 +59,7 @@ function main() {
       const template = TEMPLATES.find(item => item.key === key)!;
       assert.equal(template.body, body, key);
       assert.equal((template as any).bodyDraft, undefined, key);
-      assert.equal(template.metaStatus, "pending", key);
+      assert.equal(template.metaStatus, key === "quote_ready" ? "pending" : "approved", key);
       assert.equal(template.automationMode, "manual_only", key);
       const placeholders = [...body.matchAll(/\{\{(\d+)\}\}/g)].map(match => Number(match[1]));
       assert.deepEqual((template.parameters || []).map(parameter => parameter.index), placeholders, key);
