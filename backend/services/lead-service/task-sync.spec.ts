@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 const BACKEND_ROOT = path.join(__dirname, "..", "..", "..");
 const TEST_DB_FILE = path.join(BACKEND_ROOT, "data", "db.task-sync.test.json");
@@ -39,7 +40,7 @@ function buildPayments(config: Record<string, { status: "pending" | "received" |
     items: ["payment_deposit", "payment_balance"].map((id) => ({
       id,
       status: config[id]?.status || "verified",
-      amount: config[id]?.amount
+      amount: config[id]?.amount ?? (id === "payment_deposit" ? 300 : 900)
     }))
   });
 }
@@ -305,18 +306,21 @@ async function main() {
     try {
       const address = leadService.server.address();
       if (!address || typeof address === "string") throw new Error("Server test non disponibile.");
-      const response = await fetch(`http://127.0.0.1:${address.port}/leads/${lead.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+      const baseUrl = "http://127.0.0.1:" + address.port;
+      const documentsResponse = await fetch(baseUrl + "/leads/" + lead.id, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documents: buildDocuments([]) })
+      });
+      assert.equal(documentsResponse.status, 200);
+      const next = buildPayments({ payment_deposit: { status: "verified" }, payment_balance: { status: "verified" } });
+      const response = await fetch(baseUrl + "/leads/" + lead.id, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          documents: buildDocuments([]),
-          payments: buildPayments({
-            payment_deposit: { status: "verified" },
-            payment_balance: { status: "verified" }
-          })
+          payments: { version: 0, items: next.items.map(({ receivedAmount, verifiedAmount, ...row }: any) => row) },
+          __paymentActor: { id: "test-operator", username: "test-operator", role: "operatore" }
         })
       });
-      assert.equal(response.status, 200);
+      assert.equal(response.status, 200, await response.text());
 
       const documentTasks = await getChecklistTasks(lead.id, "document_checklist");
       const paymentTasks = await getChecklistTasks(lead.id, "payment_checklist");
@@ -334,6 +338,10 @@ main()
   .then(() => {
     cleanupDb();
     console.log("All task-sync checks passed.");
+    // Keep payment regressions in npm test, each with its own process/store.
+    for (const entry of ["../common/payment-plan.spec.js", "../common/payment-store.spec.js", "payment-editing.spec.js"]) {
+      execFileSync(process.execPath, [path.join(__dirname, entry)], { stdio: "inherit" });
+    }
   })
   .catch((error) => {
     cleanupDb();

@@ -999,6 +999,36 @@ export const server = http.createServer(async (req, res) => {
       await forwardUpstreamResponse(res, upstream);
       return;
     }
+    // Payment writes always derive their actor from the authenticated session. The lead service
+    // remains private; client-supplied audit identities are overwritten at this public boundary.
+    const paymentWrite = pathname.replace(/\/+/g, "/").replace(/\/$/, "").match(/^\/api\/leads\/([^/]+)(?:\/payments\/([^/]+))?$/);
+    if (paymentWrite && method === "PATCH") {
+      const body = (await parseJsonBody(req)) as Record<string, any>;
+      if (paymentWrite[2] || Object.prototype.hasOwnProperty.call(body, "payments")) {
+        const leadId = decodeURIComponent(paymentWrite[1]);
+        let status: string;
+        try { status = await fetchLeadStatus(leadId); } catch {
+          return sendJson(res, 502, { error: "Impossibile verificare lo stato della pratica." });
+        }
+        if (!status) return sendJson(res, 404, { error: "Pratica non trovata." });
+        if (!isAdmin(session.user) && [PRACTICE_READY_STATUS, PRACTICE_CLOSED_STATUS].includes(status)) {
+          return sendJson(res, 403, { error: "Questa pratica e riservata alla supervisione admin." });
+        }
+        body.__paymentActor = { id: session.user.id, username: session.user.username, role: session.user.role };
+        body.actor = session.user.username;
+        const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        await forwardUpstreamResponse(res, upstream);
+        return;
+      }
+      // Parsing consumed the stream: forward ordinary lead patches through the same gate.
+      if (!isAdmin(session.user)) {
+        const status = await fetchLeadStatus(decodeURIComponent(paymentWrite[1])).catch(() => "");
+        if ([PRACTICE_READY_STATUS, PRACTICE_CLOSED_STATUS].includes(status)) return sendJson(res, 403, { error: "Questa pratica e riservata alla supervisione admin." });
+      }
+      const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      await forwardUpstreamResponse(res, upstream);
+      return;
+    }
     const leadScopedMatch = pathname.match(/^\/api\/leads\/([^/]+)(?:\/(notes|activities|calls))?$/);
     if (leadScopedMatch && !isAdmin(session.user)) {
       const leadId = decodeURIComponent(leadScopedMatch[1] || "").trim();

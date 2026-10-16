@@ -1,5 +1,5 @@
 import type { WhatsappAutomationInfo } from "../features/chat/chat.types";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { flushSync } from "react-dom";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
@@ -107,6 +107,8 @@ type PracticePaymentItem = {
   id: string;
   label: string;
   amount: number;
+  receivedAmount?: number;
+  verifiedAmount?: number;
   status: PaymentStatus;
   dueAt?: string;
   receivedAt?: string;
@@ -118,6 +120,8 @@ type PracticePaymentItem = {
 };
 
 type PracticePaymentsState = {
+  version?: number;
+  total?: number;
   items: PracticePaymentItem[];
 };
 
@@ -186,8 +190,8 @@ const DEFAULT_DOCUMENTS: PracticeDocumentItem[] = [
 ];
 
 const DEFAULT_PAYMENTS: PracticePaymentItem[] = [
-  { id: "payment_deposit", label: "Acconto", amount: 300, status: "pending", required: true, note: "" },
-  { id: "payment_balance", label: "Saldo", amount: 900, status: "pending", required: true, note: "" }
+  { id: "payment_deposit", label: "Acconto", amount: 0, status: "pending", required: true, note: "" },
+  { id: "payment_balance", label: "Saldo", amount: 0, status: "pending", required: true, note: "" }
 ];
 
 const PRACTICE_READY_STATUS = "Pronta per chiusura";
@@ -250,7 +254,8 @@ function normalizePayments(input?: PracticePaymentsState | null): PracticePaymen
 
   const now = new Date();
 
-  return {
+  const normalized = {
+    version: input?.version || 0,
     items: DEFAULT_PAYMENTS.map((base, index) => {
       const existing = byId.get(base.id);
       const fallbackDueAt = new Date(now);
@@ -262,6 +267,8 @@ function normalizePayments(input?: PracticePaymentsState | null): PracticePaymen
         id: base.id,
         label: existing?.label || base.label,
         amount: Number(existing?.amount ?? base.amount),
+        receivedAmount: Number(existing?.receivedAmount ?? (["received", "verified"].includes(existing?.status || "") ? existing?.amount || 0 : 0)),
+        verifiedAmount: Number(existing?.verifiedAmount ?? (existing?.status === "verified" ? existing?.amount || 0 : 0)),
         status: (existing?.status as PaymentStatus) || base.status,
         dueAt: existing?.dueAt ? String(existing.dueAt) : fallbackDueAt.toISOString(),
         receivedAt: existing?.receivedAt ? String(existing.receivedAt) : undefined,
@@ -273,6 +280,12 @@ function normalizePayments(input?: PracticePaymentsState | null): PracticePaymen
       };
     })
   };
+  const extraLegacy = (input?.items || []).filter(row => !DEFAULT_PAYMENTS.some(base => base.id === row.id)).map(row => ({
+    ...row,
+    receivedAmount: Number(row.receivedAmount ?? (["received", "verified"].includes(row.status) ? row.amount : 0)),
+    verifiedAmount: Number(row.verifiedAmount ?? (row.status === "verified" ? row.receivedAmount ?? row.amount : 0))
+  }));
+  return { ...normalized, items: [...normalized.items, ...extraLegacy] };
 }
 
 function normalizePracticeReview(input?: PracticeReviewState | null): PracticeReviewState | null {
@@ -301,8 +314,8 @@ function formatCurrency(value: number) {
   return new Intl.NumberFormat("it-IT", {
     style: "currency",
     currency: "EUR",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   }).format(Number(value || 0));
 }
 
@@ -314,6 +327,7 @@ function getDocumentsBadge(documents: PracticeDocumentsState) {
 }
 
 function getPaymentsBadge(payments: PracticePaymentsState) {
+  if (!payments.items.some(item => item.amount > 0)) return { label: "Importi da definire", amountText: "Imposta il totale pratica", className: "pd-payments-badge-warning" };
   const pending = payments.items.filter((item) => item.required && item.status !== "verified");
   const totalPending = pending.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   return pending.length
@@ -323,6 +337,40 @@ function getPaymentsBadge(payments: PracticePaymentsState) {
         amountText: `Totale ${formatCurrency(payments.items.reduce((sum, item) => sum + Number(item.amount || 0), 0))}`,
         className: "pd-payments-badge-complete"
       };
+}
+
+type AmountsEditorState = { total: string; deposit: string; depositDue: string; balanceDue: string };
+
+// Accepts "1.250,50", "1250.50", "€ 1250": operators type amounts the Italian way.
+function parseEuroAmount(value: string) {
+  const cleaned = String(value || "").replace(/[€\s]/g, "");
+  if (!cleaned) return NaN;
+  const normalized = cleaned.includes(",")
+    ? cleaned.replace(/\./g, "").replace(",", ".")
+    : /^\d{1,3}(\.\d{3})+$/.test(cleaned)
+      ? cleaned.replace(/\./g, "")
+      : cleaned;
+  return Math.round(Number(normalized) * 100) / 100;
+}
+
+function toDateInputValue(iso?: string) {
+  const date = iso ? new Date(iso) : null;
+  if (!date || !Number.isFinite(date.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function fromDateInputValue(value: string, fallback?: string) {
+  if (!value) return fallback;
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day, 12, 0, 0, 0).toISOString();
+}
+
+function formatAmountsEditorBalance(editor: AmountsEditorState) {
+  const total = parseEuroAmount(editor.total);
+  const deposit = editor.deposit.trim() ? parseEuroAmount(editor.deposit) : 0;
+  if (!Number.isFinite(total) || !Number.isFinite(deposit) || deposit > total) return "—";
+  return formatCurrency(Math.round((total - deposit) * 100) / 100);
 }
 
 function getPaymentStatusLabel(status: PaymentStatus) {
@@ -379,7 +427,7 @@ function isDocumentsComplete(documents: PracticeDocumentsState) {
 }
 
 function isPaymentsComplete(payments: PracticePaymentsState) {
-  return payments.items.every((item) => !item.required || item.status === "verified");
+  return payments.items.some(item => item.amount > 0) && payments.items.every((item) => !item.required || item.status === "verified");
 }
 
 function getDocumentRowIcon(item: PracticeDocumentItem) {
@@ -804,6 +852,10 @@ export function PraticaDetailPage() {
   const [taskBoardTasks, setTaskBoardTasks] = useState<CrmTask[]>(() => getTaskBoardCache()?.data.tasks || []);
   const [documentsDraft, setDocumentsDraft] = useState<PracticeDocumentsState>({ items: DEFAULT_DOCUMENTS });
   const [paymentsDraft, setPaymentsDraft] = useState<PracticePaymentsState>({ items: DEFAULT_PAYMENTS });
+  const [amountsEditor, setAmountsEditor] = useState<AmountsEditorState | null>(null);
+  const [amountsError, setAmountsError] = useState("");
+  const [amountsReason, setAmountsReason] = useState("");
+  const paymentSavingRef = useRef(false);
   const [expandedDocumentNotes, setExpandedDocumentNotes] = useState<Record<string, boolean>>({});
   const [savedDocumentNotes, setSavedDocumentNotes] = useState<Record<string, boolean>>({});
   const [uploadingDocuments] = useState<Record<string, boolean>>({});
@@ -1525,31 +1577,34 @@ export function PraticaDetailPage() {
     }
   }
 
-  async function savePayments(nextPayments: PracticePaymentsState) {
-    if (!detail?.lead.id) return;
-    if (detail.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
-      setError("Solo admin e super admin possono modificare pagamenti su una pratica chiusa.");
-      return;
+  async function savePayments(nextPayments: PracticePaymentsState, reason = ""): Promise<boolean> {
+    if (!detail?.lead.id || paymentSavingRef.current) return false;
+    if ([PRACTICE_CLOSED_STATUS, PRACTICE_READY_STATUS].includes(detail.lead.status) && !isAdmin) {
+      setError("Questa pratica e riservata alla supervisione admin.");
+      return false;
     }
+    paymentSavingRef.current = true;
     setBusy(true);
     setError("");
     try {
-      const updatedLead = await api<Lead>(`/api/leads/${detail.lead.id}`, {
+      const updatedLead = await api<Lead>("/api/leads/" + detail.lead.id, {
         method: "PATCH",
-        body: JSON.stringify({
-          payments: nextPayments,
-          actor: "operatore pratica"
-        })
+        body: JSON.stringify({ payments: { ...nextPayments, version: paymentsDraft.version || 0 }, paymentReason: reason })
       });
       const normalized = normalizePayments(updatedLead.payments);
-      const relatedDocuments = normalizeDocuments(detail?.lead.documents || documentsDraft);
+      const relatedDocuments = normalizeDocuments(detail.lead.documents || documentsDraft);
       setPaymentsDraft(normalized);
-      setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, payments: normalized } } : prev));
+      setDetail(prev => prev ? { ...prev, lead: { ...prev.lead, payments: normalized } } : prev);
       await syncPracticeCompletionState(updatedLead.status || detail.lead.status, relatedDocuments, normalized);
       await load();
+      return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore salvataggio pagamenti.");
+      const message = e instanceof Error ? e.message : "Errore salvataggio pagamenti.";
+      setError(message);
+      setAmountsError(message);
+      return false;
     } finally {
+      paymentSavingRef.current = false;
       setBusy(false);
     }
   }
@@ -1701,8 +1756,53 @@ export function PraticaDetailPage() {
           : item
       )
     };
-    setPaymentsDraft(nextPayments);
     void savePayments(nextPayments);
+  }
+
+  // "Modifica importi": the operator sets the practice total and the deposit; the balance is
+  // always total - deposit, so the two rates can never disagree with the total.
+  function openAmountsEditor() {
+    const deposit = paymentsState.items.find((item) => item.id === "payment_deposit");
+    const balance = paymentsState.items.find((item) => item.id === "payment_balance");
+    const total = paymentsState.items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    setAmountsEditor({
+      total: total ? String(total) : "",
+      deposit: deposit?.amount ? String(deposit.amount) : "",
+      depositDue: toDateInputValue(deposit?.dueAt),
+      balanceDue: toDateInputValue(balance?.dueAt)
+    });
+    setAmountsError("");
+    setAmountsReason("");
+  }
+
+  async function saveAmounts(event: FormEvent) {
+    event.preventDefault();
+    if (!amountsEditor || paymentSavingRef.current) return;
+    const total = parseEuroAmount(amountsEditor.total);
+    const deposit = amountsEditor.deposit.trim() ? parseEuroAmount(amountsEditor.deposit) : 0;
+    if (!Number.isFinite(total) || total <= 0) {
+      setAmountsError("Inserisci un totale maggiore di zero.");
+      return;
+    }
+    if (!Number.isFinite(deposit) || deposit < 0 || deposit > total) {
+      setAmountsError("L'acconto deve essere compreso tra 0 e il totale.");
+      return;
+    }
+    const balance = Math.round((total - deposit) * 100) / 100;
+    const now = new Date().toISOString();
+    const nextPayments = {
+      total,
+      items: paymentsDraft.items.map((item) => {
+        if (item.id === "payment_deposit") {
+          return { ...item, amount: deposit, required: deposit > 0, dueAt: fromDateInputValue(amountsEditor.depositDue, item.dueAt), updatedAt: now };
+        }
+        if (item.id === "payment_balance") {
+          return { ...item, amount: balance, required: balance > 0, dueAt: fromDateInputValue(amountsEditor.balanceDue, item.dueAt), updatedAt: now };
+        }
+        return item;
+      })
+    };
+    if (await savePayments(nextPayments, amountsReason)) setAmountsEditor(null);
   }
 
   async function updatePaymentStatus(item: PracticePaymentItem, status: PaymentStatus) {
@@ -1712,25 +1812,7 @@ export function PraticaDetailPage() {
     }
     const now = new Date().toISOString();
     if (status === "pending") {
-      setReopenedPaymentId(item.id);
-      window.setTimeout(() => {
-        setReopenedPaymentId((current) => (current === item.id ? null : current));
-      }, 1400);
-      const nextPayments = {
-        items: paymentsDraft.items.map((current) =>
-          current.id === item.id
-            ? {
-                ...current,
-                status,
-                receivedAt: undefined,
-                verifiedAt: undefined,
-                updatedAt: new Date().toISOString()
-              }
-            : current
-        )
-      };
-      setPaymentsDraft(nextPayments);
-      await savePayments(nextPayments);
+      setError("Un incasso registrato richiede una rettifica esplicita: non puo essere riaperto.");
       return;
     }
     if (status === "received") {
@@ -1962,19 +2044,15 @@ export function PraticaDetailPage() {
     [paymentsState]
   );
   const paymentsBadge = useMemo(() => getPaymentsBadge(paymentsState), [paymentsState]);
-  const totalRequiredPayments = useMemo(
-    () => paymentsState.items.filter((item) => item.required).reduce((sum, item) => sum + Number(item.amount || 0), 0),
-    [paymentsState]
-  );
-  const totalPaidPayments = useMemo(
-    () =>
-      paymentsState.items
-        .filter((item) => item.required && item.status !== "pending")
-        .reduce((sum, item) => sum + Number(item.amount || 0), 0),
-    [paymentsState]
-  );
-  const totalRemainingPayments = Math.max(0, totalRequiredPayments - totalPaidPayments);
-  const paymentProgress = totalRequiredPayments > 0 ? Math.min(100, Math.round((totalPaidPayments / totalRequiredPayments) * 100)) : 0;
+  const practiceTotal = paymentsState.items.reduce((sum, item) => sum + Math.round(Number(item.amount || 0) * 100), 0) / 100;
+  const totalRequiredPayments = practiceTotal;
+  const totalPaidPayments = paymentsState.items.reduce((sum, item) => sum + Math.round(Number(item.receivedAmount || 0) * 100), 0) / 100;
+  const totalRemainingPayments = Math.max(0, Math.round((practiceTotal - totalPaidPayments) * 100)) / 100;
+  const paymentProgress = practiceTotal > 0 ? Math.min(100, Math.round(totalPaidPayments / practiceTotal * 100)) : 0;
+  const depositAmountLocked = paymentsState.items.some(item => item.id === "payment_deposit" && (item.status !== "pending" || Number(item.receivedAmount) > 0));
+  const balanceAmountLocked = paymentsState.items.some(item => item.id === "payment_balance" && (item.status !== "pending" || Number(item.receivedAmount) > 0));
+  const legacyPaymentPlan = paymentsState.items.some(item => !DEFAULT_PAYMENTS.some(base => base.id === item.id));
+  const paymentReadOnly = legacyPaymentPlan || (!isAdmin && [PRACTICE_READY_STATUS, PRACTICE_CLOSED_STATUS].includes(detail?.lead.status || ""));
   const showPaymentsOk = useMemo(
     () => paymentsState.items.some((item) => item.required) && paymentsState.items.every((item) => !item.required || item.status !== "pending"),
     [paymentsState]
@@ -2511,14 +2589,79 @@ export function PraticaDetailPage() {
                 <div>
                   <h5>Pagamenti pratica</h5>
                   <p className="pd-payments-subtitle">
-                    {showPaymentsOk
+                    {!practiceTotal
+                      ? "Totale da definire: imposta l'importo concordato con il cliente."
+                      : showPaymentsOk
                       ? "Tutti i pagamenti sono in ordine."
                       : pendingPayments.length
                       ? `${pendingPayments.length} rate mancanti - ${paymentsBadge.amountText}`
                       : `${paymentsBadge.amountText}`}
                   </p>
                 </div>
+                {legacyPaymentPlan ? <p className="pd-amounts-lock" role="status">Piano storico non standard conservato: modifica pagamenti non disponibile.</p> : null}
+                {!amountsEditor ? (
+                  <button type="button" className="pd-payments-edit" disabled={busy || paymentReadOnly} onClick={openAmountsEditor}>
+                    {practiceTotal ? "Modifica importi" : "Imposta totale"}
+                  </button>
+                ) : null}
               </div>
+              {amountsEditor ? (
+                <form className="pd-amounts-editor" onSubmit={(event) => void saveAmounts(event)} aria-label="Modifica importi pratica">
+                  <div className="pd-amounts-grid">
+                    <label>
+                      <span>Totale pratica (€)</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        autoFocus
+                        required
+                        disabled={busy || paymentReadOnly || balanceAmountLocked}
+                        value={amountsEditor.total}
+                        onChange={(event) => setAmountsEditor({ ...amountsEditor, total: event.target.value })}
+                        placeholder="es. 2.450"
+                      />
+                    </label>
+                    <label>
+                      <span>Acconto (€)</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        disabled={busy || paymentReadOnly || depositAmountLocked || balanceAmountLocked}
+                        value={amountsEditor.deposit}
+                        onChange={(event) => setAmountsEditor({ ...amountsEditor, deposit: event.target.value })}
+                        placeholder="0 se nessun acconto"
+                      />
+                    </label>
+                    <label>
+                      <span>Scadenza acconto</span>
+                      <input disabled={busy || paymentReadOnly} type="date" value={amountsEditor.depositDue} onChange={(event) => setAmountsEditor({ ...amountsEditor, depositDue: event.target.value })} />
+                    </label>
+                    <label>
+                      <span>Scadenza saldo</span>
+                      <input disabled={busy || paymentReadOnly} type="date" value={amountsEditor.balanceDue} onChange={(event) => setAmountsEditor({ ...amountsEditor, balanceDue: event.target.value })} />
+                    </label>
+                  </div>
+                  {depositAmountLocked ? <p className="pd-amounts-lock" role="status">Acconto bloccato: importo gia ricevuto o verificato.</p> : null}
+                  {balanceAmountLocked ? <p className="pd-amounts-lock" role="status">Saldo bloccato: rata gia ricevuta o verificata. Totale e acconto non modificabili.</p> : null}
+                  <label className="pd-amounts-reason"><span>Motivo modifica (facoltativo)</span><input value={amountsReason} maxLength={1000} disabled={busy || paymentReadOnly} onChange={event => setAmountsReason(event.target.value)} /></label>
+                  <p className="pd-amounts-balance">
+                    Saldo: <strong>{formatAmountsEditorBalance(amountsEditor)}</strong>
+                  </p>
+                  {amountsError ? (
+                    <p className="pd-amounts-error" role="alert">
+                      {amountsError}
+                    </p>
+                  ) : null}
+                  <div className="pd-amounts-actions">
+                    <button type="button" className="pd-amounts-cancel" disabled={busy} onClick={() => setAmountsEditor(null)}>
+                      Annulla
+                    </button>
+                    <button type="submit" className="pd-amounts-save" disabled={busy || paymentReadOnly}>
+                      Salva importi
+                    </button>
+                  </div>
+                </form>
+              ) : null}
               <div className={`pd-payments-summary-card ${reopenedPaymentId ? "is-reopened" : ""}`}>
                 {showPaymentsOk ? (
                   <div className="pd-payments-ok" aria-live="polite">
@@ -2545,7 +2688,7 @@ export function PraticaDetailPage() {
                     <div className="pd-payments-summary">
                       <article>
                         <span>Totale pratica</span>
-                        <strong>{formatCurrency(totalRequiredPayments)}</strong>
+                        <strong>{practiceTotal ? formatCurrency(practiceTotal) : "Da definire"}</strong>
                       </article>
                       <article>
                         <span>Pagato</span>
@@ -2574,7 +2717,7 @@ export function PraticaDetailPage() {
                 }`}
                 aria-live="polite"
               >
-                <strong>{pendingPayments.length ? `Pagamenti in sospeso (${pendingPayments.length})` : "Pagamenti completi"}</strong>
+                <strong>{!practiceTotal ? "Importi da definire" : pendingPayments.length ? `Pagamenti in sospeso (${pendingPayments.length})` : "Pagamenti completi"}</strong>
                 <span>
                   {pendingPayments.length
                     ? "Richiedi il pagamento o verifica quelli ricevuti per sbloccare la pratica."
@@ -2600,7 +2743,7 @@ export function PraticaDetailPage() {
                       <div className="pd-payment-main">
                         <div className="pd-payment-title-row">
                           <strong>{item.label}</strong>
-                          <span className="pd-payment-amount">{formatCurrency(item.amount)}</span>
+                          <span className="pd-payment-amount">{item.amount ? formatCurrency(item.amount) : "Da definire"}</span>
                         </div>
                       </div>
                       <div className="pd-payment-meta">
@@ -2611,16 +2754,26 @@ export function PraticaDetailPage() {
                       </div>
                       <span className={`pd-payment-status pd-payment-status-${item.status}`}>{getPaymentStatusLabel(item.status)}</span>
                       <div className="pd-payment-actions">
+                        {item.status === "pending" && item.amount > 0 ? (
+                          <button
+                            type="button"
+                            className="pd-payment-paid"
+                            disabled={busy || paymentReadOnly}
+                            onClick={() => void updatePaymentStatus(item, "received")}
+                          >
+                            Segna pagato
+                          </button>
+                        ) : null}
                         <details className="pd-payment-menu">
                           <summary className="pd-payment-menu-trigger">Azioni</summary>
                           <div className="pd-payment-menu-list">
-                            {item.status === "pending" ? (
-                               <button type="button" className="pd-payment-menu-item" disabled={busy || isClosedReadOnly} onClick={() => void updatePaymentStatus(item, "received")}>
+                            {item.status === "pending" && item.amount > 0 ? (
+                               <button type="button" className="pd-payment-menu-item" disabled={busy || paymentReadOnly} onClick={() => void updatePaymentStatus(item, "received")}>
                                 Segna ricevuto
                               </button>
                             ) : null}
                             {item.status === "pending" ? (
-                               <button type="button" className="pd-payment-menu-item" disabled={busy || isClosedReadOnly} onClick={() => postponePayment(item, 1)}>
+                               <button type="button" className="pd-payment-menu-item" disabled={busy || paymentReadOnly} onClick={() => postponePayment(item, 1)}>
                                 Posticipa +1 giorno
                               </button>
                             ) : null}
@@ -2629,13 +2782,13 @@ export function PraticaDetailPage() {
                                 Chiama cliente
                               </button>
                             ) : null}
-                            {item.status !== "verified" ? (
-                               <button type="button" className="pd-payment-menu-item" disabled={busy || isClosedReadOnly} onClick={() => void updatePaymentStatus(item, "verified")}>
+                            {item.status !== "verified" && item.amount > 0 ? (
+                               <button type="button" className="pd-payment-menu-item" disabled={busy || paymentReadOnly} onClick={() => void updatePaymentStatus(item, "verified")}>
                                 Verifica
                               </button>
                             ) : null}
                             {item.status !== "pending" ? (
-                               <button type="button" className="pd-payment-menu-item" disabled={busy || isClosedReadOnly} onClick={() => void updatePaymentStatus(item, "pending")}>
+                               <button type="button" className="pd-payment-menu-item" disabled title="Incasso registrato: serve una rettifica esplicita" onClick={() => void updatePaymentStatus(item, "pending")}>
                                 Riapri pagamento
                               </button>
                             ) : null}

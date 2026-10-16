@@ -1,3 +1,4 @@
+import { normalizePaymentPlan, initializePaymentPlan, changePaymentPlan, PaymentError } from "../common/paymentPlan";
 import "../../loadEnv";
 import http from "http";
 import { applyStatusAutomation, createActivity } from "../common/automation";
@@ -14,7 +15,8 @@ import {
   newId,
   normalizeEmail,
   normalizePhone,
-  saveLead
+  saveLead,
+  savePaymentPlan
 } from "../common/leadStore";
 import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listAllCallLogs, listCallLogs, listCallLogsByLeadId } from "../common/callStore";
 import { createTask, findRecentManualDuplicate, getTaskById, listTasks, listTasksByLeadAndKind, saveTask, TaskRecord } from "../common/taskStore";
@@ -384,7 +386,7 @@ function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
     metaEventSync: lead.metaEventSync || null,
     practiceReview: lead.practiceReview || null,
     documents: compactLeadDocumentsForResponse(lead.documents, options),
-    payments: lead.payments || { items: [] },
+    payments: normalizePracticePayments(lead.payments),
     latestCallOutcome: lead.latestCallOutcome || null,
     latestCallAt: lead.latestCallAt || null,
     callAttempts: lead.callAttempts || 0,
@@ -406,9 +408,11 @@ const DEFAULT_DOCUMENT_ITEMS = [
   { key: "deposit_payment", label: "Conferma pagamento acconto" }
 ];
 
+// Amounts start at 0 ("da definire"): the operator sets the practice total and deposit from the
+// practice page. A placeholder price would read as a real quote.
 const DEFAULT_PAYMENT_ITEMS = [
-  { id: "payment_deposit", label: "Acconto", amount: 300, dueAtOffsetDays: 0 },
-  { id: "payment_balance", label: "Saldo", amount: 900, dueAtOffsetDays: 30 }
+  { id: "payment_deposit", label: "Acconto", amount: 0, dueAtOffsetDays: 0 },
+  { id: "payment_balance", label: "Saldo", amount: 0, dueAtOffsetDays: 30 }
 ];
 
 export function normalizePracticeDocuments(input: any) {
@@ -457,37 +461,7 @@ export function getMissingDocuments(lead: any) {
 }
 
 export function normalizePracticePayments(input: any) {
-  const byId = new Map<string, any>();
-  const rows = Array.isArray(input?.items) ? input.items : [];
-  rows.forEach((item: any) => {
-    const id = String(item?.id || "").trim();
-    if (!id) return;
-    byId.set(id, item);
-  });
-
-  const now = new Date();
-
-  return {
-    items: DEFAULT_PAYMENT_ITEMS.map((base) => {
-      const existing = byId.get(base.id) || {};
-      const dueAtFallback = new Date(now);
-      dueAtFallback.setDate(dueAtFallback.getDate() + base.dueAtOffsetDays);
-      dueAtFallback.setHours(12, 0, 0, 0);
-      return {
-        id: base.id,
-        label: String(existing.label || base.label),
-        amount: Number(existing.amount ?? base.amount),
-        status: String(existing.status || "pending"),
-        dueAt: existing.dueAt ? String(existing.dueAt) : dueAtFallback.toISOString(),
-        receivedAt: existing.receivedAt ? String(existing.receivedAt) : undefined,
-        verifiedAt: existing.verifiedAt ? String(existing.verifiedAt) : undefined,
-        method: String(existing.method || ""),
-        note: String(existing.note || ""),
-        required: existing.required !== undefined ? Boolean(existing.required) : true,
-        updatedAt: existing.updatedAt ? String(existing.updatedAt) : undefined
-      };
-    })
-  };
+  return normalizePaymentPlan(input, DEFAULT_PAYMENT_ITEMS);
 }
 
 export function getPendingPayments(lead: any) {
@@ -1428,6 +1402,27 @@ async function handleCallEvent(body: any) {
   return { ok: true, matched: true, leadId: lead.id };
 }
 
+async function applyPaymentRequest(res: http.ServerResponse, lead: any, body: any, paymentId?: string) {
+  const actor = body.__paymentActor;
+  if (!actor?.id || !actor?.username) throw new PaymentError(401, "Sessione pagamenti richiesta.");
+  if (!["admin", "super_admin"].includes(actor.role) && ["Pronta per chiusura", "Chiusa 100%"].includes(lead.status)) throw new PaymentError(403, "Questa pratica e riservata alla supervisione admin.");
+  const previous = normalizePracticePayments(lead.payments);
+  let incoming = body.payments;
+  if (paymentId) {
+    if (!previous.items.some((row: any) => row.id === paymentId)) throw new PaymentError(404, "Pagamento non trovato.");
+    if (Object.prototype.hasOwnProperty.call(body, "amount")) throw new PaymentError(400, "Modifica totale e acconto dall'editor importi.");
+    incoming = { items: previous.items.map((row: any) => row.id === paymentId ? { ...row, ...Object.fromEntries(["status", "dueAt", "method", "note"].filter(key => Object.prototype.hasOwnProperty.call(body, key)).map(key => [key, body[key]])) } : row), ...(body.version !== undefined ? { version: body.version } : {}) };
+  }
+  const update = changePaymentPlan(previous, incoming, actor, body.paymentReason);
+  if (!update.changed) return sendJson(res, 200, safeLead(lead));
+  const activity = createActivity({ leadId: lead.id, type: "payments_updated", text: "Pagamenti pratica aggiornati.", actor: actor.username,
+    meta: { paymentVersion: update.plan.version, changes: update.changes, reason: String(body.paymentReason || "").trim(), userId: actor.id } });
+  const saved = await savePaymentPlan(lead.id, previous.version, update.plan, activity, lead.status);
+  if (!saved) throw new PaymentError(409, "Pagamenti modificati contemporaneamente. Ricarica la pratica.");
+  await syncPaymentChecklistTask(saved);
+  return sendJson(res, 200, safeLead(saved));
+}
+
 export const server = http.createServer(async (req, res) => {
   try {
     const method = req.method || "GET";
@@ -1531,6 +1526,7 @@ export const server = http.createServer(async (req, res) => {
 
     if (method === "POST" && pathname === "/leads") {
       const body = await parseBody(req);
+      initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS); // validate before customer/lead mutations
       if (!body.fullName || !body.phone) return sendJson(res, 400, { error: "fullName e phone sono obbligatori." });
       const existing = await findLeadByContact(String(body.phone || ""), String(body.email || ""));
       if (existing && !isTerminalClosingOutcome(existing)) {
@@ -1617,7 +1613,7 @@ export const server = http.createServer(async (req, res) => {
         customerId: contactCustomer?.id || null,
         practiceReview: null,
         documents: normalizePracticeDocuments(body.documents),
-        payments: normalizePracticePayments(body.payments),
+        payments: initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS),
         callAttempts: 0,
         nextActionAt: null,
         createdAt: now,
@@ -1652,6 +1648,7 @@ export const server = http.createServer(async (req, res) => {
 
     if (method === "POST" && pathname === "/internal/ingest") {
       const body = await parseBody(req);
+      initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS); // validate before customer/lead mutations
       const source = String(body.source || "ingest").trim();
       const fullName = String(body.fullName || "").trim();
       const phone = String(body.phone || "").trim();
@@ -1706,7 +1703,7 @@ export const server = http.createServer(async (req, res) => {
         customerId: contactCustomer?.id || null,
         practiceReview: null,
         documents: normalizePracticeDocuments(body.documents),
-        payments: normalizePracticePayments(body.payments),
+        payments: initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS),
         callAttempts: 0,
         nextActionAt: null,
         createdAt: now,
@@ -1863,6 +1860,11 @@ export const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const lead = await getLeadById(leadByIdParams.leadId);
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+      if (Object.prototype.hasOwnProperty.call(body, "payments")) {
+        const allowed = new Set(["payments", "actor", "paymentReason", "__paymentActor"]);
+        if (Object.keys(body).some(key => !allowed.has(key))) throw new PaymentError(400, "Salva i pagamenti separatamente dagli altri dati della pratica.");
+        return await applyPaymentRequest(res, lead, body);
+      }
       const previousAssignedTo = String(lead.assignedTo || "").trim();
       const previousNotes = String(lead.notes || "");
       // Validate before any mutation: a rejected PATCH must have zero side effects.
@@ -1941,7 +1943,6 @@ export const server = http.createServer(async (req, res) => {
         }
       const hasNotesUpdate = Object.prototype.hasOwnProperty.call(body, "notes");
       const hasDocumentsUpdate = Object.prototype.hasOwnProperty.call(body, "documents");
-      const hasPaymentsUpdate = Object.prototype.hasOwnProperty.call(body, "payments");
       const hasLeadFieldUpdate =
         ["fullName", "phone", "email", "source", "budget", "assignedTo"].some((key) => Object.prototype.hasOwnProperty.call(body, key)) ||
         ["sourceLeadId", "sourcePlatform", "sourceCampaignId", "sourceFormId", "assignedAt", "firstContactAt", "lastContactAt", "slaDueAt", "practiceReview", "closingOutcome", "lossReason", "lossDetail"].some((key) =>
@@ -1963,31 +1964,16 @@ export const server = http.createServer(async (req, res) => {
         });
         lead.documents = incomingDocuments;
       }
-      if (Object.prototype.hasOwnProperty.call(body, "payments")) {
-        lead.payments = normalizePracticePayments(body.payments);
-      }
       lead.updatedAt = new Date().toISOString();
       await saveLead(lead);
       if (Object.prototype.hasOwnProperty.call(body, "documents")) {
         await syncDocumentChecklistTask(lead);
       }
-      if (Object.prototype.hasOwnProperty.call(body, "payments")) {
-        await syncPaymentChecklistTask(lead);
-      }
       if (Object.prototype.hasOwnProperty.call(body, "assignedTo")) {
         await syncPostSaleTasks(lead, "lead_patch");
       }
       const activities = [];
-      if (hasPaymentsUpdate) {
-        activities.push(
-          createActivity({
-            leadId: lead.id,
-            type: "payments_updated",
-            text: "Pagamenti pratica aggiornati.",
-            actor: body.actor || "system"
-          })
-        );
-      } else if (hasDocumentsUpdate) {
+      if (hasDocumentsUpdate) {
         activities.push(
           createActivity({
             leadId: lead.id,
@@ -2013,7 +1999,7 @@ export const server = http.createServer(async (req, res) => {
         }
       }
 
-      if (!hasDocumentsUpdate && !hasPaymentsUpdate && hasLeadFieldUpdate) {
+      if (!hasDocumentsUpdate && hasLeadFieldUpdate) {
         activities.push(
           createActivity({
             leadId: lead.id,
@@ -2074,39 +2060,7 @@ export const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const lead = await getLeadById(paymentParams.leadId);
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
-      const payments = normalizePracticePayments(lead.payments);
-      const paymentId = String(paymentParams.paymentId || "");
-      const allowedStatuses = new Set(["pending", "received", "verified"]);
-      const now = new Date().toISOString();
-      let found = false;
-      payments.items = payments.items.map((item) => {
-        if (String(item.id) !== paymentId) return item;
-        found = true;
-        const nextStatus = allowedStatuses.has(String(body.status || "")) ? String(body.status) : item.status;
-        return {
-          ...item,
-          status: nextStatus,
-          receivedAt: nextStatus === "received" || nextStatus === "verified" ? item.receivedAt || now : item.receivedAt,
-          verifiedAt: nextStatus === "verified" ? item.verifiedAt || now : item.verifiedAt,
-          method: Object.prototype.hasOwnProperty.call(body, "method") ? String(body.method || "") : item.method,
-          note: Object.prototype.hasOwnProperty.call(body, "note") ? String(body.note || "") : item.note,
-          updatedAt: now
-        };
-      });
-      if (!found) return sendJson(res, 404, { error: "Pagamento non trovato." });
-      lead.payments = payments;
-      lead.updatedAt = now;
-      await saveLead(lead);
-      await syncPaymentChecklistTask(lead);
-      await appendActivities([
-        createActivity({
-          leadId: lead.id,
-          type: "payments_updated",
-          text: "Pagamento pratica aggiornato.",
-          actor: body.actor || "chat"
-        })
-      ]);
-      return sendJson(res, 200, safeLead(lead));
+      return await applyPaymentRequest(res, lead, body, paymentParams.paymentId);
     }
 
     const statusParams = routeMatch(pathname, "/leads/:leadId/status");
@@ -2359,7 +2313,7 @@ export const server = http.createServer(async (req, res) => {
     if (await tryHandleCustomerRoutes(method, pathname, req, res)) return;
     return sendJson(res, 404, { error: "Endpoint non trovato." });
   } catch (error: any) {
-    return sendJson(res, 500, { error: error.message || "Errore interno." });
+    return sendJson(res, error instanceof PaymentError ? error.status : 500, { error: error.message || "Errore interno." });
   }
 });
 

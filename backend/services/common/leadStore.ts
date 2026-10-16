@@ -106,12 +106,26 @@ export async function saveLead(lead: any) {
     const db = readDb();
     const index = db.leads.findIndex((item: any) => item.id === lead.id);
     if (index === -1) return null;
+    if (Number(db.leads[index].payments?.version || 0) > Number(lead.payments?.version || 0)) {
+      lead.payments = db.leads[index].payments;
+    }
     db.leads[index] = lead;
     writeDb(db);
     return lead;
   }
   const database = await getMongoDb();
-  await database.collection("leads").replaceOne({ _id: lead.id }, toLeadDoc(lead), { upsert: false });
+  const collection = database.collection("leads");
+  const version = Number(lead.payments?.version || 0);
+  const filter: any = { _id: lead.id };
+  if (version === 0) filter.$or = [{ "payments.version": 0 }, { "payments.version": { $exists: false } }];
+  else filter["payments.version"] = version;
+  const result = await collection.replaceOne(filter, toLeadDoc(lead), { upsert: false });
+  if (!result.matchedCount) {
+    // An ordinary lead edit must never roll back a newer payment ledger/audit.
+    const { _id, payments, ...otherFields } = toLeadDoc(lead);
+    await collection.updateOne({ _id: lead.id }, { $set: otherFields });
+    return getLeadById(lead.id);
+  }
   return lead;
 }
 
@@ -161,3 +175,27 @@ export async function findLeadByExternalOrPhone(externalId: string | null, incom
 }
 
 export { newId };
+
+/** Compare-and-set only the payment plan. Audit is embedded in the same atomic plan write. */
+export async function savePaymentPlan(leadId: string, expectedVersion: number, payments: any, activity: any, expectedStatus?: string) {
+  const now = new Date().toISOString();
+  if (!isMongoEnabled()) {
+    const db = readDb();
+    const lead = db.leads.find((row: any) => row.id === leadId);
+    if (!lead || Number(lead.payments?.version || 0) !== expectedVersion || (expectedStatus !== undefined && lead.status !== expectedStatus)) return null;
+    lead.payments = payments;
+    lead.updatedAt = now;
+    db.activities.push(activity);
+    writeDb(db);
+    return lead;
+  }
+  const db = await getMongoDb();
+  const filter: any = { _id: leadId };
+  if (expectedStatus !== undefined) filter.status = expectedStatus;
+  if (expectedVersion === 0) filter.$or = [{ "payments.version": 0 }, { "payments.version": { $exists: false } }];
+  else filter["payments.version"] = expectedVersion;
+  const updated = await db.collection("leads").updateOne(filter, { $set: { payments, updatedAt: now } });
+  if (!updated.matchedCount) return null;
+  await db.collection("activities").insertOne(activity);
+  return getLeadById(leadId);
+}

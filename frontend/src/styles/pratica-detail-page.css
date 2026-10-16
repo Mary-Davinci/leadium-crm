@@ -1426,6 +1426,123 @@
   margin-bottom: 12px;
 }
 
+.pd-payments-edit,
+.pd-payment-paid,
+.pd-amounts-cancel,
+.pd-amounts-save {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid #dce5f2;
+  background: #ffffff;
+  color: #28518c;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pd-payments-edit:hover:not(:disabled),
+.pd-amounts-cancel:hover:not(:disabled) {
+  background: #f3f7fd;
+  border-color: #c3d3ea;
+}
+
+.pd-payment-paid,
+.pd-amounts-save {
+  border-color: #1f6fd1;
+  background: #1f6fd1;
+  color: #ffffff;
+}
+
+.pd-payment-paid:hover:not(:disabled),
+.pd-amounts-save:hover:not(:disabled) {
+  background: #175bb0;
+}
+
+.pd-payments-edit:disabled,
+.pd-payment-paid:disabled,
+.pd-amounts-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pd-payments-edit:focus-visible,
+.pd-payment-paid:focus-visible,
+.pd-amounts-cancel:focus-visible,
+.pd-amounts-save:focus-visible,
+.pd-amounts-editor input:focus-visible {
+  outline: 2px solid #1f6fd1;
+  outline-offset: 2px;
+}
+
+.pd-amounts-editor {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #dce5f2;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.pd-amounts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pd-amounts-grid label {
+  display: grid;
+  gap: 4px;
+  color: #5f7595;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pd-amounts-grid input {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #dce5f2;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1c355e;
+  font: inherit;
+  font-size: 13px;
+}
+
+.pd-amounts-balance,
+.pd-amounts-error {
+  margin: 0;
+  font-size: 12px;
+}
+
+.pd-amounts-balance {
+  color: #5f7595;
+}
+
+.pd-amounts-balance strong {
+  color: #1c355e;
+}
+
+.pd-amounts-error {
+  color: #b42318;
+  font-weight: 700;
+}
+
+.pd-amounts-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .pd-amounts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .pd-payments-head h5 {
   margin-bottom: 2px;
   color: #28518c;
@@ -3480,3 +3597,11 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
   color: var(--text-strong, #213b62);
   font-size: 13px;
 }
+
+/* Payment editor: preserve control width and explain accounting locks. */
+.pd-amounts-editor { min-width: 0; }
+.pd-amounts-grid > label, .pd-amounts-reason { min-width: 0; display: grid; gap: 4px; }
+.pd-amounts-grid input, .pd-amounts-reason input { width: 100%; min-width: 0; box-sizing: border-box; }
+.pd-amounts-editor input:disabled { opacity: .7; cursor: not-allowed; }
+.pd-amounts-lock { margin: 0; color: #5f7595; font-size: 12px; overflow-wrap: anywhere; }
+.pd-amounts-actions { flex-wrap: wrap; }
