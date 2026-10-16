@@ -6,6 +6,7 @@ import path from "node:path";
 import { ThreeCxMonitor, monitorConfig } from "./threecx-monitor";
 import { classifyMonitoredDn, emptyMonitorState, finalizeCalls, MonitorState, observeParticipant, removeParticipant, MONITORED_DNS } from "./threecx-normalizer";
 import { createMonitorStore, MonitorStore } from "./threecx-store";
+import { ThreeCxDeviceDiagnostics } from "./threecx-device-diagnostics";
 import * as mongo from "../common/mongo";
 
 process.env.NODE_ENV = "test";
@@ -25,8 +26,9 @@ async function until(test: () => boolean, label: string) {
 }
 async function test(name: string, run: () => Promise<void> | void) { await run(); count++; console.log("PASS " + name); }
 class MemoryStore implements MonitorStore {
-  state = emptyMonitorState(); owner = false; saves = 0;
+  state = emptyMonitorState(); owner = false; saves = 0; renewals = 0;
   async claim() { if (this.owner) return null; this.owner = true; return clone(this.state); }
+  async renew() { assert.ok(this.owner); this.renewals++; }
   async save(state: MonitorState) { assert.ok(this.owner); this.state = clone({ ...state, finals: { ...this.state.finals, ...state.finals } }); this.saves++; }
   async release() { this.owner = false; }
   async hasFinal(id: string) { return Boolean(this.state.finals[id]); }
@@ -37,7 +39,7 @@ class FakeSocket extends EventEmitter {
   terminate() { if (!this.terminated) { this.terminated = true; this.readyState = 3; this.emit("close"); } }
   ping() { this.pings++; this.emit("pong"); }
 }
-function fixture(options: { authStatus?: number; deniedDn?: string; reportedDnTypes?: Record<string, unknown>; reportedDevices?: Record<string, unknown>; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
+function fixture(options: { socketFailure?: boolean; authStatus?: number; deniedDn?: string; reportedDnTypes?: Record<string, unknown>; reportedDevices?: Record<string, unknown>; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
   let time = Date.parse("2026-10-16T10:00:00Z"), sequence = 0;
   const requests: Array<{ path: string; method: string }> = [];
   const sockets: FakeSocket[] = [], deliveries: any[] = [];
@@ -68,7 +70,7 @@ function fixture(options: { authStatus?: number; deniedDn?: string; reportedDnTy
     }) as typeof fetch,
     socket: (url, token) => {
       assert.equal(url, "wss://pbx.test:5001/callcontrol/ws"); assert.equal(token, TOKEN);
-      const socket = new FakeSocket(); sockets.push(socket); setImmediate(() => socket.emit("open")); return socket as any;
+      const socket = new FakeSocket(); sockets.push(socket); setImmediate(() => options.socketFailure ? socket.emit("error", new Error(SECRET + TOKEN)) : socket.emit("open")); return socket as any;
     },
     deliver: async event => { deliveries.push(clone(event)); await options.deliver?.(event); }
   });
@@ -123,13 +125,100 @@ async function main() {
   await test("auth failure has backoff, no socket and no credential/provider-body leakage", async () => {
     const f = fixture({ authStatus: 400 }); f.monitor.start();
     await until(() => f.requests.length >= 2, "auth retries");
+    assert.match(f.monitor.diagnostics().lastError!, /\[authentication_failed\]/);
     await f.monitor.stop(); assert.equal(f.sockets.length, 0); assert.ok(f.requests.length < 10);
     assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET)); assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(TOKEN));
   });
-  await test("IVR outside Service Principal permissions fails closed with a safe DN-specific error", async () => {
+  await test("WebSocket handshake failure is sanitized and reconnect succeeds after transient deploy failure", async () => {
+    const options = { socketFailure: true }; const f = fixture(options); f.monitor.start();
+    try {
+      await until(() => !!f.monitor.diagnostics().lastError?.includes("websocket_connect_failed"), "websocket stage");
+      assert.equal(f.monitor.diagnostics().lastConnectedAt, null);
+      assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
+      assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(TOKEN));
+      options.socketFailure = false;
+      await until(() => f.monitor.diagnostics().connected && f.store.saves > 1 && Object.keys(f.monitor.diagnostics().observedDnTypes).length === 8, "reconnected after deploy");
+      assert.equal(f.monitor.diagnostics().lastError, null);
+    } finally { await f.monitor.stop(); }
+  });
+  await test("checkpoint claim failure performs zero PBX requests then retries safely", async () => {
+    const store = new MemoryStore(); const claim = store.claim.bind(store); let blocked = true;
+    store.claim = async () => { if (blocked) throw new Error(SECRET + TOKEN); return claim(); };
+    const f = fixture({ store }); f.monitor.start();
+    try {
+      await until(() => !!f.monitor.diagnostics().lastError?.includes("checkpoint_claim_failed"), "claim stage");
+      assert.equal(f.requests.length, 0); assert.equal(f.sockets.length, 0);
+      assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
+      blocked = false; await until(() => f.monitor.diagnostics().connected && store.saves > 0, "claim recovered");
+    } finally { await f.monitor.stop(); }
+  });
+  await test("checkpoint save failure still releases ownership and reconnects", async () => {
+    const store = new MemoryStore(); const save = store.save.bind(store); let broken = true, releases = 0;
+    store.save = async state => { if (broken) throw new Error(SECRET + TOKEN); await save(state); };
+    store.release = async () => { releases++; store.owner = false; };
+    const f = fixture({ store }); f.monitor.start();
+    try {
+      await until(() => releases > 0, "failed save still releases");
+      assert.match(f.monitor.diagnostics().lastError!, /\[checkpoint_save_failed\]/);
+      assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
+      broken = false; await until(() => f.monitor.diagnostics().connected && store.saves > 0, "save recovered");
+    } finally { await f.monitor.stop(); }
+  });
+  await test("lost lease cannot open a WebSocket or start snapshot reads", async () => {
+    const store = new MemoryStore(); store.renew = async () => { throw new Error(SECRET + TOKEN); };
+    const f = fixture({ store }); f.monitor.start();
+    try {
+      await until(() => !!f.monitor.diagnostics().lastError?.includes("checkpoint_save_failed"), "renew failure");
+      assert.equal(f.sockets.length, 0); assert.ok(f.requests.every(row => row.path === "/connect/token"));
+      assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
+    } finally { await f.monitor.stop(); }
+  });
+  await test("initial reconcile parsing failure is distinct from auth and transport", async () => {
+    const f = fixture({ reportedDnTypes: { "901": 123 } }); f.monitor.start();
+    try {
+      await until(() => !!f.monitor.diagnostics().lastError?.includes("initial_reconcile_failed"), "initial stage");
+      assert.ok(f.monitor.diagnostics().lastConnectedAt); assert.equal(f.deliveries.length, 0);
+    } finally { await f.monitor.stop(); }
+  });
+  await test("device sanitizer exceptions are best-effort and participants continue normally", async () => {
+    const prototype = ThreeCxDeviceDiagnostics.prototype as any;
+    const previous = prototype.userAgent;
+    prototype.userAgent = () => { throw new Error(SECRET + TOKEN); };
+    const f = fixture({ reportedDevices: { "901": [{ device_id: "private", user_agent: "Fixture" }] } });
+    try {
+      await f.start(); assert.equal(f.monitor.diagnostics().connected, true);
+      assert.equal(f.monitor.diagnostics().observedDevices["901"], undefined);
+      await f.upsert("901", 1, 12345, "Ringing");
+      await f.upsert("901", 1, 12345, "Connected");
+      assert.equal(f.monitor.liveCalls()[0].callId, "12345");
+      assert.equal(f.monitor.diagnostics().lastError, null);
+    } finally { await f.monitor.stop(); prototype.userAgent = previous; }
+  });
+  await test("undefined/non-array/unexpected devices never prevent initial reconcile or participant processing", async () => {
+    for (const devices of [undefined, { malformed: true }, [{ device_id: 123 }]]) {
+      const f = fixture({ reportedDevices: { "901": devices } });
+      try {
+        await f.start(); assert.equal(f.monitor.diagnostics().connected, true);
+        assert.equal(f.monitor.diagnostics().observedDevices["901"], undefined);
+        await f.upsert("901", 1, 12346, "Ringing");
+        await f.upsert("901", 1, 12346, "Connected");
+        assert.equal(f.monitor.liveCalls()[0].callId, "12346"); assert.equal(f.monitor.diagnostics().lastError, null);
+        assert.ok(f.store.renewals >= f.requests.filter(row => row.method === "GET").length + 1, "renew/check ownership before socket and every PBX read during long snapshots");
+      } finally { await f.monitor.stop(); }
+    }
+  });
+  await test("post-connect transport failure has a sanitized category", async () => {
+    const f = fixture(); await f.start();
+    try {
+      f.sockets[0].emit("error", new Error(SECRET + TOKEN));
+      assert.match(f.monitor.diagnostics().lastError!, /\[monitor_transport_failed\]/);
+      assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
+    } finally { await f.monitor.stop(); }
+  });
+  await test("IVR outside Service Principal permissions fails closed with a safe initial reconcile error", async () => {
     const f = fixture({ deniedDn: "920" }); f.monitor.start();
     try {
-      await until(() => Boolean(f.monitor.diagnostics().lastError?.includes("DN 920 (HTTP 403)")), "permission diagnostic");
+      await until(() => Boolean(f.monitor.diagnostics().lastError?.includes("initial_reconcile_failed")), "permission diagnostic");
       assert.equal(f.deliveries.length, 0); assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
       assert.ok(f.requests.every(request => request.path === "/connect/token" || request.method === "GET"));
     } finally { await f.monitor.stop(); }
@@ -420,6 +509,20 @@ async function main() {
       assert.ok(await b.claim()); assert.equal(await b.hasFinal("native-id"), true); await b.release();
     } finally { if (fs.existsSync(file)) fs.unlinkSync(file); }
   });
+  await test("crashed owner's expired lease can be claimed but live lease cannot be stolen or renewed by old owner", async () => {
+    const file = path.join(os.tmpdir(), "leadium-3cx-expired-" + process.pid + ".json");
+    const a = createMonitorStore("https://pbx.test", file), b = createMonitorStore("https://pbx.test", file);
+    try {
+      assert.ok(await a.claim()); assert.equal(await b.claim(), null); await a.renew();
+      const row = JSON.parse(fs.readFileSync(file, "utf8")); row.leaseUntil = Date.now() - 1;
+      fs.writeFileSync(file, JSON.stringify(row));
+      await assert.rejects(a.renew(), /lease lost/);
+      assert.ok(await b.claim()); await b.renew();
+      await assert.rejects(a.save(emptyMonitorState()), /lease lost/);
+      await a.release(); assert.equal(await a.claim(), null, "old owner release cannot evict new owner");
+      await b.release(); assert.ok(await a.claim(), "graceful restart can claim immediately"); await a.release();
+    } finally { fs.rmSync(file, { force: true }); }
+  });
   await test("Mongo contract: exclusive lease, durable pending outbox, acknowledgement and native-id uniqueness", async () => {
     const oldEnabled = mongo.isMongoEnabled, oldDb = mongo.getMongoDb;
     let checkpoint: any = null;
@@ -445,12 +548,17 @@ async function main() {
     try {
       const a = createMonitorStore("https://mongo-pbx.test"), b = createMonitorStore("https://mongo-pbx.test");
       const state = await a.claim(); assert.ok(state); assert.equal(await b.claim(), null);
+      await a.renew();
       state.finals["123"] = { delivered: false, event: { callId: "123" } as any };
       await a.save(state); assert.deepEqual(checkpoint.state.finals, {}); assert.equal(finals.size, 1);
       await a.release(); const recovered = await b.claim(); assert.equal(recovered.finals["123"].delivered, false);
       assert.equal(await b.hasFinal("123"), true);
       recovered.finals["123"].delivered = true; await b.save(recovered); await b.release();
-      const reloaded = await a.claim(); assert.deepEqual(reloaded.finals, {}); assert.equal(await a.hasFinal("123"), true); assert.equal(finals.size, 1); await a.release();
+      const reloaded = await a.claim(); assert.deepEqual(reloaded.finals, {}); assert.equal(await a.hasFinal("123"), true); assert.equal(finals.size, 1);
+      checkpoint.leaseUntil = Date.now() - 1;
+      await assert.rejects(a.renew(), /lease lost/); assert.ok(await b.claim());
+      await assert.rejects(a.save(reloaded), /lease lost/); await a.release(); assert.equal(await a.claim(), null);
+      await b.release();
     } finally { (mongo as any).isMongoEnabled = oldEnabled; (mongo as any).getMongoDb = oldDb; }
   });
   await test("HTTP timeout and shutdown abort inflight auth; provider errors never reach logs", async () => {

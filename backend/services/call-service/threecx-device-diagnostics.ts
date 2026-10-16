@@ -6,6 +6,7 @@ type ObservedDevice = { deviceIdMasked: string; userAgent: string };
 export class ThreeCxDeviceDiagnostics {
   private salt = randomBytes(32);
   private devices = new Map<string, ObservedDevice[]>();
+  forget(dn: string) { this.devices.delete(dn); }
 
   observe(dn: string, value: unknown) {
     if (dn !== "901" && dn !== "913") return;

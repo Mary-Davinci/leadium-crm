@@ -133,6 +133,39 @@ Windows cannot certify actual Mac device integration or tenant mutation support.
 
 ## Final pre-commit audit
 
+### Monitor startup failure classification and checkpoint recovery
+
+The device-diagnostics commit does not change claim, OAuth or WebSocket setup. In that
+version lastConnectedAt is assigned before initial reconciliation; a null value therefore
+does not establish a device-parsing failure. The former generic catch cannot distinguish
+claim, authentication and handshake failures, so the actual production cause remains
+unconfirmed until the classified diagnostic is available on that instance.
+
+Only fixed local messages/codes reach lastError:
+
+| Code | Message |
+| --- | --- |
+| checkpoint_claim_failed | 3CX checkpoint unavailable |
+| authentication_failed | 3CX authentication failed |
+| websocket_connect_failed | 3CX WebSocket connection failed |
+| initial_reconcile_failed | 3CX initial reconcile failed |
+| checkpoint_save_failed | 3CX checkpoint unavailable |
+| monitor_transport_failed | 3CX monitoring transport failed |
+
+No provider error/body, URL, stack or credential is interpolated. Device projection is
+best-effort: missing/malformed data or a sanitizer exception omits the DN and does not
+interrupt participants. Initial snapshot failure still closes/retries the transport safely.
+
+The lease remains 45 seconds, owner-conditional and atomically acquired in Mongo. An old
+unexpired owner cannot be forcibly evicted; graceful shutdown releases it, while a crash
+requires expiry and backoff before takeover. Lease ownership is now renewed/checked before
+opening the socket and before each PBX read so a long multi-DN snapshot does not depend
+on one final save. Expired owners cannot renew/save, and releasing an old owner cannot
+evict its successor. Cleanup attempts release even when checkpoint save fails. This fixes
+pre-existing cleanup/long-snapshot risks without clearing checkpoints or outbox history.
+Local JSON's short filesystem lock still fails closed if abandoned by a crash; it is a
+development fallback, not a reason to steal a production Mongo lease or delete data.
+
 ### Device registration diagnostics (no makecall behavior change)
 
 Admin GET /api/3cx/diagnostics and the existing Calls admin panel expose observedDevices

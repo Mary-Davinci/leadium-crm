@@ -6,6 +6,7 @@ import { emptyMonitorState, MonitorState } from "./threecx-normalizer";
 
 export interface MonitorStore {
   claim(): Promise<MonitorState | null>;
+  renew(): Promise<void>;
   save(state: MonitorState): Promise<void>;
   hasFinal(callId: string): Promise<boolean>;
   release(): Promise<void>;
@@ -35,6 +36,18 @@ export function createMonitorStore(pbx: string, filename = path.join(__dirname, 
     } finally { fs.closeSync(lock); fs.unlinkSync(filename + ".lock"); }
   };
   return {
+    async renew() {
+      const now = Date.now();
+      if (!isMongoEnabled()) return local(row => {
+        if (row.owner !== owner || row.leaseUntil <= now) throw new Error("Monitor lease lost");
+        return { row: { ...row, leaseUntil: now + leaseMs }, result: undefined };
+      });
+      const db = await getMongoDb();
+      const result = await db.collection("threecxMonitor").updateOne(
+        { _id: id, owner, leaseUntil: { $gt: now } }, { $set: { leaseUntil: now + leaseMs } }
+      );
+      if (!result.matchedCount) throw new Error("Monitor lease lost");
+    },
     async claim() {
       const now = Date.now();
       if (!isMongoEnabled()) return local(row => {
