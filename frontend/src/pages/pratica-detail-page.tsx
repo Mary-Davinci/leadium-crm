@@ -874,7 +874,6 @@ export function PraticaDetailPage() {
   const [callbackReason, setCallbackReason] = useState("");
   const [callbackOperator, setCallbackOperator] = useState("");
   const [callLossReason, setCallLossReason] = useState("");
-  const [callModalForced, setCallModalForced] = useState(false);
   const [animationsReady, setAnimationsReady] = useState(false);
   const resolvedCallOutcome: CallOutcome = callConnection === "answered" ? answeredCallOutcome : callConnection;
 
@@ -916,7 +915,6 @@ export function PraticaDetailPage() {
 
   function resetCallModalState() {
     setCallModalOpen(false);
-    setCallModalForced(false);
     setCallSubmitting(false);
     setCallConnection("answered");
     setAnsweredCallOutcome("completed");
@@ -932,14 +930,13 @@ export function PraticaDetailPage() {
   }
 
   function closeCallOutcomeModal() {
-    if (callModalForced) return;
+    if (callSubmitting) return;
     resetCallModalState();
   }
 
-  function openCallOutcomeModal(callMeta?: { startedAt?: string; requestKey?: string; forced?: boolean }) {
+  function openCallOutcomeModal(callMeta?: { startedAt?: string; requestKey?: string }) {
     setCallModalOpen(true);
-    setCallModalForced(Boolean(callMeta?.forced));
-    setCallConnection(callMeta?.forced ? "no_answer" : "answered");
+    setCallConnection("answered");
     setAnsweredCallOutcome("completed");
     setCallNote("");
     setCallCreateFollowUp(false);
@@ -1877,21 +1874,13 @@ export function PraticaDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (loading || !detail?.lead) return;
-    if (detail.lead.secondAttemptPending && !callModalOpen) {
-      openCallOutcomeModal({ forced: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, detail?.lead?.id, detail?.lead?.secondAttemptPending]);
-
-  useEffect(() => {
-    if (!callModalOpen || callModalForced) return;
+    if (!callModalOpen) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !callSubmitting) closeCallOutcomeModal();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [callModalOpen, callModalForced, callSubmitting]);
+  }, [callModalOpen, callSubmitting]);
 
   useEffect(() => {
     if (loading || !detail?.lead?.id) return;
@@ -2128,7 +2117,7 @@ export function PraticaDetailPage() {
                 {detail.lead.callAttempts ? (
                   <span className={`pd-attempts ${detail.lead.secondAttemptPending ? "pd-attempts-alert" : ""}`}>
                     {detail.lead.secondAttemptPending
-                      ? `2° tentativo senza risposta - serve una decisione`
+                      ? `${detail.lead.callAttempts} tentativi senza risposta`
                       : `Tentativi di contatto: ${detail.lead.callAttempts}`}
                   </span>
                 ) : null}
@@ -2816,7 +2805,7 @@ export function PraticaDetailPage() {
           </div>
 
           {callModalOpen && detail?.lead ? (
-            <div className="pd-note-modal-backdrop" role="presentation" onClick={() => (callSubmitting || callModalForced ? null : closeCallOutcomeModal())}>
+            <div className="pd-note-modal-backdrop" role="presentation" onClick={closeCallOutcomeModal}>
               <div
                 className="pd-note-modal pd-call-modal"
                 role="dialog"
@@ -2826,21 +2815,16 @@ export function PraticaDetailPage() {
               >
                 <div className="pd-note-modal-head">
                   <div>
-                    <h5 id="pd-call-modal-title">{callModalForced ? "Follow-up cliente" : "Esito chiamata"}</h5>
+                    <h5 id="pd-call-modal-title">Esito chiamata</h5>
                     <p>
                       {detail.lead.fullName} - {detail.lead.phone || "-"}
                     </p>
-                    {callModalForced ? (
-                      <p className="pd-call-forced-hint">
-                        Il cliente e stato ricontattato per la seconda volta senza risposta. Indica come procedere prima di continuare.
-                      </p>
-                    ) : null}
                   </div>
                   <button
                     type="button"
                     className="pd-call-close"
                     aria-label="Chiudi modale esito chiamata"
-                    disabled={callSubmitting || callModalForced}
+                    disabled={callSubmitting}
                     onClick={closeCallOutcomeModal}
                   >
                     X
@@ -3034,7 +3018,7 @@ export function PraticaDetailPage() {
                   <button
                     type="button"
                     className="pd-call-cancel"
-                    disabled={callSubmitting || callModalForced}
+                    disabled={callSubmitting}
                     onClick={closeCallOutcomeModal}
                   >
                     Annulla

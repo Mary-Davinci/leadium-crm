@@ -204,17 +204,46 @@ async function main() {
       const lead = await createLead(baseUrl);
       await postJson(baseUrl, "/internal/call-events", { externalLeadId: lead.id, callId: "att_1", disposition: "no_answer" });
       const afterFirst = await getJson(baseUrl, `/leads/${lead.id}`);
-      assert.equal(afterFirst.body.lead.secondAttemptPending, false, "dopo un solo tentativo non deve scattare il flow guidato");
+      assert.equal(afterFirst.body.lead.secondAttemptPending, false, "un solo tentativo non richiede il warning");
 
       await postJson(baseUrl, "/internal/call-events", { externalLeadId: lead.id, callId: "att_2", disposition: "no_answer" });
       const afterSecond = await getJson(baseUrl, `/leads/${lead.id}`);
       assert.equal(afterSecond.body.lead.callAttempts, 2);
-      assert.equal(afterSecond.body.lead.secondAttemptPending, true, "dopo il secondo tentativo deve essere richiesto il follow-up guidato");
+      assert.equal(afterSecond.body.lead.secondAttemptPending, true, "dopo il secondo tentativo il flag resta disponibile come warning non bloccante");
 
       // Resolving with any outcome clears the pending flag (the guided decision has been made).
       const resolved = await postJson(baseUrl, `/leads/${lead.id}/calls`, { disposition: "interested", idempotencyKey: "resolve_second_attempt" });
       assert.equal(resolved.status, 200);
       assert.equal(resolved.body.secondAttemptPending, false);
+    });
+  });
+
+  await runCase("0/1/2/5 tentativi: consultazione, modifica e nuove chiamate consentite; storico e task preservati", async () => {
+    await withServer(async baseUrl => {
+      for (const attempts of [0, 1, 2, 5]) {
+        const lead = await createLead(baseUrl);
+        for (let i = 0; i < attempts; i++) {
+          const event = await postJson(baseUrl, "/internal/call-events", { externalLeadId: lead.id, callId: `${lead.id}_attempt_${i}`, disposition: "no_answer" });
+          assert.equal(event.status, 200);
+        }
+        await leadService.ensureSlaTasks();
+        const before = await getJson(baseUrl, `/leads/${lead.id}`);
+        assert.equal(before.status, 200); assert.equal(before.body.lead.callAttempts, attempts);
+        assert.equal(before.body.lead.secondAttemptPending, attempts >= 2);
+        const history = (await getJson(baseUrl, `/leads/${lead.id}/calls`)).body;
+        const tasks = await taskStore.listTasks({ leadId: lead.id, includeDismissed: true });
+        if (attempts) assert.ok(tasks.some(task => task.kind === "next_action" && task.status === "open"));
+        const updated = await fetch(`${baseUrl}/leads/${lead.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: `attempts-${attempts}@example.test` }) });
+        assert.equal(updated.status, 200);
+        assert.equal((await getJson(baseUrl, `/leads/${lead.id}`)).body.lead.email, `attempts-${attempts}@example.test`);
+        assert.deepEqual((await getJson(baseUrl, `/leads/${lead.id}/calls`)).body, history);
+        assert.deepEqual(await taskStore.listTasks({ leadId: lead.id, includeDismissed: true }), tasks);
+        const next = await postJson(baseUrl, `/leads/${lead.id}/calls`, { disposition: "no_answer", idempotencyKey: `${lead.id}_retry` });
+        assert.equal(next.status, 200); assert.equal(next.body.callAttempts, attempts + 1);
+        const after = (await getJson(baseUrl, `/leads/${lead.id}/calls`)).body;
+        assert.equal(after.length, history.length + 1);
+        for (const row of history) assert.deepEqual(after.find((item: any) => item.id === row.id), row);
+      }
     });
   });
 
