@@ -133,6 +133,29 @@ Windows cannot certify actual Mac device integration or tenant mutation support.
 
 ## Final pre-commit audit
 
+### Device registration diagnostics (no makecall behavior change)
+
+Admin GET /api/3cx/diagnostics and the existing Calls admin panel expose observedDevices
+for 901/913 only, plus the JSON deviceCount map. Data is taken solely from the devices
+array in already-read GET /callcontrol/{dn} snapshots. The official endpoint contract
+documents the same device entries as GET /callcontrol/{dn}/devices; no extra PBX reads
+or mutative calls are added. A confirmed [] means zero; an absent/malformed devices field
+is unknown and the DN is omitted, never reported as zero. Normal reconciliation refreshes
+the projection. Reading diagnostics itself performs no PBX request.
+
+Only deviceIdMasked and userAgent are retained per device. Device IDs become HMAC-based
+pseudonyms with a private random key, stable within the monitor instance and changed on
+restart; no raw ID fragments are exposed or usable for control. Ordinary user-agent labels
+are retained; suspicious auth, identity, phone/address/control/markup strings are redacted.
+Missing user agents are empty; other device/provider fields and participants are excluded.
+Disabled monitoring returns empty maps. Missing data in older API responses is supported
+by the UI. Diagnostics access remains admin/super-admin; operators remain denied.
+
+These changes do not prove which devices are actually registered on the tenant or prove
+the cause of a failed outbound ring. Collect the new diagnostics after a separately
+authorized release. Local tests use synthetic device fixtures only. DN-level makecall,
+participant actions, DN mapping and the normalizer remain unchanged.
+
 The activity outcome button is placed in the existing timeline header, outside the practice
 hero. Local browser checks cover its placement, hit testing and opening/closing the existing
 outcome modal on desktop and mobile. A mobile overlap with the floating panel was reproduced

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CallsPage, ThreeCxObservedDnTypes } from "./calls-page";
+import { CallsPage, ThreeCxObservedDnTypes, ThreeCxObservedDevices } from "./calls-page";
 import { api } from "../lib/api";
 
 let storage: Map<string, string>;
@@ -35,6 +35,22 @@ describe("observed DN types", () => {
     const html = renderTypes({ "901": "<script>fixture</script>", "913": { participant: "hidden-fixture" }, "999": "unmonitored", access_token: "token-fixture" } as unknown as Record<string, string>);
     expect(html).toContain("901 → &lt;script&gt;fixture&lt;/script&gt;");
     for (const hidden of ["<script>", "hidden-fixture", "unmonitored", "token-fixture", "913 →"]) expect(html).not.toContain(hidden);
+  });
+});
+
+describe("admin observed devices projection", () => {
+  const renderDevices = (devices?: Record<string, Array<{ deviceIdMasked: string; userAgent: string }>>) => renderToStaticMarkup(<dl><ThreeCxObservedDevices devices={devices} /></dl>);
+  it("distinguishes not observed and confirmed zero registrations", () => {
+    expect(renderDevices()).toContain("Device non ancora osservati");
+    expect(renderDevices({})).toContain("Device non ancora osservati");
+    const empty = renderDevices({ "901": [], "913": [] });
+    expect(empty).toContain("901 · 0 device"); expect(empty).toContain("913 · 0 device"); expect(empty).toContain("Nessun device registrato");
+  });
+  it("shows one/multiple sanitized devices only for 901/913", () => {
+    const device = { deviceIdMasked: "device-123456abcdef", userAgent: "Fixture Desktop 20.0" };
+    const html = renderDevices({ "901": [device], "913": [device, { deviceIdMasked: "device-abcdef123456", userAgent: "" }], "910": [{ deviceIdMasked: "must-not-render", userAgent: "private-queue" }] });
+    for (const value of ["901 · 1 device", "913 · 2 device", "Fixture Desktop 20.0", "User agent non disponibile"]) expect(html).toContain(value);
+    expect(html).not.toContain("must-not-render"); expect(html).not.toContain("private-queue");
   });
 });
 afterEach(() => { vi.unstubAllGlobals(); });

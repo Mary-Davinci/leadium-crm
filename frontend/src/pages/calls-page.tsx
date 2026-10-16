@@ -37,7 +37,20 @@ type ThreeCxDiagnostics = {
   lastCallId: string | null;
   lastError: string | null;
   observedDnTypes?: Record<string, string>;
+  observedDevices?: Record<string, Array<{ deviceIdMasked: string; userAgent: string }>>;
+  deviceCount?: Record<string, number>;
 };
+
+export function ThreeCxObservedDevices({ devices }: { devices?: ThreeCxDiagnostics["observedDevices"] }) {
+  const observed = ["901", "913"].filter(dn => Array.isArray(devices?.[dn]));
+  return <div>
+    <dt>observedDevices</dt>
+    <dd>{observed.length ? observed.map(dn => <div key={dn}>
+      <strong>{dn} · {devices![dn].length} device</strong>
+      {devices![dn].length ? devices![dn].map((device, index) => <div key={index}>{device.deviceIdMasked} → {device.userAgent || "User agent non disponibile"}</div>) : <div>Nessun device registrato</div>}
+    </div>) : "Device non ancora osservati"}</dd>
+  </div>;
+}
 
 export function ThreeCxObservedDnTypes({ types }: { types?: Record<string, string> }) {
   const observed = ["901", "913", "910", "911", "912", "920", "921", "922"]
@@ -245,6 +258,7 @@ export function CallsPage() {
               <div><dt>lastCallId</dt><dd>{diagnostics.lastCallId || "—"}</dd></div>
               <div><dt>lastError</dt><dd>{diagnostics.lastError || "—"}</dd></div>
               <ThreeCxObservedDnTypes types={diagnostics.observedDnTypes} />
+              <ThreeCxObservedDevices devices={diagnostics.observedDevices} />
             </dl>
           ) : null}
         </section>

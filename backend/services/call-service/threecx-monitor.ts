@@ -3,6 +3,7 @@ import { MONITORED_DNS, emptyMonitorState, finalizeCalls, legKey, markCallIncomp
 import { MonitorStore } from "./threecx-store";
 import type { LiveCall } from "./threecx-controller";
 import { classifyMonitoredDn } from "./threecx-normalizer";
+import { ThreeCxDeviceDiagnostics } from "./threecx-device-diagnostics";
 
 export type MonitorConfig = { enabled: boolean; baseUrl: string; clientId: string; configured: boolean; credential: () => string };
 export function monitorConfig(env: NodeJS.ProcessEnv = process.env): MonitorConfig {
@@ -45,6 +46,7 @@ export class ThreeCxMonitor {
   private expiresAt = 0;
   private sequence: number | null = null;
   private dnTypes = new Map<string, string>();
+  private deviceDiagnostics = new ThreeCxDeviceDiagnostics();
   private liveParticipants = new Map<string, { id: number; callid: number; dn: string; direct_control: boolean }>();
   private now: () => number;
   private http: typeof fetch;
@@ -59,7 +61,8 @@ export class ThreeCxMonitor {
     const observedDnTypes = Object.fromEntries(MONITORED_DNS
       .filter(dn => this.dnTypes.has(dn))
       .map(dn => [dn, this.dnTypes.get(dn)!]));
-    return { enabled: this.config.enabled, configured: this.config.configured, ...this.status, observedDnTypes };
+    return { enabled: this.config.enabled, configured: this.config.configured, ...this.status, observedDnTypes,
+      ...this.deviceDiagnostics.diagnostics(this.config.enabled) };
   }
   start() {
     if (this.task || !this.config.enabled) return;
@@ -149,6 +152,7 @@ export class ThreeCxMonitor {
       const info = await this.request("/callcontrol/" + dn);
       if (!info || info.dn !== dn || !Array.isArray(info.participants) || typeof info.type !== "string") throw new Error("Invalid DN snapshot");
       this.dnTypes.set(dn, info.type);
+      this.deviceDiagnostics.observe(dn, info.devices);
       for (const summary of info.participants) {
         if (!Number.isSafeInteger(summary.id)) continue;
         const participant = await this.request(`/callcontrol/${dn}/participants/${summary.id}`);

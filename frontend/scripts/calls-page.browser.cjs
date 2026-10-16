@@ -77,25 +77,31 @@ async function checkGeometry(page) {
         const panel = page.getByRole('region', { name: 'Stato 3CX' });
         await panel.getByText('enabled', { exact: true }).waitFor();
         const fields = await panel.locator('dt').allTextContents();
-        assert.deepEqual(fields, ['enabled', 'configured', 'connected', 'lastConnectedAt', 'lastEventAt', 'lastCallId', 'lastError', 'observedDnTypes']);
+        assert.deepEqual(fields, ['enabled', 'configured', 'connected', 'lastConnectedAt', 'lastEventAt', 'lastCallId', 'lastError', 'observedDnTypes', 'observedDevices']);
         assert.equal(await panel.locator('dd').first().innerText(), 'false');
         await panel.getByText('Nessun DN osservato', { exact: true }).waitFor();
         // Synthetic values only: exercise the real UI without connecting to the PBX.
         const dns = ['901', '913', '910', '911', '912', '920', '921', '922'];
         const diagnosticsFixture = { enabled: true, configured: true, connected: true, lastConnectedAt: null, lastEventAt: null, lastCallId: null,
           lastError: '3CX incomplete call observation; final event withheld [unverified_agent_type]',
-          observedDnTypes: Object.fromEntries(dns.map(dn => [dn, 'Fixture TYPE::' + dn])), access_token: 'hidden-fixture-token', participants: [{ phone: 'hidden-fixture-phone' }] };
+          observedDnTypes: Object.fromEntries(dns.map(dn => [dn, 'Fixture TYPE::' + dn])),
+          observedDevices: { '901': [{ deviceIdMasked: 'device-123456abcdef', userAgent: 'Fixture Desktop 20.0' }], '913': [] }, deviceCount: { '901': 1, '913': 0 },
+          access_token: 'hidden-fixture-token', participants: [{ phone: 'hidden-fixture-phone' }] };
         await page.route('**/api/3cx/diagnostics', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(diagnosticsFixture) }));
         await panel.getByRole('button', { name: 'Aggiorna stato' }).click();
         for (const dn of dns) await panel.getByText(dn + ' → Fixture TYPE::' + dn, { exact: true }).waitFor();
+        await panel.getByText('901 · 1 device', { exact: true }).waitFor(); await panel.getByText('913 · 0 device', { exact: true }).waitFor();
+        await panel.getByText('device-123456abcdef → Fixture Desktop 20.0', { exact: true }).waitFor();
         assert.equal(await panel.getByText('Nessun DN osservato').count(), 0);
         const panelText = await panel.innerText();
         for (const hidden of ['hidden-fixture-token', 'hidden-fixture-phone', 'participants', 'access_token']) assert.ok(!panelText.includes(hidden));
         await checkGeometry(page);
         // Compatibility with an older diagnostics response omitting the optional field.
         delete diagnosticsFixture.observedDnTypes;
+        delete diagnosticsFixture.observedDevices; delete diagnosticsFixture.deviceCount;
         await panel.getByRole('button', { name: 'Aggiorna stato' }).click();
         await panel.getByText('Nessun DN osservato', { exact: true }).waitFor();
+        await panel.getByText('Device non ancora osservati', { exact: true }).waitFor();
         assert.ok(diagnosticsRequests.every(request => request.headers().authorization === 'Bearer calls-browser-' + role));
         await page.getByRole('button', { name: 'Strumento tecnico/admin: test webhook 3CX legacy' }).click();
         await page.locator('#calls-legacy-webhook textarea').waitFor();

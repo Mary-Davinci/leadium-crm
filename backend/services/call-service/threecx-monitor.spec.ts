@@ -37,7 +37,7 @@ class FakeSocket extends EventEmitter {
   terminate() { if (!this.terminated) { this.terminated = true; this.readyState = 3; this.emit("close"); } }
   ping() { this.pings++; this.emit("pong"); }
 }
-function fixture(options: { authStatus?: number; deniedDn?: string; reportedDnTypes?: Record<string, unknown>; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
+function fixture(options: { authStatus?: number; deniedDn?: string; reportedDnTypes?: Record<string, unknown>; reportedDevices?: Record<string, unknown>; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
   let time = Date.parse("2026-10-16T10:00:00Z"), sequence = 0;
   const requests: Array<{ path: string; method: string }> = [];
   const sockets: FakeSocket[] = [], deliveries: any[] = [];
@@ -64,7 +64,7 @@ function fixture(options: { authStatus?: number; deniedDn?: string; reportedDnTy
       if (dn === options.deniedDn) return new Response(JSON.stringify({ error: SECRET }), { status: 403 });
       if (id) return new Response(JSON.stringify(participants.get(dn + "/" + id) || null), { status: participants.has(dn + "/" + id) ? 200 : 404 });
       const type = options.reportedDnTypes?.[dn] ?? ({ "910": "Queue", "911": "Queue", "912": "Queue", "920": "RoutePoint", "921": "DigitalReceptionist", "922": "IVR" } as Record<string, string>)[dn] ?? "Extension";
-      return new Response(JSON.stringify({ dn, type, participants: [...participants.values()].filter(p => p.dn === dn), api_key: SECRET, access_token: TOKEN }));
+      return new Response(JSON.stringify({ dn, type, devices: options.reportedDevices?.[dn], participants: [...participants.values()].filter(p => p.dn === dn), api_key: SECRET, access_token: TOKEN }));
     }) as typeof fetch,
     socket: (url, token) => {
       assert.equal(url, "wss://pbx.test:5001/callcontrol/ws"); assert.equal(token, TOKEN);
@@ -109,8 +109,10 @@ async function main() {
     const monitor = new ThreeCxMonitor(monitorConfig(env), { store: {} as any, deliver: async () => { throw Error("unexpected"); }, fetch: async () => { throw Error("unexpected"); } });
     monitor.start(); await monitor.stop(); assert.equal(accesses, 0); assert.equal(monitor.diagnostics().enabled, false);
     assert.deepEqual(monitor.diagnostics().observedDnTypes, {});
+    assert.deepEqual(monitor.diagnostics().observedDevices, {}); assert.deepEqual(monitor.diagnostics().deviceCount, {});
     const f = fixture({ enabled: false }); await f.start(); await wait(15); await f.monitor.stop(); assert.equal(f.requests.length, 0); assert.equal(f.sockets.length, 0);
     assert.deepEqual(f.monitor.diagnostics().observedDnTypes, {});
+    assert.deepEqual(f.monitor.diagnostics().observedDevices, {}); assert.deepEqual(f.monitor.diagnostics().deviceCount, {});
   });
   await test("missing/invalid env fails closed without any connections", async () => {
     for (const env of [{}, { THREECX_ENABLED: "true" }, { THREECX_ENABLED: "true", THREECX_BASE_URL: "http://pbx.test", THREECX_CLIENT_ID: "leadiumcrm", THREECX_API_KEY: SECRET }]) {
@@ -134,7 +136,7 @@ async function main() {
   });
   await test("OAuth success and exact read allowlist; diagnostics schema and graceful shutdown", async () => {
     const f = fixture(); await f.start(); assert.equal(f.monitor.diagnostics().connected, true);
-    assert.deepEqual(Object.keys(f.monitor.diagnostics()).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes"].sort());
+    assert.deepEqual(Object.keys(f.monitor.diagnostics()).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes", "observedDevices", "deviceCount"].sort());
     assert.equal(new Set(f.requests.filter(r => r.method === "GET").map(r => r.path)).size, 8);
     const socket = f.sockets[0]; socket.emit("message", JSON.stringify({ sequence: 1, event: { event_type: 0, entity: "/callcontrol/999/participants/1" } }));
     await wait(10); assert.ok(f.requests.every(r => r.path === "/connect/token" || MONITORED_DNS.some(dn => r.path.startsWith("/callcontrol/" + dn))));
@@ -164,6 +166,65 @@ async function main() {
       await f.upsert("901", 1, 54321, "Connected");
       assert.ok(f.store.state.calls["54321"].incompleteReasons.includes("unverified_agent_type"));
       assert.equal(f.store.state.calls["54321"].answeredAt, undefined);
+    } finally { await f.monitor.stop(); }
+  });
+  for (const size of [0, 1, 3]) await test("device diagnostics: " + size + " devices, only 901/913, detached projection and no extra PBX reads", async () => {
+    const devices = Array.from({ length: size }, (_, id) => ({ dn: "901", device_id: "private-device-" + id, user_agent: "Fixture Desktop Client 20.0" }));
+    const f = fixture({ reportedDevices: { "901": devices, "913": [], "910": [{ dn: "910", device_id: "queue-private", user_agent: SECRET }] } });
+    await f.start();
+    try {
+      const before = f.requests.length, diagnostics = f.monitor.diagnostics();
+      assert.deepEqual(diagnostics.deviceCount, { "901": size, "913": 0 });
+      assert.equal(diagnostics.observedDevices["901"].length, size); assert.deepEqual(diagnostics.observedDevices["913"], []);
+      assert.deepEqual(Object.keys(diagnostics.observedDevices).sort(), ["901", "913"]);
+      for (const row of diagnostics.observedDevices["901"]) {
+        assert.deepEqual(Object.keys(row).sort(), ["deviceIdMasked", "userAgent"]);
+        assert.match(row.deviceIdMasked, /^device-[a-f0-9]{12}$/); assert.equal(row.userAgent, "Fixture Desktop Client 20.0");
+      }
+      if (size) {
+        const masked = diagnostics.observedDevices["901"][0].deviceIdMasked;
+        diagnostics.observedDevices["901"][0].userAgent = "mutated by consumer";
+        assert.equal(f.monitor.diagnostics().observedDevices["901"][0].userAgent, "Fixture Desktop Client 20.0");
+        assert.equal(f.monitor.diagnostics().observedDevices["901"][0].deviceIdMasked, masked);
+      }
+      assert.equal(f.requests.length, before, "diagnostics must reuse DN snapshots, not GET devices or participants");
+      assert.ok(f.requests.every(row => row.path === "/connect/token" || row.method === "GET"));
+      const serialized = JSON.stringify(f.monitor.diagnostics());
+      for (const forbidden of ["private-device", "queue-private", SECRET, TOKEN]) assert.ok(!serialized.includes(forbidden));
+    } finally { await f.monitor.stop(); }
+  });
+  await test("device diagnostics: sensitive IDs and unsafe user agents are not exposed", async () => {
+    const sensitiveId = "sip:901@private.example;+393331234567";
+    const agents = [SECRET, TOKEN, "Bearer " + TOKEN, "API_KEY=" + SECRET, "+39 333 12 34 567", "sip:901@private.example", "<script>bad</script>"];
+    const f = fixture({ reportedDevices: { "901": [{ dn: "901", device_id: sensitiveId, user_agent: "Fixture Mobile Client 20.0", participants: [{ phone: "+393331234567" }], api_key: SECRET, access_token: TOKEN }],
+      "913": agents.map((user_agent, id) => ({ dn: "913", device_id: "opaque-sensitive-id-" + id, user_agent })) } });
+    await f.start();
+    try {
+      const diagnostics = f.monitor.diagnostics();
+      assert.equal(diagnostics.deviceCount["913"], agents.length);
+      assert.ok(diagnostics.observedDevices["913"].every(device => device.userAgent === "[redacted]"));
+      const serialized = JSON.stringify(diagnostics);
+      for (const forbidden of [sensitiveId, "private.example", "+393331234567", "+39 333 12 34 567", SECRET, TOKEN, "participants", "api_key", "access_token", "opaque-sensitive-id"]) assert.ok(!serialized.includes(forbidden));
+    } finally { await f.monitor.stop(); }
+  });
+  await test("device diagnostics: refresh preserves pseudonyms, missing/malformed is unknown rather than zero", async () => {
+    const devices: Record<string, unknown> = { "901": [{ dn: "901", device_id: "private-refresh-device", user_agent: "Fixture Desktop" }], "913": [] };
+    const f = fixture({ reportedDevices: devices }); await f.start();
+    try {
+      const masked = f.monitor.diagnostics().observedDevices["901"][0].deviceIdMasked;
+      devices["901"] = [{ dn: "901", device_id: "private-refresh-device", user_agent: "Fixture Updated" }]; f.advance(10001);
+      await until(() => f.monitor.diagnostics().observedDevices["901"]?.[0]?.userAgent === "Fixture Updated", "device snapshot refreshed");
+      assert.equal(f.monitor.diagnostics().observedDevices["901"][0].deviceIdMasked, masked);
+      for (const invalid of [undefined, null, { devices: SECRET }, [{ dn: "913", device_id: "wrong-owner" }], [{ device_id: { secret: SECRET } }], [{ device_id: "valid", user_agent: { token: TOKEN } }]]) {
+        const before = f.requests.filter(row => row.path === "/callcontrol/913").length;
+        devices["901"] = invalid; f.advance(10001);
+        await until(() => f.requests.filter(row => row.path === "/callcontrol/913").length > before && f.monitor.diagnostics().observedDevices["901"] === undefined, "invalid/missing devices omitted after reconciliation");
+        assert.equal(f.monitor.diagnostics().deviceCount["901"], undefined);
+        assert.equal(f.monitor.diagnostics().deviceCount["913"], 0);
+        assert.equal(f.monitor.diagnostics().connected, true, "diagnostic-only malformed device field must not disrupt call monitoring");
+      }
+      devices["901"] = []; f.advance(10001);
+      await until(() => f.monitor.diagnostics().deviceCount["901"] === 0, "explicit empty snapshot is zero devices");
     } finally { await f.monitor.stop(); }
   });
   await test("malformed type objects cannot expose nested provider credentials in diagnostics", async () => {
