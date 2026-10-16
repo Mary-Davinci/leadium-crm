@@ -32,7 +32,8 @@ async function main() {
     const admin = await fetch(base + "/api/3cx/diagnostics", { headers: { Authorization: "Bearer 3cx-admin" } }); assert.equal(admin.status, 200);
     const body = await admin.json() as any;
     assert.equal(body.enabled, false); assert.equal(body.connected, false);
-    assert.deepEqual(Object.keys(body).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError"].sort());
+    assert.deepEqual(Object.keys(body).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes"].sort());
+    assert.deepEqual(body.observedDnTypes, {}, "disabled monitoring has no observed types");
     console.log("PASS 3CX diagnostics: anonymous 401, operator 403, admin 200; disabled listener");
     for (const token of ["3cx-admin", "3cx-super", "3cx-op"]) {
       const calls = await fetch(base + "/api/calls?limit=250", { headers: { Authorization: "Bearer " + token } });

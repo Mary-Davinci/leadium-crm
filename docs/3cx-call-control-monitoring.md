@@ -145,7 +145,18 @@ of final IDs and quarantined records should be planned against actual call volum
 is `/3cx/diagnostics` on call-service. Like the existing webhook services, internal service ports
 must not be publicly exposed. Response keys only:
 
-`enabled`, `configured`, `connected`, `lastConnectedAt`, `lastEventAt`, `lastCallId`, `lastError`.
+`enabled`, `configured`, `connected`, `lastConnectedAt`, `lastEventAt`, `lastCallId`, `lastError`,
+and temporarily `observedDnTypes` for diagnosing the tenant's actual DN type strings.
+
+`observedDnTypes` is an allowlisted `dn -> type` projection of successful
+`GET /callcontrol/{dn}` responses already read by the monitor. Values are the exact returned
+strings, without enum assumptions or classification changes. No additional request is made
+when the admin reads diagnostics. Unobserved DNs are omitted; disabled monitoring returns `{}`.
+Only the type field is exposed: no participant payload, customer number, API key or token.
+The field is available in the JSON response of `/api/3cx/diagnostics`; the current Calls UI
+continues showing its existing seven status fields. Inspect the admin request's JSON response
+to collect the real types before changing agent classification. No tenant values are assumed
+or claimed by the local mock tests.
 
 The ID is partially masked. Errors are fixed strings; raw provider errors/bodies, tokens, keys,
 telephone numbers and URLs are never included. No credentials are returned by `/health`.

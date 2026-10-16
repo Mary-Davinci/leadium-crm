@@ -50,7 +50,12 @@ export class ThreeCxMonitor {
 
   constructor(private config: MonitorConfig, private deps: Dependencies) { this.now = deps.now || Date.now; this.http = deps.fetch || fetch; }
   diagnostics() {
-    return { enabled: this.config.enabled, configured: this.config.configured, ...this.status };
+    // Temporary admin-only projection of already-read DN types. No extra PBX request,
+    // classification/normalization, raw DN response or participant data is exposed.
+    const observedDnTypes = Object.fromEntries(MONITORED_DNS
+      .filter(dn => this.dnTypes.has(dn))
+      .map(dn => [dn, this.dnTypes.get(dn)!]));
+    return { enabled: this.config.enabled, configured: this.config.configured, ...this.status, observedDnTypes };
   }
   start() {
     if (this.task || !this.config.enabled) return;

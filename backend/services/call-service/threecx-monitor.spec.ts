@@ -32,7 +32,7 @@ class FakeSocket extends EventEmitter {
   terminate() { if (!this.terminated) { this.terminated = true; this.readyState = 3; this.emit("close"); } }
   ping() { this.pings++; this.emit("pong"); }
 }
-function fixture(options: { authStatus?: number; deniedDn?: string; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
+function fixture(options: { authStatus?: number; deniedDn?: string; reportedDnTypes?: Record<string, unknown>; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
   let time = Date.parse("2026-10-16T10:00:00Z"), sequence = 0;
   const requests: Array<{ path: string; method: string }> = [];
   const sockets: FakeSocket[] = [], deliveries: any[] = [];
@@ -58,8 +58,8 @@ function fixture(options: { authStatus?: number; deniedDn?: string; enabled?: bo
       const [, dn, id] = m;
       if (dn === options.deniedDn) return new Response(JSON.stringify({ error: SECRET }), { status: 403 });
       if (id) return new Response(JSON.stringify(participants.get(dn + "/" + id) || null), { status: participants.has(dn + "/" + id) ? 200 : 404 });
-      const type = ({ "910": "Queue", "911": "Queue", "912": "Queue", "920": "RoutePoint", "921": "DigitalReceptionist", "922": "IVR" } as Record<string, string>)[dn] || "Extension";
-      return new Response(JSON.stringify({ dn, type, participants: [...participants.values()].filter(p => p.dn === dn) }));
+      const type = options.reportedDnTypes?.[dn] ?? ({ "910": "Queue", "911": "Queue", "912": "Queue", "920": "RoutePoint", "921": "DigitalReceptionist", "922": "IVR" } as Record<string, string>)[dn] ?? "Extension";
+      return new Response(JSON.stringify({ dn, type, participants: [...participants.values()].filter(p => p.dn === dn), api_key: SECRET, access_token: TOKEN }));
     }) as typeof fetch,
     socket: (url, token) => {
       assert.equal(url, "wss://pbx.test:5001/callcontrol/ws"); assert.equal(token, TOKEN);
@@ -87,7 +87,9 @@ async function main() {
     Object.defineProperty(env, "THREECX_API_KEY", { get() { accesses++; throw Error("Must not read disabled credential"); } });
     const monitor = new ThreeCxMonitor(monitorConfig(env), { store: {} as any, deliver: async () => { throw Error("unexpected"); }, fetch: async () => { throw Error("unexpected"); } });
     monitor.start(); await monitor.stop(); assert.equal(accesses, 0); assert.equal(monitor.diagnostics().enabled, false);
+    assert.deepEqual(monitor.diagnostics().observedDnTypes, {});
     const f = fixture({ enabled: false }); await f.start(); await wait(15); await f.monitor.stop(); assert.equal(f.requests.length, 0); assert.equal(f.sockets.length, 0);
+    assert.deepEqual(f.monitor.diagnostics().observedDnTypes, {});
   });
   await test("missing/invalid env fails closed without any connections", async () => {
     for (const env of [{}, { THREECX_ENABLED: "true" }, { THREECX_ENABLED: "true", THREECX_BASE_URL: "http://pbx.test", THREECX_CLIENT_ID: "leadiumcrm", THREECX_API_KEY: SECRET }]) {
@@ -111,11 +113,47 @@ async function main() {
   });
   await test("OAuth success and exact read allowlist; diagnostics schema and graceful shutdown", async () => {
     const f = fixture(); await f.start(); assert.equal(f.monitor.diagnostics().connected, true);
-    assert.deepEqual(Object.keys(f.monitor.diagnostics()).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError"].sort());
+    assert.deepEqual(Object.keys(f.monitor.diagnostics()).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes"].sort());
     assert.equal(new Set(f.requests.filter(r => r.method === "GET").map(r => r.path)).size, 8);
     const socket = f.sockets[0]; socket.emit("message", JSON.stringify({ sequence: 1, event: { event_type: 0, entity: "/callcontrol/999/participants/1" } }));
     await wait(10); assert.ok(f.requests.every(r => r.path === "/connect/token" || MONITORED_DNS.some(dn => r.path.startsWith("/callcontrol/" + dn))));
     await f.monitor.stop(); const size = f.requests.length; await wait(20); assert.equal(f.requests.length, size); assert.ok(socket.terminated); assert.equal(f.store.owner, false);
+  });
+  await test("observedDnTypes projects exact returned types only, with no participant, phone or credential fields", async () => {
+    // Deliberately synthetic, unfamiliar types: diagnostics must not infer or normalize enums.
+    const types: Record<string, unknown> = Object.fromEntries(MONITORED_DNS.map(dn => [dn, "Fixture type::" + dn]));
+    const f = fixture({ reportedDnTypes: types });
+    f.participants.set("901/1", { dn: "901", id: 1, callid: 54321, status: "Ringing", party_caller_id: "+393331234567", party_dn_type: "Line", api_key: SECRET, access_token: TOKEN });
+    assert.deepEqual(f.monitor.diagnostics().observedDnTypes, {});
+    await f.start();
+    try {
+      const before = f.requests.length;
+      const diagnostics = f.monitor.diagnostics();
+      assert.deepEqual(diagnostics.observedDnTypes, types);
+      assert.deepEqual(Object.keys(diagnostics.observedDnTypes).sort(), [...MONITORED_DNS].sort());
+      for (const value of Object.values(diagnostics.observedDnTypes)) assert.equal(typeof value, "string");
+      const serialized = JSON.stringify(diagnostics);
+      for (const forbidden of [SECRET, TOKEN, "+393331234567", "participants", "party_caller_id", "api_key", "access_token"]) assert.ok(!serialized.includes(forbidden));
+      diagnostics.observedDnTypes["901"] = "changed by consumer";
+      assert.equal(f.monitor.diagnostics().observedDnTypes["901"], types["901"]);
+      assert.equal(f.requests.length, before, "reading diagnostics must not issue any PBX requests");
+      types["901"] = "Different fixture TYPE"; f.advance(10001);
+      await until(() => f.monitor.diagnostics().observedDnTypes["901"] === types["901"], "type refreshed from existing reconciliation");
+      // The new diagnostics must not loosen agent recognition for an unknown real type.
+      await f.upsert("901", 1, 54321, "Connected");
+      assert.ok(f.store.state.calls["54321"].incompleteReasons.includes("unverified_agent_type"));
+      assert.equal(f.store.state.calls["54321"].answeredAt, undefined);
+    } finally { await f.monitor.stop(); }
+  });
+  await test("malformed type objects cannot expose nested provider credentials in diagnostics", async () => {
+    const f = fixture({ reportedDnTypes: { "901": { access_token: TOKEN, api_key: SECRET } } });
+    f.monitor.start();
+    try {
+      await until(() => Boolean(f.monitor.diagnostics().lastError), "invalid DN type rejected");
+      assert.deepEqual(f.monitor.diagnostics().observedDnTypes, {});
+      const serialized = JSON.stringify(f.monitor.diagnostics()); assert.ok(!serialized.includes(SECRET)); assert.ok(!serialized.includes(TOKEN));
+      assert.equal(f.deliveries.length, 0);
+    } finally { await f.monitor.stop(); }
   });
   for (const dn of ["901", "913"]) await test("inbound answered with native callid and agent " + dn, async () => {
     const f = fixture(); await f.start();
