@@ -1,5 +1,6 @@
 import { getMongoDb, isMongoEnabled } from "../common/mongo";
 import { hashPasswordScrypt, resolvePasswordVerification } from "./password-hashing";
+import { validateThreeCxDn } from "../call-service/threecx-controller";
 
 export type AuthRole = "super_admin" | "admin" | "operatore";
 
@@ -15,6 +16,7 @@ type AuthUser = {
 };
 
 export type AuthPublicUser = {
+  threeCxDn?: string;
   id: string;
   username: string;
   name: string;
@@ -25,6 +27,7 @@ export type AuthPublicUser = {
 };
 
 export type AuthCreateUserInput = {
+  threeCxDn?: string;
   username: string;
   name: string;
   role: AuthRole;
@@ -35,6 +38,7 @@ export type AuthCreateUserInput = {
 };
 
 export type AuthUpdateUserInput = {
+  threeCxDn?: string;
   username?: string;
   name?: string;
   role?: AuthRole;
@@ -44,6 +48,7 @@ export type AuthUpdateUserInput = {
 };
 
 type MongoAuthUser = {
+  threeCxDn?: string;
   _id?: unknown;
   username: string;
   usernameLower: string;
@@ -101,7 +106,8 @@ function toPublicMongoUser(user: MongoAuthUser): AuthPublicUser {
     role: normalizeRole(user.role),
     email: user.email || user.username,
     surname: user.surname || "",
-    organization: user.organization || ""
+    organization: user.organization || "",
+    threeCxDn: user.threeCxDn && ["901", "913"].includes(user.threeCxDn) ? user.threeCxDn : ""
   };
 }
 
@@ -276,6 +282,7 @@ export async function listUsers(): Promise<AuthPublicUser[]> {
 }
 
 export async function createUser(input: AuthCreateUserInput): Promise<AuthPublicUser> {
+  const threeCxDn = validateThreeCxDn(input.threeCxDn);
   const username = input.username.trim();
   const name = input.name.trim() || username;
   const password = input.password.trim();
@@ -301,6 +308,7 @@ export async function createUser(input: AuthCreateUserInput): Promise<AuthPublic
   if (exists) throw new Error("Username gia esistente.");
   const now = new Date().toISOString();
   const inserted = await users.insertOne({
+    threeCxDn,
     username,
     usernameLower,
     emailLower: email.toLowerCase(),
@@ -316,6 +324,7 @@ export async function createUser(input: AuthCreateUserInput): Promise<AuthPublic
 
   return {
     id: String(inserted.insertedId || usernameLower),
+    threeCxDn,
     username,
     name,
     role,
@@ -394,6 +403,8 @@ export async function deleteUser(username: string, actorRole: AuthRole): Promise
 }
 
 export async function updateUser(username: string, input: AuthUpdateUserInput, actorRole: AuthRole, actorUsername?: string): Promise<AuthPublicUser> {
+  if (input.threeCxDn !== undefined && actorRole !== "admin" && actorRole !== "super_admin") throw new Error("Mapping 3CX riservato agli amministratori.");
+  if (input.threeCxDn !== undefined) validateThreeCxDn(input.threeCxDn);
   const currentUsernameLower = username.trim().toLowerCase();
   if (!currentUsernameLower) throw new Error("Username obbligatorio.");
 
@@ -439,6 +450,7 @@ export async function updateUser(username: string, input: AuthUpdateUserInput, a
     {
       $set: {
         username: nextUsername,
+        ...(input.threeCxDn === undefined ? {} : { threeCxDn: validateThreeCxDn(input.threeCxDn) }),
         usernameLower: nextUsernameLower,
         name: nextName,
         role: nextRole,
@@ -454,6 +466,7 @@ export async function updateUser(username: string, input: AuthUpdateUserInput, a
 
   return {
     id: String(existing._id || nextUsernameLower),
+    threeCxDn: input.threeCxDn === undefined ? existing.threeCxDn || "" : validateThreeCxDn(input.threeCxDn),
     username: nextUsername,
     name: nextName,
     role: nextRole,
@@ -461,4 +474,14 @@ export async function updateUser(username: string, input: AuthUpdateUserInput, a
     surname: nextSurname,
     organization: nextOrganization
   };
+}
+
+/** Re-read persisted identity per command/stream tick: stale session mappings cannot authorize actions. */
+export async function getUserThreeCxDn(user: AuthPublicUser): Promise<string> {
+  if (!isMongoEnabled()) return "";
+  const db = await getMongoDb();
+  if (!db) return "";
+  const record = await db.collection("users").findOne({ usernameLower: user.username.toLowerCase() });
+  if (!record || String(record._id || record.usernameLower) !== user.id) return "";
+  return validateThreeCxDn(record.threeCxDn);
 }

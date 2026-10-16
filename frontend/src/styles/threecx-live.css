@@ -1,0 +1,14 @@
+.threecx-live { position: fixed; z-index: 80; right: 18px; bottom: 18px; width: min(360px, calc(100vw - 24px)); max-height: min(65vh, 620px); overflow-y: auto; display: grid; gap: 8px; padding: 12px; background: var(--panel, #fff); border: 1px solid var(--border, #d5deea); border-radius: 8px; box-shadow: 0 4px 18px #213b6224; color: var(--text-strong, #213b62); }
+.threecx-live p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.shell:has(+ .threecx-live) .content { padding-bottom: var(--threecx-live-gap, 24px); }
+.threecx-live-call { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid #d5deea; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.threecx-live-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.threecx-live-actions button, .threecx-live-actions select, .threecx-live-actions a { max-width: 100%; min-height: 36px; font-size: 13px; }
+.threecx-live-actions a { display: inline-flex; align-items: center; padding: 6px 10px; border: 1px solid #d5deea; border-radius: 8px; text-decoration: none; }
+.threecx-live button, .threecx-live select, .threecx-outcome-button { font: inherit; padding: 7px 10px; border: 1px solid #d5deea; border-radius: 8px; color: #213b62; background: #fff; cursor: pointer; }
+.threecx-outcome-button { min-height: 34px; font-size: 12px; white-space: nowrap; }
+.threecx-live-actions button:not(.secondary) { background: #225fb6; border-color: #225fb6; color: #fff; }
+.threecx-live-actions a { color: #225fb6; }
+.threecx-live button:disabled, .threecx-live select:disabled, .threecx-outcome-button:disabled { opacity: .6; cursor: not-allowed; }
+.threecx-live button:focus-visible, .threecx-live select:focus-visible, .threecx-live a:focus-visible, .threecx-outcome-button:focus-visible { outline: 2px solid #225fb6; outline-offset: 2px; }
+@media (max-width: 600px) { .threecx-live { right: 12px; bottom: 12px; } }

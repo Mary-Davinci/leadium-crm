@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { WifiOff, X } from "lucide-react";
 import { getAuthUser } from "../lib/auth";
 import { api } from "../lib/api";
+import { useThreeCx } from "../features/calls/threecx-context";
 import { ChatDecisionEngine, ChatDecisionLead, Payment, PracticeDocument, sortOperationalTasks } from "../features/chat/ChatDecisionEngine";
 import { buildPracticeUrl } from "../features/practices/practice-links";
 import { uploadChatFile } from "../features/chat/chat-api";
@@ -1055,9 +1056,10 @@ export function ChatPage() {
     );
   }
 
-  function callCustomer() {
+  const threeCx = useThreeCx();
+  async function callCustomer() {
     const phone = String(currentLead?.phone || selectedConversation?.phone || "").trim();
-    if (phone) window.location.href = `tel:${phone}`;
+    await threeCx.dial(phone);
   }
 
   // Quick actions from the practice panel prefill the composer with the matching template.

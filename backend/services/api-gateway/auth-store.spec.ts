@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
  */
 
 type FakeUserDoc = {
+  threeCxDn?: string;
   _id: string;
   username: string;
   usernameLower: string;
@@ -119,6 +120,21 @@ async function runCase(name: string, fn: () => Promise<void>) {
 }
 
 async function main() {
+  await runCase("3CX mapping is persisted, validated, admin-only, and resolved freshly by authenticated identity", async () => {
+    await withFakeAuthStore([baseUser({ threeCxDn: "901" })], async (store, users) => {
+      const listed = await store.listUsers(); assert.equal(listed[0].threeCxDn, "901");
+      assert.equal(await store.getUserThreeCxDn(listed[0]), "901");
+      await store.updateUser("admin", { name: "Admin", threeCxDn: "913" }, "super_admin", "root");
+      assert.equal(users.docs[0].threeCxDn, "913");
+      assert.equal(await store.getUserThreeCxDn(listed[0]), "913", "old session DN cannot authorize the old extension");
+      await assert.rejects(store.updateUser("admin", { name: "Admin", threeCxDn: "910" }, "super_admin", "root"), /non autorizzato/);
+      await assert.rejects(store.updateUser("admin", { name: "Admin", threeCxDn: "901" }, "operatore", "admin"), /amministratori/);
+      assert.equal(await store.getUserThreeCxDn({ ...listed[0], id: "recreated-user" }), "");
+      await store.updateUser("admin", { name: "Admin", threeCxDn: "" }, "super_admin", "root");
+      assert.equal(await store.getUserThreeCxDn(listed[0]), "");
+    });
+    await withFakeAuthStore([baseUser({})], async store => { assert.equal((await store.listUsers())[0].threeCxDn, ""); });
+  });
   const AUTH_SALT = process.env.AUTH_PASSWORD_SALT || "crocieriamo-auth-salt";
   const PASSWORD = "Sup3rSegreta!";
 

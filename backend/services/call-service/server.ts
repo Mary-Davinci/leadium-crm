@@ -2,6 +2,8 @@ import "../../loadEnv";
 import http from "http";
 import { ThreeCxMonitor, monitorConfig } from "./threecx-monitor";
 import { createMonitorStore } from "./threecx-store";
+import { ThreeCxController, ThreeCxOAuth, CallControlError, capabilities, validateThreeCxDn } from "./threecx-controller";
+import { isCallControlInternal } from "./threecx-internal";
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.CALL_SERVICE_PORT || 4303);
@@ -49,10 +51,13 @@ async function forwardEventToLead(eventPayload: any, signal?: AbortSignal) {
 }
 
 const config = monitorConfig();
+const oauth = new ThreeCxOAuth(config);
 const monitor = new ThreeCxMonitor(config, {
+  oauth,
   store: createMonitorStore(config.baseUrl || "disabled"),
   deliver: async (event, signal) => { await forwardEventToLead(event, signal); }
 });
+const controller = new ThreeCxController(config, oauth, () => monitor.liveCalls());
 
 export const server = http.createServer(async (req, res) => {
   try {
@@ -61,6 +66,21 @@ export const server = http.createServer(async (req, res) => {
     const pathname = decodeURIComponent(url.pathname);
     if (method === "GET" && pathname === "/health") return sendJson(res, 200, { ok: true, service: "call-service" });
     if (method === "GET" && pathname === "/3cx/diagnostics") return sendJson(res, 200, monitor.diagnostics());
+    if (pathname === "/3cx/live" || pathname === "/3cx/control") {
+      if (!isCallControlInternal(req.headers["x-leadium-call-control"])) return sendJson(res, 403, { error: "Permesso negato." });
+      if (pathname === "/3cx/live" && method === "GET") {
+        const dn = validateThreeCxDn(url.searchParams.get("dn"));
+        if (!dn) return sendJson(res, 403, { error: "Interno 3CX non configurato" });
+        const rows = monitor.liveCalls().filter(call => call.agentDn === dn);
+        return sendJson(res, 200, { available: config.enabled && monitor.diagnostics().connected, calls: rows.map(({ participantId, directControl, ...call }) => ({ ...call, capabilities: capabilities({ ...call, participantId, directControl }) })) });
+      }
+      if (pathname === "/3cx/control" && method === "POST") {
+        if (!monitor.diagnostics().connected) return sendJson(res, 503, { error: "3CX momentaneamente non disponibile" });
+        const body = await parseBody(req);
+        return sendJson(res, 200, await controller.execute(body.actor, body.action, body.input, body.callId));
+      }
+      return sendJson(res, 405, { error: "Metodo non consentito." });
+    }
     if (method === "POST" && pathname === "/3cx/webhook") {
       const payload = await parseBody(req);
       const result = await forwardEventToLead(payload);
@@ -68,9 +88,11 @@ export const server = http.createServer(async (req, res) => {
     }
     return sendJson(res, 404, { error: "Endpoint non trovato." });
   } catch (error: any) {
+    if (pathnameIsControl(req.url)) return sendJson(res, error instanceof CallControlError ? error.status : 503, { error: error instanceof CallControlError ? error.message : "3CX momentaneamente non disponibile" });
     return sendJson(res, 500, { error: error.message || "Errore interno." });
   }
 });
+function pathnameIsControl(url?: string) { return Boolean(url && /^\/3cx\/(control|live)(?:\?|$)/.test(url)); }
 
 server.listen(PORT, HOST, () => {
   console.log(`call-service su http://localhost:${PORT}`);
@@ -79,6 +101,7 @@ server.listen(PORT, HOST, () => {
 
 export async function stopCallService() {
   await monitor.stop();
+  oauth.clear();
   await new Promise<void>(resolve => server.close(() => resolve()));
 }
 if (require.main === module) {

@@ -1,6 +1,7 @@
 import "../../loadEnv";
 import http from "http";
 import { createSessionToken } from "./session-token";
+import { handleThreeCxV2, isThreeCxV2Path } from "./threecx-routes";
 import {
   authenticateUser,
   AuthCreateUserInput,
@@ -509,6 +510,12 @@ export const server = http.createServer(async (req, res) => {
     }
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const pathname = decodeURIComponent(url.pathname);
+    if (isThreeCxV2Path(pathname)) {
+      const session = getSessionFromRequest(req);
+      if (!session) return sendJson(res, 401, { error: "Non autorizzato." });
+      await handleThreeCxV2(req, res, pathname, session.user, () => getSessionFromRequest(req) === session, { base: CALL_URL });
+      return;
+    }
     if (method === "GET" && pathname === "/api/health") {
       sendJson(res, 200, { ok: true, service: "api-gateway" });
       return;
@@ -836,7 +843,7 @@ export const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Password minima 6 caratteri." });
         return;
       }
-      const created = await createUser({ username, email, name, surname, password, role });
+      const created = await createUser({ username, email, name, surname, password, role, threeCxDn: body.threeCxDn });
       sendJson(res, 201, created);
       return;
     }

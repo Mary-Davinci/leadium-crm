@@ -11,9 +11,11 @@ type UserItem = {
   email?: string;
   surname?: string;
   organization?: string;
+  threeCxDn?: string;
 };
 
 type CreateForm = {
+  threeCxDn: string;
   username: string;
   email: string;
   name: string;
@@ -29,6 +31,7 @@ type UiAlert = {
 };
 
 const INITIAL_CREATE_FORM: CreateForm = {
+  threeCxDn: "",
   username: "",
   email: "",
   name: "",
@@ -143,6 +146,7 @@ export function UsersPage() {
     setCreateSubmitting(true);
     try {
       const payload = {
+        threeCxDn: createForm.threeCxDn,
         username: createForm.username.trim(),
         email: createForm.email.trim(),
         name: createForm.name.trim() || createForm.username.trim(),
@@ -159,7 +163,8 @@ export function UsersPage() {
             email: payload.email,
             name: payload.name,
             surname: payload.surname,
-            role: payload.role
+            role: payload.role,
+            threeCxDn: payload.threeCxDn
           })
         });
         if (wantsPasswordUpdate) {
@@ -211,6 +216,7 @@ export function UsersPage() {
   function startEdit(user: UserItem) {
     setEditingUsername(user.username);
     setCreateForm({
+      threeCxDn: user.threeCxDn || "",
       username: user.username,
       email: user.email || user.username,
       name: user.name || "",
@@ -296,6 +302,7 @@ export function UsersPage() {
                     <th>Ruolo</th>
                     <th>Nominativo</th>
                     <th>Email</th>
+                    <th>Interno 3CX</th>
                     <th>Status</th>
                     <th>Approvazione</th>
                     <th>Azioni</th>
@@ -311,6 +318,7 @@ export function UsersPage() {
                       </td>
                       <td>{user.name}</td>
                       <td>{user.email || user.username}</td>
+                      <td>{user.threeCxDn || "Non configurato"}</td>
                       <td><span className="users-chip users-chip-status">Attivo</span></td>
                       <td><span className="users-chip users-chip-approved">Approvato</span></td>
                       <td>
@@ -392,6 +400,13 @@ export function UsersPage() {
                 <input value={createForm.surname} onChange={(e) => setCreateForm((prev) => ({ ...prev, surname: e.target.value }))} />
               </label>
               <div className="users-field-spacer" aria-hidden="true" />
+              <label className="users-field">
+                Interno 3CX
+                <select value={createForm.threeCxDn} onChange={event => setCreateForm(prev => ({ ...prev, threeCxDn: event.target.value }))}>
+                  <option value="">Non configurato</option><option value="901">901</option><option value="913">913</option>
+                </select>
+                <small>Mapping esplicito per le chiamate da Leadium.</small>
+              </label>
               <label className="users-field users-field-role">
                 Ruolo*
                 <select

@@ -8,7 +8,8 @@ import { CallOutcome, Lead, LeadDetail, Workflow } from "../features/practices/p
 import { getPriority, getPriorityScore, getSmartBucket, includesAny, normalizeLead } from "../features/practices/pratiche.utils";
 import { api } from "../lib/api";
 import { getAuthUser } from "../lib/auth";
-import { build3CXCallUri, clearPending3CXCall, createPending3CXCall, launch3CXUri } from "../lib/threecx";
+import { clearPending3CXCall, createPending3CXCall } from "../lib/threecx";
+import { useThreeCx } from "../features/calls/threecx-context";
 import { buildCrmChatPath } from "../lib/whatsapp";
 import {
   CrmTask,
@@ -614,22 +615,10 @@ export function PratichePage() {
     }
   }
 
-  function handleStartCall(lead: Lead) {
-    const pendingCall = createPending3CXCall(lead);
-    const uri = build3CXCallUri(lead, pendingCall);
-    if (!uri) {
-      clearPending3CXCall();
-      setError("Numero cliente non disponibile per avviare la chiamata.");
-      return;
-    }
-
-    openCallOutcomeModal(lead, {
-      startedAt: pendingCall.startedAt,
-      requestKey: pendingCall.requestKey
-    });
-    const launched = launch3CXUri(uri);
-    if (!launched) {
-      setError("Impossibile avviare il client chiamate. Verifica che 3CX sia l'app predefinita per i link telefonici.");
+  const threeCx = useThreeCx();
+  async function handleStartCall(lead: Lead) {
+    if (await threeCx.dial(lead.phone || "")) {
+      createPending3CXCall(lead);
     }
   }
 

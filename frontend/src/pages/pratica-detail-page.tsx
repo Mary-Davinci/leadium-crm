@@ -1,11 +1,11 @@
 import type { WhatsappAutomationInfo } from "../features/chat/chat.types";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { flushSync } from "react-dom";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
+import { useThreeCx } from "../features/calls/threecx-context";
 import { apiUrl } from "../lib/api-url";
 import { clearSession, getAuthToken, getAuthUser } from "../lib/auth";
-import { build3CXCallUri, clearPending3CXCall, createPending3CXCall, launch3CXUri } from "../lib/threecx";
+import { clearPending3CXCall, createPending3CXCall } from "../lib/threecx";
 import { buildCrmChatPath } from "../lib/whatsapp";
 import { CrmTask, getTaskBoardCache, isTaskBoardCacheFresh, setTaskBoardCache, upsertTaskInBoard } from "../store/crm-store";
 import { PracticeFocusSection, focusSectionMap } from "../features/practices/practice-links";
@@ -1218,24 +1218,11 @@ export function PraticaDetailPage() {
     }
   }
 
-  function startCall() {
+  const threeCx = useThreeCx();
+  async function startCall() {
     if (!detail?.lead) return;
-    const pendingCall = createPending3CXCall(detail.lead as ThreeCXLead);
-    const uri = build3CXCallUri(detail.lead as ThreeCXLead, pendingCall);
-    if (!uri) {
-      clearPending3CXCall();
-      setError("Numero cliente non disponibile per avviare la chiamata.");
-      return;
-    }
-    flushSync(() => {
-      openCallOutcomeModal({
-        startedAt: pendingCall.startedAt,
-        requestKey: pendingCall.requestKey
-      });
-    });
-    const launched = launch3CXUri(uri);
-    if (!launched) {
-      setError("Impossibile avviare 3CX da browser. Verifica che il protocollo 3CX sia associato al desktop app.");
+    if (await threeCx.dial(detail.lead.phone || "")) {
+      createPending3CXCall(detail.lead as ThreeCXLead);
     }
   }
 
@@ -2147,7 +2134,7 @@ export function PraticaDetailPage() {
                 ) : null}
               </div>
               <div className="pd-hero-actions">
-                <button type="button" className="pd-hero-action pd-hero-action-call" disabled={busy} onClick={startCall}>
+                <button type="button" className="pd-hero-action pd-hero-action-call" disabled={busy || threeCx.busy} title={threeCx.dn ? undefined : "Interno 3CX non configurato"} onClick={startCall}>
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path
                       d="M6.6 10.8a15.4 15.4 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.3 1.1.4 2.2.6 3.4.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.3.6 3.4.1.4 0 .8-.3 1.1l-2.2 2.3Z"
@@ -2765,7 +2752,7 @@ export function PraticaDetailPage() {
                               </button>
                             ) : null}
                             {item.status === "pending" ? (
-                              <button type="button" className="pd-payment-menu-item" disabled={busy} onClick={startCall}>
+                              <button type="button" className="pd-payment-menu-item" disabled={busy || threeCx.busy} onClick={startCall}>
                                 Chiama cliente
                               </button>
                             ) : null}
@@ -2799,6 +2786,9 @@ export function PraticaDetailPage() {
                     {compactTimeline.length ? `${compactTimeline.length} eventi recenti` : "Nessuna attivita recente"}
                   </p>
                 </div>
+                <button type="button" className="secondary threecx-outcome-button" disabled={busy} onClick={() => openCallOutcomeModal()}>
+                  Registra esito
+                </button>
               </div>
               {compactTimeline.length ? (
                 <div className="pd-timeline-list">

@@ -1,6 +1,8 @@
 import WebSocket from "ws";
 import { MONITORED_DNS, emptyMonitorState, finalizeCalls, legKey, markCallIncomplete, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
 import { MonitorStore } from "./threecx-store";
+import type { LiveCall } from "./threecx-controller";
+import { classifyMonitoredDn } from "./threecx-normalizer";
 
 export type MonitorConfig = { enabled: boolean; baseUrl: string; clientId: string; configured: boolean; credential: () => string };
 export function monitorConfig(env: NodeJS.ProcessEnv = process.env): MonitorConfig {
@@ -19,6 +21,7 @@ type Dependencies = {
   fetch?: typeof fetch;
   socket?: (url: string, token: string) => Socket;
   now?: () => number;
+  oauth?: { get(): Promise<{ token: string; expiresAt: number }> };
   retryMs?: number; tickMs?: number; timeoutMs?: number;
 };
 const allowed = new Set<string>(MONITORED_DNS);
@@ -42,6 +45,7 @@ export class ThreeCxMonitor {
   private expiresAt = 0;
   private sequence: number | null = null;
   private dnTypes = new Map<string, string>();
+  private liveParticipants = new Map<string, { id: number; callid: number; dn: string; direct_control: boolean }>();
   private now: () => number;
   private http: typeof fetch;
   private deliveryRetryAt = 0;
@@ -61,6 +65,29 @@ export class ThreeCxMonitor {
     if (this.task || !this.config.enabled) return;
     if (!this.config.configured) { this.status.lastError = "3CX configuration missing or invalid"; return; }
     this.task = this.run();
+  }
+  /** Ephemeral projection only. No PBX request, token, provider payload or DB write. */
+  liveCalls(): LiveCall[] {
+    if (!this.config.enabled || !this.status.connected) return [];
+    const calls: LiveCall[] = [];
+    for (const call of Object.values(this.state.calls)) {
+      if (call.uncertain || !call.customer || !call.direction) continue;
+      for (const [key, leg] of Object.entries(call.legs)) {
+        if (!leg.active || classifyMonitoredDn(leg.dn, this.dnTypes.get(leg.dn) || "Unknown") !== "Agent") continue;
+        const participant = this.liveParticipants.get(key);
+        if (!participant || String(participant.callid) !== call.callId) continue;
+        const status = leg.status === "Connected" ? "connected" : ["Hold", "Held"].includes(leg.status) ? "hold" : ["Ringing", "Dialing"].includes(leg.status) ? "ringing" : null;
+        if (status) calls.push({ callId: call.callId, direction: call.direction, customerPhone: call.customer, agentDn: leg.dn,
+          status, startedAt: call.startedAt, ...(call.answeredAt ? { answeredAt: call.answeredAt } : {}),
+          participantId: participant.id, directControl: participant.direct_control });
+      }
+    }
+    return calls;
+  }
+  private rememberParticipant(p: any) {
+    if (Number.isSafeInteger(p.id) && Number.isSafeInteger(p.callid) && p.callid > 0) this.liveParticipants.set(legKey(p.dn, p.id), {
+      id: p.id, callid: p.callid, dn: p.dn, direct_control: p.direct_control === true
+    });
   }
   async stop() {
     this.abort.abort(); this.socket?.terminate();
@@ -107,6 +134,9 @@ export class ThreeCxMonitor {
     } finally { clearTimeout(timer); this.abort.signal.removeEventListener("abort", cancel); }
   }
   private async authenticate() {
+    if (this.deps.oauth) {
+      const auth = await this.deps.oauth.get(); this.token = auth.token; this.expiresAt = auth.expiresAt; return;
+    }
     const token = await this.request("/connect/token", true);
     if (typeof token.access_token !== "string" || !token.access_token || !Number.isFinite(token.expires_in) || token.expires_in <= 0) throw new Error("3CX authentication failed");
     this.token = token.access_token;
@@ -124,6 +154,7 @@ export class ThreeCxMonitor {
         const participant = await this.request(`/callcontrol/${dn}/participants/${summary.id}`);
         if (participant && participant.dn === dn && !(await this.deps.store.hasFinal(String(participant.callid)))) {
           seen.add(legKey(dn, participant.id));
+          this.rememberParticipant(participant);
           observeParticipant(this.state, participant, this.iso(), recovery, info.type);
           this.rememberCallId(participant.callid);
         }
@@ -132,6 +163,7 @@ export class ThreeCxMonitor {
     for (const call of Object.values(this.state.calls)) for (const [key, leg] of Object.entries(call.legs)) {
       if (leg.active && !seen.has(key)) removeParticipant(this.state, leg.dn, Number(key.split("/")[1]), this.iso(), true);
     }
+    for (const key of this.liveParticipants.keys()) if (!seen.has(key)) this.liveParticipants.delete(key);
     await this.deps.store.save(this.state);
   }
   private message(raw: unknown) {
@@ -155,10 +187,11 @@ export class ThreeCxMonitor {
     this.enqueue(async () => {
       const [, dn, id] = match;
       if (!id) { await this.reconcile(false); return; }
-      if (event.event_type === 1) removeParticipant(this.state, dn, Number(id), this.iso());
+      if (event.event_type === 1) { this.liveParticipants.delete(legKey(dn, Number(id))); removeParticipant(this.state, dn, Number(id), this.iso()); }
       else {
         const participant = await this.request(`/callcontrol/${dn}/participants/${id}`);
         if (participant && participant.dn === dn && participant.id === Number(id) && Number.isSafeInteger(participant.callid) && participant.callid > 0) {
+          this.rememberParticipant(participant);
           if (!(await this.deps.store.hasFinal(String(participant.callid)))) observeParticipant(this.state, participant, this.iso(), false, this.dnTypes.get(dn) || "Unknown");
           this.rememberCallId(participant.callid);
         } else removeParticipant(this.state, dn, Number(id), this.iso(), true);

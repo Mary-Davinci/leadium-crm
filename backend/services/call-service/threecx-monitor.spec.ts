@@ -86,6 +86,22 @@ function fixture(options: { authStatus?: number; deniedDn?: string; reportedDnTy
 }
 
 async function main() {
+  await test("V2 live projection reuses existing monitor reads, tracks direct_control/status and vanishes at end or disconnect", async () => {
+    const f = fixture({ reportedDnTypes: TENANT_DN_TYPES }); await f.start();
+    try {
+      await f.upsert("920", 20, 10101, "Ringing"); await f.upsert("920", 20, 10101, "Connected");
+      assert.deepEqual(f.monitor.liveCalls(), []);
+      await f.upsert("901", 1, 10101, "Ringing", { direct_control: true });
+      let rows = f.monitor.liveCalls(); assert.equal(rows.length, 1); assert.equal(rows[0].agentDn, "901"); assert.equal(rows[0].customerPhone, "+393331234567");
+      assert.equal(rows[0].status, "ringing"); assert.equal(rows[0].directControl, true);
+      const requests = f.requests.length; f.monitor.liveCalls(); assert.equal(f.requests.length, requests, "live projection never adds PBX reads");
+      await f.upsert("901", 1, 10101, "Connected", { direct_control: false }); rows = f.monitor.liveCalls(); assert.equal(rows[0].status, "connected"); assert.equal(rows[0].directControl, false);
+      await f.upsert("901", 1, 10101, "Hold"); assert.equal(f.monitor.liveCalls()[0].status, "hold");
+      await f.remove("901", 1); assert.deepEqual(f.monitor.liveCalls(), []);
+      await f.remove("920", 20); await f.finish(); assert.equal(f.deliveries[0].disposition, "completed");
+      await f.monitor.stop(); assert.deepEqual(f.monitor.liveCalls(), []);
+    } finally { await f.monitor.stop(); }
+  });
   await test("disabled by default: no credential value read, HTTP, socket or store access", async () => {
     let accesses = 0;
     const env: any = { THREECX_BASE_URL: "https://pbx.test", THREECX_CLIENT_ID: "leadiumcrm" };

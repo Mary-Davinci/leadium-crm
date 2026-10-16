@@ -2,6 +2,7 @@ import { BarChart3, ClipboardList, LayoutDashboard, MessageCircle, Phone, UsersR
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { getAuthUser } from "../lib/auth";
 import { Header } from "./Header";
+import { ThreeCxProvider } from "../features/calls/threecx-context";
 import "../styles/layout.css";
 
 type MenuItem = {
@@ -45,7 +46,7 @@ export function AppLayout() {
   );
 
   return (
-    <div className="shell">
+    <ThreeCxProvider><div className="shell">
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-wordmark" src="/brand/crocieriamo.png" alt="Crocieriamo" />
@@ -90,6 +91,6 @@ export function AppLayout() {
           <Outlet />
         </section>
       </main>
-    </div>
+    </div></ThreeCxProvider>
   );
 }

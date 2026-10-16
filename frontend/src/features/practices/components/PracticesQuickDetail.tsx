@@ -1,18 +1,14 @@
 import { Link } from "react-router-dom";
 import { buildCrmChatPath } from "../../../lib/whatsapp";
 import { Lead } from "../pratiche.types";
+import { useThreeCx } from "../../calls/threecx-context";
 
 export type PracticesQuickDetailProps = {
   lead: Lead | null;
 };
 
-function getPhoneHref(phone?: string) {
-  const cleaned = String(phone || "").replace(/[^\d+]/g, "");
-  return cleaned ? `tel:${cleaned}` : "#";
-}
-
-
 export function PracticesQuickDetail({ lead }: PracticesQuickDetailProps) {
+  const threeCx = useThreeCx();
   if (!lead) {
     return null;
   }
@@ -46,9 +42,9 @@ export function PracticesQuickDetail({ lead }: PracticesQuickDetailProps) {
       </section>
 
       <footer className="pr-drawer-actions">
-        <a className="pr-drawer-action pr-drawer-action-primary" href={getPhoneHref(lead.phone)}>
+        <button type="button" disabled={threeCx.busy} className="pr-drawer-action pr-drawer-action-primary" onClick={() => void threeCx.dial(lead.phone || "")}>
           Chiama
-        </a>
+        </button>
         <Link className="pr-drawer-action" to={buildCrmChatPath(lead)}>
           WhatsApp
         </Link>
