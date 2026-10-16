@@ -1,5 +1,7 @@
 import "../../loadEnv";
 import http from "http";
+import { ThreeCxMonitor, monitorConfig } from "./threecx-monitor";
+import { createMonitorStore } from "./threecx-store";
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.CALL_SERVICE_PORT || 4303);
@@ -29,22 +31,36 @@ function parseBody(req: http.IncomingMessage): Promise<any> {
   });
 }
 
-async function forwardEventToLead(eventPayload: any) {
-  const res = await fetch(`${LEAD_URL}/internal/call-events`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(eventPayload)
-  });
-  if (!res.ok) throw new Error((await res.text()) || "Errore inoltro evento al lead-service.");
-  return res.json();
+async function forwardEventToLead(eventPayload: any, signal?: AbortSignal) {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  if (signal?.aborted) cancel();
+  signal?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(cancel, 15000);
+  try {
+    const res = await fetch(`${LEAD_URL}/internal/call-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(eventPayload), signal: controller.signal
+    });
+    if (!res.ok) throw new Error("Errore inoltro evento al lead-service.");
+    return await res.json();
+  } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
 }
 
-const server = http.createServer(async (req, res) => {
+const config = monitorConfig();
+const monitor = new ThreeCxMonitor(config, {
+  store: createMonitorStore(config.baseUrl || "disabled"),
+  deliver: async (event, signal) => { await forwardEventToLead(event, signal); }
+});
+
+export const server = http.createServer(async (req, res) => {
   try {
     const method = req.method || "GET";
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const pathname = decodeURIComponent(url.pathname);
     if (method === "GET" && pathname === "/health") return sendJson(res, 200, { ok: true, service: "call-service" });
+    if (method === "GET" && pathname === "/3cx/diagnostics") return sendJson(res, 200, monitor.diagnostics());
     if (method === "POST" && pathname === "/3cx/webhook") {
       const payload = await parseBody(req);
       const result = await forwardEventToLead(payload);
@@ -58,4 +74,14 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`call-service su http://localhost:${PORT}`);
+  monitor.start();
 });
+
+export async function stopCallService() {
+  await monitor.stop();
+  await new Promise<void>(resolve => server.close(() => resolve()));
+}
+if (require.main === module) {
+  const stop = () => { void stopCallService().then(() => process.exit(0)); };
+  process.once("SIGTERM", stop); process.once("SIGINT", stop);
+}

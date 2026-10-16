@@ -26,6 +26,8 @@ export type CallLogRecord = {
   source?: string;
   // Additive (3CX events): talk time in seconds when the PBX reports it, and the agreed callback.
   durationSeconds?: number;
+  direction?: "inbound" | "outbound";
+  answeredAt?: string | null;
   callbackAt?: string | null;
 };
 

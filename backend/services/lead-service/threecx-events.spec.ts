@@ -109,6 +109,29 @@ async function main() {
     });
   });
 
+  await runCase("finale Call Control riusa il processing: callid nativo, metadati e retry senza duplicati", async () => {
+    await withServer(async (baseUrl) => {
+      const lead = await createLead(baseUrl);
+      const event = { callId: "123456", from: lead.phone, eventType: "call_control_final", disposition: "completed",
+        agent: "913", direction: "outbound", startedAt: "2026-10-16T10:00:00.000Z",
+        answeredAt: "2026-10-16T10:00:05.000Z", endedAt: "2026-10-16T10:01:40.000Z", durationSeconds: 95 };
+      assert.equal((await callEvent(baseUrl, event)).body.matched, true);
+      assert.equal((await callEvent(baseUrl, event)).body.duplicate, true);
+      const after = await detail(baseUrl, lead.id);
+      assert.equal(after.callLogs.length, 1);
+      assert.equal(after.callLogs[0].idempotencyKey, "3cx_123456");
+      assert.equal(after.callLogs[0].direction, "outbound");
+      assert.equal(after.callLogs[0].answeredAt, event.answeredAt);
+      assert.equal(after.callLogs[0].actor, "913");
+      assert.equal(after.callLogs[0].durationSeconds, 95);
+      assert.equal(after.lead.status, LEAD_STATUSES.TO_CONTACT, "nessun esito commerciale derivato");
+      const timeline = after.timeline.filter((row: any) => row.type === "3cx_event");
+      assert.equal(timeline.length, 1);
+      assert.equal(timeline[0].meta.callId, "123456");
+      assert.equal(timeline[0].meta.answeredAt, event.answeredAt);
+    });
+  });
+
   await runCase("callback 3CX con data: Richiamo concordato, nextActionAt e task di richiamo", async () => {
     await withServer(async (baseUrl) => {
       const lead = await createLead(baseUrl);

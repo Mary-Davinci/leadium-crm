@@ -489,6 +489,7 @@ function mapApiRoute(pathname: string) {
   if (pathname.startsWith("/api/customers")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname.startsWith("/api/purchases")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname === "/api/3cx/webhook") return { base: CALL_URL, path: "/3cx/webhook" };
+  if (pathname === "/api/3cx/diagnostics") return { base: CALL_URL, path: "/3cx/diagnostics" };
   if (pathname === "/api/analytics/kpis") return { base: ANALYTICS_URL, path: "/kpis" };
   if (pathname.startsWith("/api/analytics/export")) return { base: ANALYTICS_URL, path: pathname.replace(/^\/api\/analytics/, "") };
   if (pathname.startsWith("/api/report/booking-activities")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
@@ -954,6 +955,10 @@ export const server = http.createServer(async (req, res) => {
     }
     if (pathname === "/api/whatsapp/diagnostics" && !isAdmin(session.user)) {
       sendJson(res, 403, { error: "Solo admin e super admin possono consultare la diagnostica WhatsApp." });
+      return;
+    }
+    if (pathname === "/api/3cx/diagnostics" && !isAdmin(session.user)) {
+      sendJson(res, 403, { error: "Diagnostica 3CX riservata agli amministratori." });
       return;
     }
     // WhatsApp is a shared inbox by product design: any authenticated operator can read every

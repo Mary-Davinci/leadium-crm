@@ -3,6 +3,7 @@ import path from "path";
 
 const ROOT = path.join(__dirname, "..");
 const runtimeExtension = __filename.endsWith(".js") ? ".js" : ".ts";
+let stopCallService: (() => Promise<void>) | undefined;
 
 const services = [
   { name: "workflow-service", entry: path.join(ROOT, "workflow-service", `server${runtimeExtension}`) },
@@ -18,7 +19,8 @@ for (const service of services) {
   try {
     // Ogni modulo avvia il proprio server su porta dedicata.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require(service.entry);
+    const instance = require(service.entry);
+    if (service.name === "call-service") stopCallService = instance.stopCallService;
     process.stdout.write(`[${service.name}] started\n`);
   } catch (error: any) {
     process.stderr.write(`[${service.name}] failed: ${error.message}\n`);
@@ -26,5 +28,12 @@ for (const service of services) {
   }
 }
 
-process.on("SIGINT", () => process.exit(0));
-process.on("SIGTERM", () => process.exit(0));
+let stopping = false;
+async function stopStack() {
+  if (stopping) return;
+  stopping = true;
+  await stopCallService?.();
+  process.exit(0);
+}
+process.once("SIGINT", () => { void stopStack(); });
+process.once("SIGTERM", () => { void stopStack(); });

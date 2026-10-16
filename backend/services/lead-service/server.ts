@@ -1372,6 +1372,7 @@ async function handleCallEvent(body: any) {
         callId,
         disposition,
         durationSeconds,
+        ...(body.eventType === "call_control_final" ? { direction: body.direction, answeredAt: validIsoOrNull(body.answeredAt) } : {}),
         callbackAt,
         agentConfirmed,
         note,
@@ -1393,6 +1394,10 @@ async function handleCallEvent(body: any) {
     idempotencyKey: callId ? `3cx_${callId}` : undefined,
     source: "3cx",
     durationSeconds,
+    ...(body.eventType === "call_control_final" ? {
+      direction: ["inbound", "outbound"].includes(body.direction) ? body.direction : undefined,
+      answeredAt: validIsoOrNull(body.answeredAt)
+    } : {}),
     callbackAt: disposition === "call_back" ? callbackAt : null
   });
   lead.latestCallOutcome = disposition;
