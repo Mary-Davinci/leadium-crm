@@ -26,3 +26,22 @@ export function isTaskDismissBlocked(role: AuthRole, nextStatus?: string): boole
 export function isWhatsappTemplateTestSendBlocked(role: AuthRole): boolean {
   return !isAdminRole(role);
 }
+
+/**
+ * Server-to-server 3CX webhook: 3CX has no Leadium session, so it authenticates with a shared
+ * secret header instead. With no secret configured the path stays closed (session required), so
+ * nothing becomes public by accident. Constant-time comparison avoids leaking the secret length.
+ */
+export function isValidThreeCxWebhookSecret(provided: unknown, configured: string | undefined): boolean {
+  const expected = String(configured || "").trim();
+  const given = typeof provided === "string" ? provided.trim() : "";
+  if (!expected || !given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && require("crypto").timingSafeEqual(a, b);
+}
+
+/** Internal service-to-service routes (automation tick, ...) are never reachable from the browser. */
+export function isInternalServicePath(pathname: string): boolean {
+  return /^\/api\/whatsapp\/internal(\/|$)/.test(pathname);
+}

@@ -28,6 +28,10 @@ import { BOOKING_ACTIVITY_HEADERS, BookingActivityFilters, buildBookingActivityC
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.LEAD_SERVICE_PORT || 4301);
 const WORKFLOW_URL = process.env.WORKFLOW_SERVICE_URL || "http://localhost:4302";
+const WHATSAPP_URL = process.env.WHATSAPP_SERVICE_URL || "http://localhost:4306";
+// Off unless explicitly "true": the scheduler then also asks whatsapp-service to evaluate the
+// Booking WhatsApp sequence (which still sends nothing for manual_only templates).
+const WHATSAPP_AUTOMATION_ENABLED = String(process.env.WHATSAPP_AUTOMATION_ENABLED || "").trim().toLowerCase() === "true";
 const SLA_FIRST_CONTACT_MINUTES = Number(process.env.SLA_FIRST_CONTACT_MINUTES || 5);
 const SLA_TASK_INTERVAL_MS = Number(process.env.SLA_TASK_INTERVAL_MS || 60_000);
 const AUTOMATIC_TASK_KINDS = [
@@ -386,6 +390,10 @@ function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
     callAttempts: lead.callAttempts || 0,
     secondAttemptPending: getSecondAttemptPending(lead),
     nextActionAt: lead.nextActionAt || null,
+    productInterest: lead.productInterest || null,
+    quoteUrl: lead.quoteUrl || null,
+    doNotContact: lead.doNotContact || null,
+    whatsappAutomation: lead.whatsappAutomation || null,
     createdAt: lead.createdAt,
     updatedAt: lead.updatedAt
   };
@@ -1258,6 +1266,37 @@ export async function cleanupLegacyAutomaticTaskDuplicates() {
   }
 }
 
+// 3CX setups name dispositions differently; everything is mapped onto the CRM call outcomes.
+const THREECX_DISPOSITION_ALIASES: Record<string, string> = {
+  missed: "no_answer",
+  "no-answer": "no_answer",
+  noanswer: "no_answer",
+  unanswered: "no_answer",
+  answered: "completed",
+  success: "completed",
+  callback: "call_back",
+  "call-back": "call_back",
+  "not-interested": "not_interested"
+};
+
+export function normalizeThreeCxDisposition(raw: unknown) {
+  const value = String(raw || "completed").trim().toLowerCase();
+  return THREECX_DISPOSITION_ALIASES[value] || value;
+}
+
+function validIsoOrNull(value: unknown) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+/**
+ * 3CX call events. What the PBX knows for sure (rang/answered/missed/busy, duration) is applied
+ * directly; what only a person can judge (interested / not interested) changes the commercial
+ * status only when the event says the AGENT set it (agentDisposition: true) -- otherwise it is
+ * recorded on the timeline and left for the operator to confirm. A callback changes status only
+ * with a valid date, so nextActionAt is never invented.
+ */
 async function handleCallEvent(body: any) {
   const externalId = body.externalLeadId ? String(body.externalLeadId) : null;
   const incomingNumber = body.from ? String(body.from) : "";
@@ -1265,8 +1304,12 @@ async function handleCallEvent(body: any) {
   if (!lead) return { ok: true, matched: false };
 
   const eventType = body.eventType || "call_event";
-  const disposition = body.disposition || "completed";
+  const disposition = normalizeThreeCxDisposition(body.disposition);
   const callId = body.callId ? String(body.callId) : "";
+  const agentConfirmed = body.agentDisposition === true || String(body.dispositionSource || "").toLowerCase() === "agent";
+  const callbackAt = validIsoOrNull(body.callbackAt || body.followUpAt);
+  const note = String(body.note || "").trim();
+  const durationSeconds = Math.max(0, Number(body.durationSeconds || 0) || 0);
 
   // 3CX is known to retry webhook delivery. Without dedup keyed on the
   // provider's own call id, a retried event would double-count callAttempts
@@ -1282,29 +1325,87 @@ async function handleCallEvent(body: any) {
   lead.updatedAt = now;
   markLeadContacted(lead, now);
   const activities: ReturnType<typeof createActivity>[] = [];
+  const previousStatus = String(lead.status || "");
+  const moveTo = async (toStatus: string) => {
+    if (!(await validateTransition(lead.status, toStatus))) return false;
+    lead.status = toStatus;
+    activities.push(...applyStatusAutomation(lead, toStatus, "3cx"));
+    return true;
+  };
+  let statusNote = "";
   if (disposition === "no_answer") {
-    const valid = await validateTransition(lead.status, LEAD_STATUSES.NO_ANSWER);
-    if (valid) {
-      lead.status = LEAD_STATUSES.NO_ANSWER;
-      activities.push(...applyStatusAutomation(lead, LEAD_STATUSES.NO_ANSWER, "3cx"));
+    await moveTo(LEAD_STATUSES.NO_ANSWER);
+  } else if (disposition === "call_back") {
+    if (callbackAt) {
+      lead.nextActionAt = callbackAt;
+      await moveTo(LEAD_STATUSES.CALLBACK_AGREED);
+      await syncFollowUpTask(lead, "callback_reminder", `Richiamare: ${lead.fullName || lead.phone || "lead"}`, note ? `Motivo: ${note}` : "Richiamo concordato da centralino.", callbackAt, 75);
+    } else {
+      statusNote = " Richiamo senza data: stato invariato, concordare data e ora.";
     }
+  } else if (disposition === "interested") {
+    if (agentConfirmed) await moveTo(LEAD_STATUSES.INTERESTED);
+    else statusNote = " Esito non confermato dall'operatore: stato invariato.";
+  } else if (disposition === "not_interested") {
+    // Stopping WhatsApp nudges is always safe; closing the deal needs the agent and a reason.
+    lead.whatsappAutomation = { ...(lead.whatsappAutomation || {}), stoppedAt: now, stoppedReason: "not_interested" };
+    const lossReason = String(body.lossReason || "").trim();
+    if (agentConfirmed && lossReason && (await validateTransition(lead.status, LEAD_STATUSES.NOT_INTERESTED))) {
+      lead.status = LEAD_STATUSES.NOT_INTERESTED;
+      syncLeadClosureState(lead, lossReason, body.lossDetail);
+      syncLeadSlaState(lead);
+      activities.push(...applyStatusAutomation(lead, LEAD_STATUSES.NOT_INTERESTED, "3cx"));
+    } else {
+      statusNote = " Stato invariato: l'operatore deve confermare con il motivo. Solleciti WhatsApp fermati.";
+    }
+  }
+  if (lead.status !== previousStatus) {
+    activities.push(
+      createActivity({
+        leadId: lead.id,
+        type: "status_changed",
+        text: `Stato aggiornato da "${previousStatus}" a "${lead.status}".`,
+        actor: "3cx",
+        meta: { fromStatus: previousStatus, toStatus: lead.status, source: "3cx_event", callId }
+      })
+    );
   }
   // Operator-facing text avoids raw internal jargon (event type / disposition codes) and, for a
   // missed call, states the attempt number right in the timeline line -- this is what actually
   // answers "which attempt is this" without requiring the operator to count entries themselves.
   const callEventText =
-    disposition === "no_answer"
+    (disposition === "no_answer"
       ? `Chiamata da centralino: nessuna risposta (tentativo ${lead.callAttempts || 1}).`
       : disposition === "busy"
         ? "Chiamata da centralino: numero occupato."
-        : "Chiamata da centralino registrata.";
+        : disposition === "call_back"
+          ? callbackAt
+            ? `Chiamata da centralino: richiamo concordato per ${new Date(callbackAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}.`
+            : "Chiamata da centralino: il cliente chiede di essere richiamato."
+          : disposition === "interested"
+            ? "Chiamata da centralino: cliente interessato."
+            : disposition === "not_interested"
+              ? "Chiamata da centralino: cliente non interessato."
+              : "Chiamata da centralino registrata.") + statusNote;
   activities.unshift(
     createActivity({
       leadId: lead.id,
       type: "3cx_event",
       text: callEventText,
       actor: "3cx",
-      meta: { eventType, callId, durationSeconds: body.durationSeconds || 0, from: body.from || "", to: body.to || "" }
+      meta: {
+        eventType,
+        callId,
+        disposition,
+        durationSeconds,
+        callbackAt,
+        agentConfirmed,
+        note,
+        from: body.from || "",
+        to: body.to || "",
+        // Missed call: the "Chiamata senza risposta" WhatsApp template is the natural follow-up.
+        ...(disposition === "no_answer" ? { suggestedTemplate: "call_no_answer" } : {})
+      }
     })
   );
   const startedAt = body.startedAt ? String(body.startedAt) : now;
@@ -1313,10 +1414,12 @@ async function handleCallEvent(body: any) {
     startedAt,
     endedAt: body.endedAt ? String(body.endedAt) : now,
     outcome: (KNOWN_CALL_OUTCOMES.has(disposition) ? disposition : "completed") as any,
-    actor: "3cx",
-    note: "",
+    actor: String(body.agent || body.extension || "3cx"),
+    note,
     idempotencyKey: callId ? `3cx_${callId}` : undefined,
-    source: "3cx"
+    source: "3cx",
+    durationSeconds,
+    callbackAt: disposition === "call_back" ? callbackAt : null
   });
   lead.latestCallOutcome = disposition;
   lead.latestCallAt = startedAt;
@@ -1762,6 +1865,54 @@ export const server = http.createServer(async (req, res) => {
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
       const previousAssignedTo = String(lead.assignedTo || "").trim();
       const previousNotes = String(lead.notes || "");
+      // Validate before any mutation: a rejected PATCH must have zero side effects.
+      if (Object.prototype.hasOwnProperty.call(body, "quoteUrl")) {
+        const quoteUrl = cleanOptionalString(body.quoteUrl);
+        if (quoteUrl && !/^https?:\/\/\S+$/i.test(quoteUrl)) {
+          return sendJson(res, 400, { error: "Il link del preventivo deve iniziare con http:// o https://." });
+        }
+      }
+      const patchActivities: ReturnType<typeof createActivity>[] = [];
+      const patchNowIso = new Date().toISOString();
+      const patchActor = String(body.actor || "operatore");
+      if (Object.prototype.hasOwnProperty.call(body, "productInterest")) lead.productInterest = cleanOptionalString(body.productInterest);
+      if (Object.prototype.hasOwnProperty.call(body, "quoteUrl")) lead.quoteUrl = cleanOptionalString(body.quoteUrl);
+      if (Object.prototype.hasOwnProperty.call(body, "doNotContact")) {
+        // Explicit opt-out. Only an operator action changes it: an inbound WhatsApp message
+        // reopens the conversation but never clears it.
+        const wasActive = Boolean(lead.doNotContact && lead.doNotContact.active);
+        const active = Boolean(body.doNotContact && body.doNotContact.active);
+        if (active !== wasActive) {
+          const reason = cleanOptionalString(body.doNotContact && body.doNotContact.reason);
+          lead.doNotContact = active
+            ? { active: true, reason, setAt: patchNowIso, setBy: patchActor }
+            : { ...(lead.doNotContact || {}), active: false, clearedAt: patchNowIso, clearedBy: patchActor };
+          patchActivities.push(
+            createActivity({
+              leadId: lead.id,
+              type: active ? "do_not_contact_set" : "do_not_contact_cleared",
+              text: active
+                ? `Cliente segnato come "non contattare"${reason ? `: ${reason}` : ""}. Nessun template WhatsApp verra inviato.`
+                : "Rimosso il blocco \"non contattare\".",
+              actor: patchActor
+            })
+          );
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "whatsappAutomation") && body.whatsappAutomation && typeof body.whatsappAutomation === "object") {
+        const current = lead.whatsappAutomation || {};
+        const next: Record<string, unknown> = { ...current };
+        if (Object.prototype.hasOwnProperty.call(body.whatsappAutomation, "paused")) next.paused = Boolean(body.whatsappAutomation.paused);
+        if (body.whatsappAutomation.stopped === true && !current.stoppedAt) {
+          next.stoppedAt = patchNowIso;
+          next.stoppedReason = "manual_stop";
+        }
+        if (body.whatsappAutomation.stopped === false) {
+          next.stoppedAt = null;
+          next.stoppedReason = null;
+        }
+        lead.whatsappAutomation = next;
+      }
       for (const key of ["fullName", "phone", "email", "source", "budget", "assignedTo", "notes"]) {
         if (Object.prototype.hasOwnProperty.call(body, key)) lead[key] = body[key];
       }
@@ -1873,6 +2024,7 @@ export const server = http.createServer(async (req, res) => {
         );
       }
 
+      activities.push(...patchActivities);
       await appendActivities(activities);
       return sendJson(res, 200, safeLead(lead));
     }
@@ -2216,8 +2368,17 @@ if (process.env.NODE_ENV !== "test") {
     console.log(`lead-service su http://localhost:${PORT}`);
     cleanupLegacyAutomaticTaskDuplicates().catch(() => {});
     ensureSlaTasks().catch(() => {});
+    let automationTickRunning = false;
     setInterval(() => {
       ensureSlaTasks().catch(() => {});
+      if (WHATSAPP_AUTOMATION_ENABLED && !automationTickRunning) {
+        automationTickRunning = true;
+        fetch(`${WHATSAPP_URL}/internal/automation/tick`, { method: "POST" })
+          .catch(() => {})
+          .finally(() => {
+            automationTickRunning = false;
+          });
+      }
     }, SLA_TASK_INTERVAL_MS);
   });
 }

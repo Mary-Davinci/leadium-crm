@@ -49,6 +49,22 @@ function main() {
   runCase("super_admin puo inviare un template di test WhatsApp", () => {
     assert.equal(rules.isWhatsappTemplateTestSendBlocked("super_admin"), false);
   });
+
+  runCase("webhook 3CX: accettato solo con il secret configurato corretto", () => {
+    assert.equal(rules.isValidThreeCxWebhookSecret("s3cr3t-value", "s3cr3t-value"), true);
+    assert.equal(rules.isValidThreeCxWebhookSecret("wrong-value!", "s3cr3t-value"), false);
+    assert.equal(rules.isValidThreeCxWebhookSecret("", "s3cr3t-value"), false);
+  });
+
+  runCase("webhook 3CX: senza secret configurato resta chiuso (serve la sessione)", () => {
+    assert.equal(rules.isValidThreeCxWebhookSecret("qualsiasi", ""), false);
+    assert.equal(rules.isValidThreeCxWebhookSecret("qualsiasi", undefined), false);
+  });
+
+  runCase("le rotte interne WhatsApp (tick automazione) non sono raggiungibili dal browser", () => {
+    assert.equal(rules.isInternalServicePath("/api/whatsapp/internal/automation/tick"), true);
+    assert.equal(rules.isInternalServicePath("/api/whatsapp/messages/send"), false);
+  });
 }
 
 main();

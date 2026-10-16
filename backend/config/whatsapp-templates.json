@@ -5,7 +5,10 @@
     "label": "Primo contatto cliente",
     "body": "Ciao , ti contattiamo da Crocieriamo in merito alla tua richiesta. Quando vuoi, puoi rispondere direttamente a questo messaggio e un nostro operatore ti assisterà.",
     "category": "utility",
-    "suggestionTag": "first_contact"
+    "suggestionTag": "first_contact",
+    "metaCategory": "MARKETING",
+    "metaStatus": "approved",
+    "onceGroup": "first_contact"
   },
   {
     "key": "reopen_contact",
@@ -13,7 +16,8 @@
     "label": "Ricontatto pratica",
     "body": "Ciao, ti ricontattiamo da Crocieriamo per aggiornarti sulla tua pratica.",
     "category": "followup",
-    "suggestionTag": "task"
+    "suggestionTag": "task",
+    "metaStatus": "approved"
   },
   {
     "key": "request_documents",
@@ -21,7 +25,8 @@
     "label": "Richiesta documenti",
     "body": "Ciao, ti contattiamo da Crocieriamo perché ci servono alcuni documenti mancanti per proseguire con la tua pratica.",
     "category": "utility",
-    "suggestionTag": "documents"
+    "suggestionTag": "documents",
+    "metaStatus": "approved"
   },
   {
     "key": "payment_followup",
@@ -29,7 +34,8 @@
     "label": "Promemoria pagamento",
     "body": "Ciao, ti contattiamo da Crocieriamo in merito a un pagamento ancora in sospeso relativo alla tua pratica.",
     "category": "utility",
-    "suggestionTag": "payments"
+    "suggestionTag": "payments",
+    "metaStatus": "approved"
   },
   {
     "key": "booking_update",
@@ -37,7 +43,8 @@
     "label": "Aggiornamento prenotazione",
     "body": "Ciao, ti contattiamo da Crocieriamo perché abbiamo un aggiornamento sulla tua prenotazione.",
     "category": "utility",
-    "suggestionTag": "generic"
+    "suggestionTag": "generic",
+    "metaStatus": "approved"
   },
   {
     "key": "reschedule_callback",
@@ -45,7 +52,8 @@
     "label": "Ricontattami",
     "body": "Ciao, ti contattiamo da Crocieriamo. Se preferisci essere richiamato in un altro momento, rispondi a questo messaggio indicandoci quando.",
     "category": "followup",
-    "suggestionTag": "callback"
+    "suggestionTag": "callback",
+    "metaStatus": "approved"
   },
   {
     "key": "not_interested_ack",
@@ -53,6 +61,187 @@
     "label": "Non interessato",
     "body": "Ciao, grazie per aver contattato Crocieriamo. Se in futuro vorrai ricevere nuovamente informazioni, siamo a disposizione.",
     "category": "followup",
-    "suggestionTag": "not_interested"
+    "suggestionTag": "not_interested",
+    "metaStatus": "approved"
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "lead_first_contact",
+    "name": "lead_first_contact",
+    "label": "Booking · Primo contatto",
+    "category": "followup",
+    "metaCategory": "MARKETING",
+    "suggestionTag": "first_contact",
+    "onceGroup": "first_contact",
+    "body": "Ciao, siamo il team Crocieriamo!\n\nAbbiamo ricevuto la tua richiesta di informazioni per {{1}}.\n\nPer aiutarti nel modo più semplice, preferisci essere ricontattato telefonicamente oppure continuare qui su WhatsApp?",
+    "parameters": [
+      {
+        "name": "destination",
+        "label": "Prodotto / destinazione",
+        "component": "body",
+        "index": 1,
+        "kind": "text",
+        "required": true,
+        "source": "productInterest"
+      }
+    ]
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "lead_no_answer_followup",
+    "name": "lead_no_answer_followup",
+    "label": "Booking · Sollecito primo contatto",
+    "category": "followup",
+    "metaCategory": "MARKETING",
+    "suggestionTag": "followup",
+    "sequence": {
+      "after": "lead_first_contact",
+      "afterHours": 24
+    },
+    "body": "Ciao, ti contattiamo in merito alla richiesta che hai inviato a Crocieriamo per {{1}}.\n\nSe sei ancora interessato, puoi risponderci direttamente qui e proseguiremo con la tua richiesta.",
+    "parameters": [
+      {
+        "name": "destination",
+        "label": "Prodotto / destinazione",
+        "component": "body",
+        "index": 1,
+        "kind": "text",
+        "required": true,
+        "source": "productInterest"
+      }
+    ]
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "lead_qualification",
+    "name": "lead_qualification",
+    "label": "Booking · Qualifica richiesta",
+    "category": "utility",
+    "metaCategory": "UTILITY",
+    "suggestionTag": "qualification",
+    "body": "Ciao! Per individuare la proposta più adatta alle tue esigenze, avremmo bisogno di alcune informazioni:\n\n- Destinazione o tipo di viaggio che stai cercando.\n- Periodo indicativo della partenza.\n- Numero di persone che viaggeranno.\n\nPuoi risponderci direttamente qui: ti aiuteremo a individuare la soluzione più adatta."
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "call_no_answer",
+    "name": "call_no_answer",
+    "label": "Booking · Chiamata senza risposta",
+    "category": "utility",
+    "metaCategory": "UTILITY",
+    "suggestionTag": "call_no_answer",
+    "body": "Ciao, abbiamo provato a contattarti telefonicamente in merito alla tua richiesta a Crocieriamo.\n\nSe preferisci, possiamo proseguire direttamente qui su WhatsApp oppure concordare un momento più comodo per sentirci."
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "quote_ready",
+    "name": "quote_ready",
+    "label": "Booking · Preventivo pronto",
+    "category": "utility",
+    "metaCategory": "UTILITY",
+    "suggestionTag": "quote",
+    "requiresQuote": true,
+    "body": "Ciao, abbiamo preparato la proposta relativa alla tua richiesta!\n\nPuoi consultarla al seguente link:\n\n{{1}}\n\nSe desideri maggiori informazioni o vuoi valutare eventuali alternative, siamo a disposizione per aiutarti.",
+    "parameters": [
+      {
+        "name": "quote_url",
+        "label": "Link preventivo",
+        "component": "body",
+        "index": 1,
+        "kind": "url",
+        "required": true,
+        "source": "quoteUrl"
+      }
+    ]
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "quote_followup",
+    "name": "quote_followup",
+    "label": "Booking · Sollecito preventivo",
+    "category": "followup",
+    "metaCategory": "UTILITY",
+    "suggestionTag": "quote_followup",
+    "sequence": {
+      "after": "quote_ready",
+      "afterHours": 48
+    },
+    "body": "Ciao, ti contattiamo per sapere se hai avuto modo di valutare la proposta che ti abbiamo inviato.\n\nSe c'? qualcosa che vorresti rivedere, come il prezzo, le date o la soluzione proposta, possiamo verificare insieme le alternative disponibili."
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "budget_alternative",
+    "name": "budget_alternative",
+    "label": "Booking · Alternativa di budget",
+    "category": "followup",
+    "metaCategory": "MARKETING",
+    "suggestionTag": "budget",
+    "eligibleStatuses": [
+      "Fuori budget"
+    ],
+    "body": "Ciao, se la proposta ricevuta supera il budget che avevi previsto, possiamo verificare se esistono alternative più adatte alle tue esigenze.\n\nSe vuoi, indicaci il budget indicativo che desideri rispettare e valuteremo le opzioni disponibili."
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "interested_undecided",
+    "name": "interested_undecided",
+    "label": "Booking · Cliente indeciso",
+    "category": "followup",
+    "metaCategory": "MARKETING",
+    "suggestionTag": "undecided",
+    "eligibleStatuses": [
+      "Contatto interessato"
+    ],
+    "body": "Ciao, siamo a disposizione se desideri chiarire qualche dettaglio prima di prendere una decisione.\n\nSe ti fa comodo, possiamo concordare un momento per rivedere insieme la proposta e rispondere alle tue domande.\n\nQuando preferisci essere ricontattato?"
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "final_recovery",
+    "name": "final_recovery",
+    "label": "Booking · Ultimo tentativo",
+    "category": "followup",
+    "metaCategory": "MARKETING",
+    "suggestionTag": "final_recovery",
+    "onceGroup": "final_recovery",
+    "sequence": {
+      "after": "lead_no_answer_followup",
+      "afterHours": 72
+    },
+    "body": "Ciao, ti ricontattiamo un'ultima volta in merito alla tua richiesta a Crocieriamo.\n\nSe sei ancora interessato, puoi risponderci direttamente qui e riprenderemo la valutazione della tua richiesta.\n\nSe invece hai già risolto o non desideri proseguire, non continueremo a inviarti solleciti relativi a questa pratica."
+  },
+  {
+    "language": "it",
+    "metaStatus": "pending",
+    "automationMode": "manual_only",
+    "key": "contact_closure",
+    "name": "contact_closure",
+    "label": "Booking · Chiusura contatto",
+    "category": "followup",
+    "metaCategory": "MARKETING",
+    "suggestionTag": "closure",
+    "onceGroup": "contact_closure",
+    "endsSequence": true,
+    "sequence": {
+      "after": "final_recovery",
+      "afterHours": 72
+    },
+    "body": "Ciao, per il momento chiudiamo il seguito della tua richiesta, così da non inviarti ulteriori solleciti relativi a questa pratica.\n\nTi ringraziamo per aver contattato Crocieriamo."
   }
 ]

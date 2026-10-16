@@ -39,10 +39,12 @@ function readLocal() {
     const parsed = JSON.parse(raw);
     return {
       conversations: Array.isArray(parsed.conversations) ? parsed.conversations : [],
-      messages: Array.isArray(parsed.messages) ? parsed.messages : []
+      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      templateLocks: Array.isArray(parsed.templateLocks) ? parsed.templateLocks : [],
+      diagnostics: parsed.diagnostics && typeof parsed.diagnostics === "object" ? parsed.diagnostics : {}
     };
   } catch {
-    return { conversations: [], messages: [] };
+    return { conversations: [], messages: [], templateLocks: [], diagnostics: {} };
   }
 }
 
@@ -60,7 +62,9 @@ async function ensureMongoIndexes() {
     db.collection("wa_conversations").createIndex({ assignedTo: 1, status: 1 }),
     db.collection("wa_conversations").createIndex({ customerId: 1 }),
     db.collection("wa_messages").createIndex({ conversationId: 1, createdAt: -1 }),
-    db.collection("wa_messages").createIndex({ providerMessageId: 1 })
+    db.collection("wa_messages").createIndex({ providerMessageId: 1 }),
+    db.collection("wa_messages").createIndex({ leadId: 1, messageType: 1 }),
+    db.collection("wa_messages").createIndex({ idempotencyKey: 1 }, { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string" } } })
   ]);
   mongoIndexesReady = true;
 }
@@ -291,6 +295,14 @@ export async function appendMessage(message: any) {
     to: message.to || "",
     providerMessageId: message.providerMessageId || "",
     agentName: message.agentName || "",
+    // Booking audit (additive, outbound templates): who/what triggered the send, the lead it was
+    // for at send time, the resolved Meta variables and the Meta category. Pricing is filled in
+    // later from Meta's status webhook, only when Meta actually reports it.
+    ...(message.leadId ? { leadId: String(message.leadId) } : {}),
+    ...(message.trigger ? { trigger: String(message.trigger) } : {}),
+    ...(message.templateParams ? { templateParams: message.templateParams } : {}),
+    ...(message.metaCategory ? { metaCategory: String(message.metaCategory) } : {}),
+    ...(message.idempotencyKey ? { idempotencyKey: String(message.idempotencyKey) } : {}),
     // Additive: a message can reference one media attachment. Inbound carries what Meta's
     // webhook sends (mediaId/mimeType/filename/caption, no bytes -- Meta hosts the media, we
     // never proxy or store the binary); outbound carries a reference into this CRM's own
@@ -350,28 +362,132 @@ export async function updateConversation(conversationId: string, patch: any) {
   });
 }
 
+export async function findMessageByIdempotencyKey(idempotencyKey: string) {
+  const key = String(idempotencyKey || "").trim();
+  if (!key) return null;
+  if (!isMongoEnabled()) return readLocal().messages.find((m: any) => m.idempotencyKey === key) || null;
+  await ensureMongoIndexes();
+  const db = await getMongoDb();
+  return normalizeMessage(await db.collection("wa_messages").findOne({ idempotencyKey: key }));
+}
+
+/** Outbound template sends for a lead (by leadId or any of its conversations), oldest first. */
+export async function listTemplateSendsForLead(leadId: string, conversationIds: string[] = []) {
+  if (!leadId && !conversationIds.length) return [];
+  const matches = (m: any) =>
+    m.direction === "outbound" && m.messageType === "template" && ((leadId && m.leadId === leadId) || conversationIds.includes(m.conversationId));
+  let rows: any[];
+  if (!isMongoEnabled()) {
+    rows = readLocal().messages.filter(matches);
+  } else {
+    await ensureMongoIndexes();
+    const db = await getMongoDb();
+    const or: any[] = [];
+    if (leadId) or.push({ leadId });
+    if (conversationIds.length) or.push({ conversationId: { $in: conversationIds } });
+    rows = (await db.collection("wa_messages").find({ direction: "outbound", messageType: "template", $or: or }).toArray()).map(normalizeMessage);
+  }
+  return rows
+    .map((m: any) => ({ key: m.templateKey || m.templateName, sentAt: m.createdAt, status: m.status, trigger: m.trigger || "manual" }))
+    .sort((a: any, b: any) => new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime());
+}
+
+/**
+ * "Send once per lead" guard that also holds under concurrency: the lock document's _id is the
+ * lead + once-group, so a second concurrent reservation fails on the unique _id. Returns false
+ * when the template group was already reserved/sent for this lead.
+ */
+export async function reserveTemplateOnce(lockId: string, meta: Record<string, unknown> = {}) {
+  const at = new Date().toISOString();
+  if (!isMongoEnabled()) {
+    const local = readLocal();
+    if (local.templateLocks.some((lock: any) => lock.id === lockId)) return false;
+    local.templateLocks.push({ id: lockId, at, ...meta });
+    writeLocal(local);
+    return true;
+  }
+  const db = await getMongoDb();
+  try {
+    await db.collection("wa_template_locks").insertOne({ _id: lockId as any, at, ...meta });
+    return true;
+  } catch (error: any) {
+    if (error && error.code === 11000) return false;
+    throw error;
+  }
+}
+
+/** Frees a reservation when Meta rejected the send, so the template can be sent again. */
+export async function releaseTemplateOnce(lockId: string) {
+  if (!isMongoEnabled()) {
+    const local = readLocal();
+    local.templateLocks = local.templateLocks.filter((lock: any) => lock.id !== lockId);
+    writeLocal(local);
+    return;
+  }
+  const db = await getMongoDb();
+  await db.collection("wa_template_locks").deleteOne({ _id: lockId as any });
+}
+
+// Provider health snapshot (last webhook, last successful outbound, last Meta error). Persisted so
+// it survives restarts; never holds secrets.
+export async function recordWhatsappDiagnostic(patch: Record<string, unknown>) {
+  try {
+    if (!isMongoEnabled()) {
+      const local = readLocal();
+      local.diagnostics = { ...local.diagnostics, ...patch };
+      writeLocal(local);
+      return;
+    }
+    const db = await getMongoDb();
+    await db.collection("wa_diagnostics").updateOne({ _id: "whatsapp" as any }, { $set: patch }, { upsert: true });
+  } catch {
+    // Diagnostics are best-effort: they must never break message handling.
+  }
+}
+
+export async function getWhatsappDiagnostics() {
+  if (!isMongoEnabled()) return readLocal().diagnostics || {};
+  const db = await getMongoDb();
+  const doc: any = await db.collection("wa_diagnostics").findOne({ _id: "whatsapp" as any });
+  if (!doc) return {};
+  const { _id, ...rest } = doc;
+  return rest;
+}
+
+const STATUS_RANK: Record<string, number> = { simulated: 0, sent: 1, delivered: 2, read: 3 };
+
 // statusError carries Meta's delivery-failure reason (operator-facing text) for "failed" statuses,
 // which arrive asynchronously via webhook after the send call itself already returned 200.
-export async function updateMessageStatusByProviderId(providerMessageId: string, status: string, statusError = "") {
+// `extra` carries pricing/conversation metadata Meta attaches to status webhooks. It is $set, not
+// appended, so a retried webhook overwrites with the same values instead of duplicating cost data.
+// Statuses only move forward (sent -> delivered -> read): Meta may deliver them out of order.
+export async function updateMessageStatusByProviderId(providerMessageId: string, status: string, statusError = "", extra: Record<string, unknown> = {}) {
   if (!providerMessageId) return 0;
   const normalizedStatus = normalizeMessageStatus(status);
-  const patch: Record<string, unknown> = { status: normalizedStatus };
+  const patch: Record<string, unknown> = { status: normalizedStatus, ...extra };
   if (statusError) patch.statusError = statusError;
+  const lowerStatuses =
+    normalizedStatus === "failed"
+      ? null
+      : Object.keys(STATUS_RANK).filter((key) => STATUS_RANK[key] < (STATUS_RANK[normalizedStatus] ?? 1));
+  const canMoveTo = (current: string) => !lowerStatuses || lowerStatuses.includes(String(current || "sent"));
   if (!isMongoEnabled()) {
     const local = readLocal();
     let count = 0;
     local.messages = local.messages.map((m: any) => {
-      if (m.providerMessageId === providerMessageId) {
-        count += 1;
-        return { ...m, ...patch };
-      }
-      return m;
+      if (m.providerMessageId !== providerMessageId) return m;
+      count += 1;
+      return canMoveTo(m.status) ? { ...m, ...patch } : { ...m, ...extra };
     });
     writeLocal(local);
     return count;
   }
   await ensureMongoIndexes();
   const db = await getMongoDb();
-  const res = await db.collection("wa_messages").updateMany({ providerMessageId }, { $set: patch });
+  const statusFilter = lowerStatuses ? { status: { $in: lowerStatuses } } : {};
+  const res = await db.collection("wa_messages").updateMany({ providerMessageId, ...statusFilter }, { $set: patch });
+  if (!res.matchedCount && Object.keys(extra).length) {
+    await db.collection("wa_messages").updateMany({ providerMessageId }, { $set: extra });
+  }
   return res.modifiedCount || 0;
 }

@@ -21,7 +21,7 @@ import {
   uploadDocumentBuffer
 } from "./document-storage";
 import { applyLeadImport, previewLeadImport } from "./lead-import";
-import { isTaskDismissBlocked, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
+import { isInternalServicePath, isTaskDismissBlocked, isValidThreeCxWebhookSecret, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
 import { CHAT_UPLOAD_FORMAT_ERROR, isAllowedChatUploadMime, isChatDocumentKey, validateChatUpload } from "./chat-upload-rules";
 
 const HOST = "0.0.0.0";
@@ -929,6 +929,16 @@ export const server = http.createServer(async (req, res) => {
       await proxyRequest(req, res, route.base, `${route.path}${url.search}`);
       return;
     }
+    if (isInternalServicePath(pathname)) {
+      sendJson(res, 404, { error: "Endpoint non trovato." });
+      return;
+    }
+    // 3CX server-to-server events: allowed without a Leadium session only with the shared secret
+    // (THREECX_WEBHOOK_SECRET). Without it configured, the path keeps requiring a session.
+    if (pathname === "/api/3cx/webhook" && method === "POST" && isValidThreeCxWebhookSecret(req.headers["x-leadium-3cx-secret"], process.env.THREECX_WEBHOOK_SECRET)) {
+      await proxyRequest(req, res, route.base, `${route.path}${url.search}`);
+      return;
+    }
     const session = getSessionFromRequest(req);
     if (!session) {
       sendJson(res, 401, { error: "Non autorizzato." });
@@ -940,6 +950,10 @@ export const server = http.createServer(async (req, res) => {
     }
     if (pathname.startsWith("/api/report/booking-activities") && !isAdmin(session.user)) {
       sendJson(res, 403, { error: "Solo admin e super admin possono consultare il report attivita Booking." });
+      return;
+    }
+    if (pathname === "/api/whatsapp/diagnostics" && !isAdmin(session.user)) {
+      sendJson(res, 403, { error: "Solo admin e super admin possono consultare la diagnostica WhatsApp." });
       return;
     }
     // WhatsApp is a shared inbox by product design: any authenticated operator can read every

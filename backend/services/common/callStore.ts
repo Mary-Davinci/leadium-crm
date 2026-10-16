@@ -24,6 +24,9 @@ export type CallLogRecord = {
   idempotencyKey?: string;
   callbackReason?: string | null;
   source?: string;
+  // Additive (3CX events): talk time in seconds when the PBX reports it, and the agreed callback.
+  durationSeconds?: number;
+  callbackAt?: string | null;
 };
 
 function fromCallDoc(doc: any): CallLogRecord | null {

@@ -17,8 +17,23 @@ const {
   markConversationRead,
   updateConversation,
   updateMessageStatusByProviderId,
-  getMessageById
+  getMessageById,
+  findMessageByIdempotencyKey,
+  listTemplateSendsForLead,
+  reserveTemplateOnce,
+  releaseTemplateOnce,
+  recordWhatsappDiagnostic,
+  getWhatsappDiagnostics
 } = require("../common/chatStore");
+const {
+  checkTemplateSend,
+  buildTemplateComponents,
+  renderTemplateBody,
+  deriveAutomationState,
+  suggestTemplates,
+  nextAutomaticTemplate,
+  findTemplate
+} = require("../common/whatsappAutomation");
 const { classifyMetaError, createMetaSendError, getFriendlyMetaMessage } = require("./meta-errors");
 const {
   resolveOutboundMediaType,
@@ -42,6 +57,10 @@ if (!APP_SECRET && process.env.NODE_ENV !== "test") {
 const WA_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || "";
 const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 const WA_GRAPH_VERSION = process.env.WHATSAPP_GRAPH_VERSION || "v25.0";
+// Global kill switch for automatic WhatsApp sends. Off unless explicitly "true": with it off, the
+// Booking sequence only ever produces suggestions for operators, never a send.
+const AUTOMATION_ENABLED = String(process.env.WHATSAPP_AUTOMATION_ENABLED || "").trim().toLowerCase() === "true";
+const AUTOMATION_MAX_SENDS_PER_TICK = Math.max(1, Number(process.env.WHATSAPP_AUTOMATION_MAX_PER_TICK || 20));
 // The service runs from services/ under tsx and from dist/services/ once built, so the bundled
 // config sits two or three levels up depending on how it was started.
 const WA_TEMPLATE_CONFIG_PATH = [
@@ -101,6 +120,48 @@ const DEFAULT_TEMPLATE_CONFIG = [
   }
 ];
 
+// Template entry as the CRM uses it. `category` keeps the legacy UI grouping (utility/followup);
+// the rest drives the Cloud API send and the Booking automation (see common/whatsappAutomation).
+function normalizeTemplateItem(item) {
+  const automationMode = String(item?.automationMode || "manual_only").trim() === "automatic_allowed" ? "automatic_allowed" : "manual_only";
+  const parameters = Array.isArray(item?.parameters)
+    ? item.parameters
+        .map((param) => ({
+          name: String(param?.name || "").trim(),
+          label: String(param?.label || param?.name || "").trim(),
+          component: param?.component === "button_url" ? "button_url" : "body",
+          index: Number(param?.index || 1),
+          buttonIndex: param?.buttonIndex !== undefined ? Number(param.buttonIndex) : undefined,
+          kind: param?.kind === "url" ? "url" : "text",
+          required: param?.required !== false,
+          source: ["productInterest", "quoteUrl", "fullName"].includes(param?.source) ? param.source : undefined
+        }))
+        .filter((param) => param.name)
+    : [];
+  return {
+    key: String(item?.key || item?.name || "").trim(),
+    name: String(item?.name || item?.key || "").trim(),
+    label: String(item?.label || item?.name || item?.key || "").trim(),
+    body: String(item?.body || "").trim(),
+    category: String(item?.category || "utility").trim().toLowerCase() === "followup" ? "followup" : "utility",
+    suggestionTag: String(item?.suggestionTag || "generic").trim().toLowerCase(),
+    language: String(item?.language || "it").trim() || "it",
+    metaCategory: String(item?.metaCategory || "").trim().toUpperCase(),
+    metaStatus: String(item?.metaStatus || "approved").trim().toLowerCase(),
+    bodyDraft: Boolean(item?.bodyDraft),
+    parameters,
+    automationMode,
+    onceGroup: item?.onceGroup ? String(item.onceGroup) : undefined,
+    sequence:
+      item?.sequence && item.sequence.after
+        ? { after: String(item.sequence.after), afterHours: Math.max(1, Number(item.sequence.afterHours || 24)) }
+        : undefined,
+    endsSequence: Boolean(item?.endsSequence),
+    requiresQuote: Boolean(item?.requiresQuote),
+    eligibleStatuses: Array.isArray(item?.eligibleStatuses) ? item.eligibleStatuses.map(String) : undefined
+  };
+}
+
 function loadTemplateConfig() {
   try {
     if (WA_TEMPLATE_CONFIG_PATH && fs.existsSync(WA_TEMPLATE_CONFIG_PATH)) {
@@ -108,14 +169,7 @@ function loadTemplateConfig() {
       const fileParsed = JSON.parse(fileRaw);
       if (Array.isArray(fileParsed)) {
         const normalizedFromFile = fileParsed
-          .map((item) => ({
-            key: String(item?.key || item?.name || "").trim(),
-            name: String(item?.name || item?.key || "").trim(),
-            label: String(item?.label || item?.name || item?.key || "").trim(),
-            body: String(item?.body || "").trim(),
-            category: String(item?.category || "utility").trim().toLowerCase() === "followup" ? "followup" : "utility",
-            suggestionTag: String(item?.suggestionTag || "generic").trim().toLowerCase()
-          }))
+          .map(normalizeTemplateItem)
           .filter((item) => item.key && item.name && item.label);
         if (normalizedFromFile.length) return normalizedFromFile;
       }
@@ -129,14 +183,7 @@ function loadTemplateConfig() {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return DEFAULT_TEMPLATE_CONFIG;
     const normalized = parsed
-      .map((item) => ({
-        key: String(item?.key || item?.name || "").trim(),
-        name: String(item?.name || item?.key || "").trim(),
-        label: String(item?.label || item?.name || item?.key || "").trim(),
-        body: String(item?.body || "").trim(),
-        category: String(item?.category || "utility").trim().toLowerCase() === "followup" ? "followup" : "utility",
-        suggestionTag: String(item?.suggestionTag || "generic").trim().toLowerCase()
-      }))
+      .map(normalizeTemplateItem)
       .filter((item) => item.key && item.name && item.label);
     return normalized.length ? normalized : DEFAULT_TEMPLATE_CONFIG;
   } catch {
@@ -144,7 +191,7 @@ function loadTemplateConfig() {
   }
 }
 
-const TEMPLATE_CONFIG = loadTemplateConfig();
+const TEMPLATE_CONFIG = loadTemplateConfig().map(normalizeTemplateItem);
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
@@ -275,6 +322,7 @@ function describeStatusFailure(status) {
   const code = classifyMetaError(0, metaCode);
   // eslint-disable-next-line no-console
   console.error(`[whatsapp-service] Consegna fallita: message=${status.id} metaCode=${metaCode ?? "-"} code=${code} detail=${detail}`);
+  void recordWhatsappDiagnostic({ lastMetaError: { at: new Date().toISOString(), stage: "delivery", code, metaCode } });
   return getFriendlyMetaMessage(code);
 }
 
@@ -355,6 +403,118 @@ async function applyCustomerActionEffects(leadId, action) {
         : "Il cliente ha indicato via WhatsApp di non essere interessato. Verificare ed eventualmente chiudere la pratica con il motivo corretto.",
     priority: 60
   });
+}
+
+// --- Booking template sends (manual and automatic share one path) -------------------------------
+
+async function fetchLead(leadId) {
+  if (!leadId) return null;
+  try {
+    const response = await fetch(`${LEAD_URL}/leads/${encodeURIComponent(leadId)}`);
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload && payload.lead ? payload.lead : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildAutomationContext(lead, conversation) {
+  const conversations = lead ? (await listConversations()).filter((item) => String(item.leadId || "") === String(lead.id)) : [];
+  const ids = Array.from(new Set([...conversations.map((item) => item.id), ...(conversation ? [conversation.id] : [])]));
+  const lastInboundAt = [...conversations, ...(conversation ? [conversation] : [])]
+    .map((item) => item.lastInboundAt)
+    .filter(Boolean)
+    .sort()
+    .pop() || null;
+  return {
+    lead: lead || {},
+    conversation: { lastInboundAt },
+    sent: lead || ids.length ? await listTemplateSendsForLead(lead ? lead.id : "", ids) : [],
+    templates: TEMPLATE_CONFIG,
+    now: new Date(),
+    automationEnabled: AUTOMATION_ENABLED
+  };
+}
+
+async function createLeadTimelineActivity(leadId, type, text, actor, meta = {}) {
+  if (!leadId) return;
+  try {
+    await fetch(`${LEAD_URL}/leads/${leadId}/activities`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, text, actor, meta })
+    });
+  } catch {
+    // Best-effort: the message record stays the source of truth for the send.
+  }
+}
+
+/**
+ * Every template send goes through here: rules (checkTemplateSend), once-per-lead lock, Meta
+ * variables, retry idempotency, audit fields and the lead timeline entry.
+ */
+async function performTemplateSend({ template, to, conversation, lead, overrides = {}, trigger, agentName, idempotencyKey, customerName }) {
+  if (idempotencyKey) {
+    const existing = await findMessageByIdempotencyKey(idempotencyKey);
+    if (existing) return { status: 200, body: { ok: true, duplicate: true, conversationId: existing.conversationId, message: existing } };
+  }
+  const ctx = await buildAutomationContext(lead, conversation);
+  const check = checkTemplateSend(ctx, template.key, trigger, overrides);
+  if (!check.allowed) {
+    const status = check.code === "already_sent" || check.code === "opt_out" ? 409 : 400;
+    return { status, body: { error: check.reason, code: check.code } };
+  }
+  const lockId = lead && template.onceGroup ? `${lead.id}:${template.onceGroup}` : null;
+  if (lockId && !(await reserveTemplateOnce(lockId, { templateKey: template.key, trigger }))) {
+    return { status: 409, body: { error: `"${template.label}" e gia stato inviato a questo cliente: si invia una sola volta.`, code: "already_sent" } };
+  }
+  const values = check.values || {};
+  const text = renderTemplateBody(template, values);
+  let sendResult;
+  try {
+    conversation = await createOutboundConversation({ conversation, to, customerName: customerName || to, agentName: agentName || "", text });
+    sendResult = await sendTemplateViaMeta(to, template, buildTemplateComponents(template, values));
+  } catch (error) {
+    if (lockId) await releaseTemplateOnce(lockId);
+    throw error;
+  }
+  let message;
+  try {
+    message = await appendMessage({
+      conversationId: conversation.id,
+      direction: "outbound",
+      text,
+      status: sendResult.simulated ? "simulated" : "sent",
+      messageType: "template",
+      templateKey: template.key,
+      templateName: template.name,
+      from: WA_PHONE_NUMBER_ID || "crm",
+      to,
+      providerMessageId: sendResult.providerMessageId,
+      agentName: agentName || (trigger === "automation" ? "automazione" : "operatore"),
+      leadId: (lead && lead.id) || conversation.leadId || "",
+      trigger,
+      templateParams: values,
+      metaCategory: template.metaCategory || "",
+      idempotencyKey
+    });
+  } catch (error) {
+    // Two concurrent retries with the same key: the unique index keeps one log row.
+    const existing = idempotencyKey ? await findMessageByIdempotencyKey(idempotencyKey) : null;
+    if (!existing) throw error;
+    message = existing;
+  }
+  if (!sendResult.simulated) await recordWhatsappDiagnostic({ lastOutboundOkAt: message.createdAt });
+  const leadId = (lead && lead.id) || conversation.leadId;
+  await createLeadTimelineActivity(
+    leadId,
+    "whatsapp_template_sent",
+    `Template WhatsApp inviato: ${template.label}${trigger === "automation" ? " (automazione)" : ""}.`,
+    agentName || (trigger === "automation" ? "automazione" : "operatore"),
+    { templateKey: template.key, trigger, messageId: message.id, providerMessageId: message.providerMessageId, simulated: Boolean(sendResult.simulated) }
+  );
+  return { status: 200, body: { ok: true, simulated: sendResult.simulated, conversationId: conversation.id, message } };
 }
 
 function buildTemplateText(templateKey, fallbackText = "") {
@@ -460,8 +620,42 @@ async function ensureConversationLead(conversation, text = "") {
   });
 }
 
+// Meta attaches billing info to status webhooks (pricing: billable/category/pricing_model;
+// conversation: id/origin). Stored only when present: the CRM never estimates a cost itself.
+function extractStatusBilling(status) {
+  const extra = {};
+  if (status && status.pricing && typeof status.pricing === "object") {
+    extra.pricing = {
+      billable: status.pricing.billable,
+      category: status.pricing.category || "",
+      pricingModel: status.pricing.pricing_model || "",
+      type: status.pricing.type || ""
+    };
+  }
+  if (status && status.conversation && typeof status.conversation === "object") {
+    extra.metaConversation = {
+      id: status.conversation.id || "",
+      originType: (status.conversation.origin && status.conversation.origin.type) || "",
+      expiresAt: status.conversation.expiration_timestamp
+        ? new Date(Number(status.conversation.expiration_timestamp) * 1000).toISOString()
+        : ""
+    };
+  }
+  return extra;
+}
+
+// A once-per-lead template that Meta later reports as failed was never delivered: free its lock so
+// the operator (or the sequence) can send it again.
+async function releaseOnceLockForFailedSend(providerMessageId) {
+  const message = await findMessageByProviderId(providerMessageId);
+  if (!message || message.messageType !== "template" || !message.leadId) return;
+  const template = findTemplate(TEMPLATE_CONFIG, message.templateKey || message.templateName);
+  if (template && template.onceGroup) await releaseTemplateOnce(`${message.leadId}:${template.onceGroup}`);
+}
+
 async function handleInboundWebhook(payload) {
   const entryList = Array.isArray(payload.entry) ? payload.entry : [];
+  await recordWhatsappDiagnostic({ lastWebhookAt: new Date().toISOString() });
   let messageCount = 0;
   let statusCount = 0;
 
@@ -475,7 +669,8 @@ async function handleInboundWebhook(payload) {
 
       for (const status of statuses) {
         if (status && status.id && status.status) {
-          statusCount += await updateMessageStatusByProviderId(status.id, status.status, describeStatusFailure(status));
+          statusCount += await updateMessageStatusByProviderId(status.id, status.status, describeStatusFailure(status), extractStatusBilling(status));
+          if (String(status.status).toLowerCase() === "failed") await releaseOnceLockForFailedSend(status.id);
         }
       }
 
@@ -523,6 +718,7 @@ async function handleInboundWebhook(payload) {
           createdAt
         });
         messageCount += 1;
+        await recordWhatsappDiagnostic({ lastInboundAt: createdAt });
 
         const customerAction = extractCustomerActionFromMessage(message);
         if (customerAction) {
@@ -565,7 +761,8 @@ async function sendViaMeta(to, text) {
   return { simulated: false, providerMessageId };
 }
 
-async function sendTemplateViaMeta(to, templateName) {
+async function sendTemplateViaMeta(to, template, components = []) {
+  const templateName = template.name;
   if (!WA_ACCESS_TOKEN || !WA_PHONE_NUMBER_ID) {
     return { simulated: true, providerMessageId: `sim_tpl_${Date.now()}` };
   }
@@ -583,7 +780,8 @@ async function sendTemplateViaMeta(to, templateName) {
       type: "template",
       template: {
         name: templateName,
-        language: { code: "it" }
+        language: { code: template.language || "it" },
+        ...(components.length ? { components } : {})
       }
     })
   });
@@ -800,36 +998,18 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      conversation = await createOutboundConversation({
-        conversation,
-        to,
-        customerName: body.customerName || to,
-        agentName: body.agentName || "operatore",
-        text: selectedTemplate.body
-      });
-
-      const sendResult = await sendTemplateViaMeta(to, selectedTemplate.name);
-      const message = await appendMessage({
-        conversationId: conversation.id,
-        direction: "outbound",
-        text: selectedTemplate.body,
-        status: sendResult.simulated ? "simulated" : "sent",
-        messageType: "template",
-        templateKey: selectedTemplate.key,
-        templateName: selectedTemplate.name,
-        from: WA_PHONE_NUMBER_ID || "crm",
-        to,
-        providerMessageId: sendResult.providerMessageId,
-        agentName: body.agentName || "operatore"
-      });
-
-      sendJson(res, 200, {
-        ok: true,
-        simulated: sendResult.simulated,
-        conversationId: conversation.id,
+      const result = await performTemplateSend({
         template: selectedTemplate,
-        message
+        to,
+        conversation,
+        lead: conversation && conversation.leadId ? await fetchLead(conversation.leadId) : null,
+        overrides: body.templateParams && typeof body.templateParams === "object" ? body.templateParams : {},
+        trigger: "manual",
+        agentName: body.agentName || "operatore",
+        idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey) : "",
+        customerName: body.customerName || to
       });
+      sendJson(res, result.status, result.status === 200 ? { ...result.body, template: selectedTemplate } : result.body);
       return;
     }
 
@@ -976,6 +1156,39 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (mode === "template") {
+        // trigger is always "manual" here: this route is the operator composer, never automation.
+        // A conversation opened from "Nuova chat" has no lead yet: look the number up (read-only)
+        // so once-per-lead and opt-out rules still apply to an existing customer.
+        let leadId = (conversation && conversation.leadId) || (body.leadId ? String(body.leadId) : "");
+        if (!leadId) {
+          const identity = await resolveConversationIdentity(to, body.customerName || to, "", { skipCreate: true });
+          if (identity && identity.leadId && !identity.ambiguous) leadId = String(identity.leadId);
+        }
+        const result = await performTemplateSend({
+          template: selectedTemplate,
+          to,
+          conversation,
+          lead: await fetchLead(leadId),
+          overrides: body.templateParams && typeof body.templateParams === "object" ? body.templateParams : {},
+          trigger: "manual",
+          agentName: body.agentName || "operatore",
+          idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey) : "",
+          customerName: body.customerName || to
+        });
+        sendJson(res, result.status, result.body);
+        return;
+      }
+
+      const idempotencyKey = body.idempotencyKey ? String(body.idempotencyKey) : "";
+      if (idempotencyKey) {
+        const existing = await findMessageByIdempotencyKey(idempotencyKey);
+        if (existing) {
+          sendJson(res, 200, { ok: true, duplicate: true, conversationId: existing.conversationId, message: existing });
+          return;
+        }
+      }
+
       conversation = await createOutboundConversation({
         conversation,
         to,
@@ -1008,14 +1221,102 @@ const server = http.createServer(async (req, res) => {
         to,
         providerMessageId: sendResult.providerMessageId,
         attachment: outboundAttachment,
-        agentName: body.agentName || "operatore"
+        agentName: body.agentName || "operatore",
+        leadId: conversation.leadId || "",
+        idempotencyKey
       });
+      if (!sendResult.simulated) await recordWhatsappDiagnostic({ lastOutboundOkAt: message.createdAt });
 
       sendJson(res, 200, {
         ok: true,
         simulated: sendResult.simulated,
         conversationId: conversation.id,
         message
+      });
+      return;
+    }
+
+    // Booking automation state for one lead: derived state, operator suggestions and, per template,
+    // whether a manual send would be accepted (and why not).
+    if (method === "GET" && pathname === "/automation/state") {
+      const conversationId = String(url.searchParams.get("conversationId") || "").trim();
+      const conversation = conversationId ? await getConversationById(conversationId) : null;
+      const leadId = String(url.searchParams.get("leadId") || (conversation && conversation.leadId) || "").trim();
+      const lead = await fetchLead(leadId);
+      if (!lead) {
+        sendJson(res, 200, { leadId: leadId || null, state: null, suggestions: [], templates: {} });
+        return;
+      }
+      const ctx = await buildAutomationContext(lead, conversation);
+      const templates = {};
+      for (const template of TEMPLATE_CONFIG) {
+        const check = checkTemplateSend(ctx, template.key, "manual");
+        templates[template.key] = check.allowed ? { allowed: true } : { allowed: false, code: check.code, reason: check.reason };
+      }
+      sendJson(res, 200, {
+        leadId: lead.id,
+        state: deriveAutomationState(ctx),
+        suggestions: suggestTemplates(ctx, lead.latestCallOutcome || null),
+        templates
+      });
+      return;
+    }
+
+    // Called by the lead-service scheduler (existing interval, no new cron) and never reachable
+    // from the browser (the gateway blocks /internal/*). Does nothing unless
+    // WHATSAPP_AUTOMATION_ENABLED=true AND a template is configured automatic_allowed.
+    if (method === "POST" && pathname === "/internal/automation/tick") {
+      if (!AUTOMATION_ENABLED) {
+        sendJson(res, 200, { ok: true, skipped: "automation_disabled", sent: 0 });
+        return;
+      }
+      const leadsResponse = await fetch(`${LEAD_URL}/leads`);
+      const leads = leadsResponse.ok ? await leadsResponse.json() : [];
+      const conversations = await listConversations();
+      let sent = 0;
+      const errors = [];
+      for (const lead of Array.isArray(leads) ? leads : []) {
+        if (sent >= AUTOMATION_MAX_SENDS_PER_TICK) break;
+        if (String(lead.closingOutcome || "open") !== "open" || !lead.phone) continue;
+        const conversation = conversations.find((item) => String(item.leadId || "") === String(lead.id)) || null;
+        const ctx = await buildAutomationContext(lead, conversation);
+        const next = nextAutomaticTemplate(ctx);
+        if (!next) continue;
+        const template = findTemplate(TEMPLATE_CONFIG, next.key);
+        try {
+          const result = await performTemplateSend({
+            template,
+            to: String(lead.phone).replace(/[^\d]/g, ""),
+            conversation,
+            lead,
+            trigger: "automation",
+            agentName: "automazione",
+            // One automatic send per lead+template, ever: a re-run of the tick is a no-op.
+            idempotencyKey: `auto:${lead.id}:${template.key}`,
+            customerName: lead.fullName || lead.phone
+          });
+          if (result.status === 200 && !result.body.duplicate) sent += 1;
+        } catch (error) {
+          errors.push({ leadId: lead.id, error: error.message || String(error) });
+        }
+      }
+      sendJson(res, 200, { ok: true, sent, errors });
+      return;
+    }
+
+    // Provider health for admins: configuration presence (never values) and last activity.
+    if (method === "GET" && pathname === "/diagnostics") {
+      sendJson(res, 200, {
+        provider: {
+          accessTokenConfigured: Boolean(WA_ACCESS_TOKEN),
+          phoneNumberIdConfigured: Boolean(WA_PHONE_NUMBER_ID),
+          appSecretConfigured: Boolean(APP_SECRET),
+          verifyTokenCustomized: VERIFY_TOKEN !== "dev_whatsapp_token",
+          graphVersion: WA_GRAPH_VERSION,
+          automationEnabled: AUTOMATION_ENABLED,
+          templatesConfigured: TEMPLATE_CONFIG.length
+        },
+        ...(await getWhatsappDiagnostics())
       });
       return;
     }
@@ -1055,6 +1356,7 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 404, { error: "Endpoint non trovato." });
   } catch (error) {
     if (error && error.isMetaSendError) {
+      await recordWhatsappDiagnostic({ lastMetaError: { at: new Date().toISOString(), stage: "send", code: error.code, httpStatus: error.httpStatus, metaCode: error.metaCode } });
       sendJson(res, 502, { error: error.message, code: error.code });
       return;
     }
