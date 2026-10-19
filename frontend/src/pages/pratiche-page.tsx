@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { PracticeListItem } from "../features/practices/components/PracticeListItem";
 import { PracticesQuickDetail } from "../features/practices/components/PracticesQuickDetail";
 import { PracticeFilters } from "../features/practices/components/PracticeFilters";
+import { AssignPracticeModal } from "../features/practices/components/AssignPracticeModal";
 import { buildPracticeUrl } from "../features/practices/practice-links";
 import { CallOutcome, Lead, LeadDetail, Workflow } from "../features/practices/pratiche.types";
 import { getPriority, getPriorityScore, getSmartBucket, includesAny, normalizeLead } from "../features/practices/pratiche.utils";
@@ -200,6 +201,8 @@ export function PratichePage() {
   const [newLeadModalOpen, setNewLeadModalOpen] = useState(false);
   const [newLeadSubmitting, setNewLeadSubmitting] = useState(false);
   const [newLeadError, setNewLeadError] = useState("");
+  const [assignLead, setAssignLead] = useState<Lead | null>(null);
+  const [assignNotice, setAssignNotice] = useState("");
   const [newLeadDuplicate, setNewLeadDuplicate] = useState<{ id: string; fullName: string; status: string; matchedBy: string; assignedTo: string } | null>(null);
   const [newLeadDraft, setNewLeadDraft] = useState({ fullName: "", phone: "", email: "", notes: "" });
   const [callModalLead, setCallModalLead] = useState<Lead | null>(null);
@@ -688,21 +691,23 @@ export function PratichePage() {
     }
   }
 
-  async function handleAssign(lead: Lead) {
-    const current = String(lead.assignedTo || "").trim();
-    const next = window.prompt("Assegna pratica a:", current || "me");
-    if (next === null) return;
-    const assignedTo = next.trim() || "me";
-    try {
-      await api(`/api/leads/${lead.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ assignedTo })
-      });
-      invalidateLeadDetailCache(lead.id);
-      setLeads((prev) => prev.map((item) => (item.id === lead.id ? { ...item, assignedTo } : item)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore assegnazione pratica.");
-    }
+  function handleAssign(lead: Lead) {
+    setAssignNotice("");
+    setAssignLead(lead);
+  }
+
+  function handleAssigned(updated: Lead, label: string) {
+    const lead = assignLead;
+    setAssignLead(null);
+    if (!lead) return;
+    const assignedTo = String(updated.assignedTo || "");
+    // Row, other views (task board, detail) and the list cache all reflect the new owner.
+    setLeads((prev) => prev.map((item) => (item.id === lead.id ? { ...item, assignedTo, assignedAt: updated.assignedAt ?? item.assignedAt } : item)));
+    patchLeadAcrossStore(lead.id, { assignedTo });
+    invalidateLeadDetailCache(lead.id);
+    invalidatePracticeListCaches();
+    invalidateTaskBoardCache();
+    setAssignNotice(`Pratica "${lead.fullName || lead.id}" assegnata a ${label}.`);
   }
 
   async function handleMarkUrgent(lead: Lead) {
@@ -931,6 +936,8 @@ export function PratichePage() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // List shortcuts (arrows, Enter, C) must not act behind an open dialog.
+      if (assignLead) return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       const isTypingTarget = tag === "input" || tag === "textarea" || tag === "select" || Boolean(target?.isContentEditable);
@@ -958,7 +965,7 @@ export function PratichePage() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [sortedRows, selectedLeadId, navigate]);
+  }, [sortedRows, selectedLeadId, navigate, assignLead]);
 
   function handleSuggestedAction(lead: Lead, kind: "call" | "open" | "task") {
     if (kind === "call") {
@@ -1101,6 +1108,14 @@ export function PratichePage() {
 
         {loading ? <p className="muted">Caricamento pratiche...</p> : null}
         {error ? <p className="pr-error">{error}</p> : null}
+        {assignNotice ? (
+          <p className="pr-assign-notice" role="status">
+            <span>{assignNotice}</span>
+            <button type="button" className="secondary" onClick={() => setAssignNotice("")}>
+              Chiudi
+            </button>
+          </p>
+        ) : null}
 
         <div className="pr-list">
           <div className="pr-list-head" aria-hidden="true">
@@ -1299,6 +1314,8 @@ export function PratichePage() {
           </div>
         </div>
       ) : null}
+
+      {assignLead ? <AssignPracticeModal lead={assignLead} onClose={() => setAssignLead(null)} onAssigned={handleAssigned} /> : null}
 
       {newLeadModalOpen ? (
         <div className="pr-call-modal-backdrop" onClick={closeNewLeadModal}>

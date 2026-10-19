@@ -67,7 +67,7 @@ function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown
   res.end(JSON.stringify(payload));
 }
 
-const IDENTITY_FIELDS = ["__creator", "__contactActor", "__paymentActor"] as const;
+const IDENTITY_FIELDS = ["__creator", "__contactActor", "__paymentActor", "__assignActor"] as const;
 
 function parseBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -1963,6 +1963,14 @@ export const server = http.createServer(async (req, res) => {
         if (Object.keys(body).some(key => !allowed.has(key))) throw new PaymentError(400, "Salva i pagamenti separatamente dagli altri dati della pratica.");
         return await applyPaymentRequest(res, lead, body);
       }
+      // Assignment from the picker: the gateway resolved the user ID to a real operator and passes
+      // the verified author; only the assignee may change in this request.
+      if (body.__assignActor) {
+        const allowed = new Set(["assignedTo", "actor", "__assignActor"]);
+        if (Object.keys(body).some((key) => !allowed.has(key)) || typeof body.assignedTo !== "string" || !body.assignedTo.trim()) {
+          return sendJson(res, 400, { error: "Assegnazione non valida." });
+        }
+      }
       const previousAssignedTo = String(lead.assignedTo || "").trim();
       const previousNotes = String(lead.notes || "");
       // Validate before any mutation: a rejected PATCH must have zero side effects.
@@ -2108,6 +2116,15 @@ export const server = http.createServer(async (req, res) => {
         );
       }
 
+      if (body.__assignActor && String(lead.assignedTo || "").trim() !== previousAssignedTo) {
+        activities.push(createActivity({
+          leadId: lead.id,
+          type: "lead_assigned",
+          text: `Pratica assegnata a ${lead.assignedTo}${previousAssignedTo ? ` (prima: ${previousAssignedTo})` : ""}.`,
+          actor: String(body.__assignActor.username),
+          meta: { previousAssignedTo, newAssignedTo: String(lead.assignedTo), assignedById: String(body.__assignActor.id), assignedByRole: String(body.__assignActor.role) }
+        }));
+      }
       activities.push(...patchActivities);
       await appendActivities(activities);
       return sendJson(res, 200, safeLead(lead));

@@ -324,6 +324,59 @@ async function main() {
     });
   });
 
+  await runCase("assegnazione per ID utente: solo operatori reali, username salvato, audit, permessi invariati", async () => {
+    const authStore = require("./auth-store");
+    const originalListUsers = authStore.listUsers;
+    authStore.listUsers = async () => [
+      { id: "u-giuseppe", username: "Giuseppe", name: "Giuseppe", surname: "Piraino", role: "operatore", email: "private@example.test", threeCxDn: "901" },
+      { id: "u-giuseppe-r", username: "giuseppe.r", name: "Giuseppe", surname: "Piraino", role: "operatore" },
+      { id: "u-admin", username: "Mauro", name: "Mauro", surname: "", role: "admin" }
+    ];
+    try {
+      await withServers(async (leadUrl, gatewayUrl, gateway) => {
+        const lead = await seedLeadWithStatus("Da contattare");
+        const operator = makeSession(gateway, "operatore");
+        assert.equal((await apiRequest(gatewayUrl, "GET", "/api/leads/assignees")).status, 401);
+        const assignees = await apiRequest(gatewayUrl, "GET", "/api/leads/assignees", { token: operator });
+        assert.equal(assignees.status, 200);
+        assert.deepEqual(assignees.body, [
+          { id: "u-giuseppe", username: "Giuseppe", name: "Giuseppe", surname: "Piraino" },
+          { id: "u-giuseppe-r", username: "giuseppe.r", name: "Giuseppe", surname: "Piraino" }
+        ], "only operators, only id/username/name/surname (no email, role, extension)");
+
+        const admin = makeSession(gateway, "admin");
+        for (const [userId, status] of [["", 400], ["u-missing", 422], ["u-admin", 422]] as const) {
+          const refused = await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/assign`, { token: admin, body: { userId } });
+          assert.equal(refused.status, status, `userId "${userId}"`);
+        }
+        assert.equal((await leadStore.getLeadById(lead.id)).assignedTo || "", "", "refused assignments change nothing");
+
+        const assigned = await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/assign`, { token: admin, body: { userId: "u-giuseppe", assignedTo: "me", __assignActor: { username: "falso" } } });
+        assert.equal(assigned.status, 200);
+        assert.equal((assigned.body as any).assignedTo, "Giuseppe", "the username is stored, never the ID or a client value");
+        const audit = (await leadStore.getTimelineByLeadId(lead.id)).filter((row: any) => row.type === "lead_assigned");
+        assert.equal(audit.length, 1);
+        assert.equal(audit[0].actor, "admin_user", "author from the session");
+        assert.deepEqual({ previous: audit[0].meta.previousAssignedTo, next: audit[0].meta.newAssignedTo }, { previous: "", next: "Giuseppe" });
+
+        gateway.__setTestSession("tok-giuseppe", { id: "u-giuseppe", username: "Giuseppe", name: "Giuseppe", role: "operatore" });
+        const mine = await apiRequest(gatewayUrl, "GET", "/api/leads?view=summary", { token: "tok-giuseppe" });
+        assert.ok((mine.body as any[]).some((row) => row.id === lead.id && row.assignedTo === "Giuseppe"), "listed with the value the 'Assegnate a te' filter compares");
+
+        const reassigned = await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/assign`, { token: operator, body: { userId: "u-giuseppe-r" } });
+        assert.equal(reassigned.status, 200, "operators keep the assignment rights they had");
+        const second = (await leadStore.getTimelineByLeadId(lead.id)).filter((row: any) => row.type === "lead_assigned")[1];
+        assert.deepEqual({ previous: second.meta.previousAssignedTo, next: second.meta.newAssignedTo }, { previous: "Giuseppe", next: "giuseppe.r" });
+
+        const reserved = await seedLeadWithStatus("Pronta per chiusura");
+        assert.equal((await apiRequest(gatewayUrl, "POST", `/api/leads/${reserved.id}/assign`, { token: operator, body: { userId: "u-giuseppe" } })).status, 403);
+        assert.equal((await apiRequest(gatewayUrl, "POST", "/api/leads/lead_missing/assign", { token: admin, body: { userId: "u-giuseppe" } })).status, 404);
+      });
+    } finally {
+      authStore.listUsers = originalListUsers;
+    }
+  });
+
   await runCase("la deduplica non espone ne modifica una pratica in supervisione admin per un operatore", async () => {
     await withServers(async (leadUrl, gatewayUrl, gateway) => {
       const lead = await seedLeadWithStatus("Pronta per chiusura");

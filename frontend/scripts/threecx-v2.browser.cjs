@@ -45,8 +45,9 @@ res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(da
 }catch(e){res.writeHead(e.status||503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:e.message}))}});
 process.env.CALL_SERVICE_URL=await listen(internal);
 const auth=require(root+'/backend/dist/services/api-gateway/auth-store.js');auth.getUserThreeCxDn=async user=>user.id==='mapped-user'?'901':user.id==='other-user'?'913':'';
+auth.listUsers=async()=>[{id:'u-giuseppe',username:'Giuseppe',name:'Giuseppe',surname:'Piraino',role:'operatore'},{id:'u-giuseppe-r',username:'giuseppe.r',name:'Giuseppe',surname:'Piraino',role:'operatore'},{id:'mapped-user',username:'mapped',name:'Mapped',surname:'Fixture',role:'operatore'},{id:'admin-user',username:'admin',name:'Admin',surname:'Fixture',role:'admin'}];
 const gateway=require(root+'/backend/dist/services/api-gateway/server.js');
-const users={mapped:{id:'mapped-user',username:'mapped',name:'Mapped Fixture',role:'operatore'},other:{id:'other-user',username:'other',name:'Other Fixture',role:'operatore'},unmapped:{id:'unmapped-user',username:'unmapped',name:'Unmapped Fixture',role:'operatore'},admin:{id:'admin-user',username:'admin',name:'Admin Fixture',role:'admin'}};
+const users={mapped:{id:'mapped-user',username:'mapped',name:'Mapped Fixture',role:'operatore'},other:{id:'other-user',username:'other',name:'Other Fixture',role:'operatore'},unmapped:{id:'unmapped-user',username:'unmapped',name:'Unmapped Fixture',role:'operatore'},admin:{id:'admin-user',username:'admin',name:'Admin Fixture',role:'admin'},giuseppe:{id:'u-giuseppe',username:'Giuseppe',name:'Giuseppe',surname:'Piraino',role:'operatore'}};
 for(const [key,user]of Object.entries(users))gateway.__setTestSession('native-'+key,user);
 const gatewayUrl=await listen(gateway.server);process.env.API_TARGET=gatewayUrl;
 process.on('message',msg=>{if(msg.rows)rows=msg.rows;if(msg.devices)deviceMap=msg.devices;if(msg.reset){rows=[];writes=[];controller.recent.clear();controller.rates.clear()}process.send({ack:true,writes})});
@@ -63,6 +64,13 @@ const ready = new Promise((resolve, reject) => { const timer = setTimeout(() => 
   child.once('message', msg => { clearTimeout(timer); resolve(msg); }); child.once('exit', code => { clearTimeout(timer); reject(Error('V2 fixture exit ' + code + '\n' + logs)); }); });
 const update = msg => new Promise(resolve => { child.once('message', resolve); child.send(msg); });
 const incoming = (extra = {}) => ({ callId: '123', agentDn: '901', direction: 'inbound', customerPhone: '+393331234567', status: 'ringing', startedAt: new Date().toISOString(), participantId: 1, directControl: false, ...extra });
+async function geometryOf(page, root) {
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  for (const el of await root.locator('button,input').all()) {
+    if (!(await el.isVisible())) continue;
+    assert.ok(await el.evaluate(node => { const r = node.getBoundingClientRect(); return r.width > 0 && r.x >= 0 && r.right <= innerWidth; }));
+  }
+}
 async function geometry(page) {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   for (const button of await page.locator('.threecx-live button,.threecx-live a,.threecx-live select').all()) {
@@ -197,6 +205,55 @@ async function geometry(page) {
       await page.screenshot({path:path.join(os.tmpdir(),'leadium-operator-duplicate-1100.png')});
       assert.deepEqual(errors,[]);await page.close();
       console.log('PASS operator: created lead is assigned, listed in Pratiche after creation and opens; duplicate notice explains own/unassigned');
+    }
+    for (const width of [1100, 390]) {
+      // Admin assigns "Cliente Native Fixture" to Giuseppe through the dialog (no prompt, no free text).
+      const page=await browser.newPage({viewport:{width,height:900}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+      page.on('dialog',dialog=>{errors.push('native dialog: '+dialog.message());void dialog.dismiss();});
+      await page.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-admin');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.admin);
+      await page.goto(fixture.frontUrl+'/pratiche');
+      const openDialog=async()=>{await page.getByRole('button',{name:'Azioni per Cliente Native Fixture'}).first().click();await page.getByRole('menuitem',{name:'Assegna'}).click();const d=page.getByRole('dialog',{name:'Assegna pratica'});await d.waitFor();return d;};
+      const leadNow=async()=>(await (await fetch(fixture.gatewayUrl+'/api/leads/native-fixture',{headers:{Authorization:'Bearer native-admin'}})).json()).lead;
+      const before=(await leadNow()).assignedTo||'';
+      let dialog=await openDialog();
+      await dialog.getByText('Cliente Native Fixture').waitFor();await dialog.getByText('Assegnatario attuale',{exact:true}).waitFor();
+      await dialog.getByRole('radio',{name:/Giuseppe Piraino \(@Giuseppe\)/}).waitFor();
+      await dialog.getByRole('radio',{name:/Giuseppe Piraino \(@giuseppe\.r\)/}).waitFor();
+      assert.equal(await dialog.getByRole('button',{name:'Conferma assegnazione'}).isDisabled(),true,'nothing preselected');
+      await dialog.getByRole('radio',{name:/@Giuseppe\)/}).check();
+      await dialog.getByRole('button',{name:'Annulla'}).click();await dialog.waitFor({state:'detached'});
+      assert.equal((await leadNow()).assignedTo||'',before,'cancel changes nothing');
+      dialog=await openDialog();
+      await page.route('**/api/leads/native-fixture/assign',route=>route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Salvataggio non riuscito, riprova.'})}));
+      await dialog.getByRole('radio',{name:/@Giuseppe\)/}).check();await dialog.getByRole('button',{name:'Conferma assegnazione'}).click();
+      await dialog.getByRole('alert').getByText('Salvataggio non riuscito, riprova.').waitFor();
+      assert.ok(await dialog.isVisible(),'dialog stays open on failure');
+      await page.unroute('**/api/leads/native-fixture/assign');
+      await dialog.getByRole('button',{name:'Annulla'}).click();await dialog.waitFor({state:'detached'});
+      // Keyboard: search, move into the list, pick with arrows, confirm with Enter.
+      dialog=await openDialog();
+      await page.keyboard.type('pira');
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Space');
+      await page.keyboard.press('ArrowDown');await page.keyboard.press('ArrowUp');
+      assert.equal(await dialog.getByRole('radio',{name:/@Giuseppe\)/}).isChecked(),true,'keyboard selection');
+      if(width===390)await page.screenshot({path:path.join(os.tmpdir(),'leadium-assign-390.png')});else await page.screenshot({path:path.join(os.tmpdir(),'leadium-assign-1100.png')});
+      await geometryOf(page,dialog);
+      await dialog.getByRole('button',{name:'Conferma assegnazione'}).focus();await page.keyboard.press('Enter');
+      await dialog.waitFor({state:'detached'});
+      await page.getByText(/assegnata a Giuseppe Piraino \(@Giuseppe\)/).waitFor();
+      assert.equal((await leadNow()).assignedTo,'Giuseppe','username stored');
+      assert.deepEqual(errors,[]);await page.close();
+      // Giuseppe, after a reload, finds it among "Assegnate a te".
+      const g=await browser.newPage({viewport:{width,height:900}});
+      await g.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-giuseppe');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.giuseppe);
+      await g.goto(fixture.frontUrl+'/pratiche');await g.reload();
+      await g.getByText(/Assegnate a te/).first().waitFor();
+      await g.getByText('Cliente Native Fixture').first().waitFor({timeout:10000});
+      await g.close();
+      // Reset for the next width.
+      await fetch(fixture.gatewayUrl+'/api/leads/native-fixture/assign',{method:'POST',headers:{Authorization:'Bearer native-admin','Content-Type':'application/json'},body:JSON.stringify({userId:'u-giuseppe-r'})});
+      console.log('PASS '+width+'px assign dialog: real operators, homonyms distinct, cancel/no change, error keeps dialog, keyboard select+confirm, notice, visible to Giuseppe after reload');
     }
   } finally {
     if(browser)await browser.close();

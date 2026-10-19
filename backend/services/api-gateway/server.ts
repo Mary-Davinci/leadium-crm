@@ -151,7 +151,7 @@ function getSessionFromRequest(req: http.IncomingMessage) {
 // Identity fields the lead service trusts only with the internal capability: a browser can
 // never supply them; the gateway removes them and re-adds only what the session proves.
 function stripIdentityFields<T extends Record<string, any>>(body: T): T {
-  for (const key of ["__creator", "__contactActor", "__paymentActor"]) delete body[key];
+  for (const key of ["__creator", "__contactActor", "__paymentActor", "__assignActor"]) delete body[key];
   return body;
 }
 
@@ -967,6 +967,40 @@ export const server = http.createServer(async (req, res) => {
     }
     if (pathname.startsWith("/api/report/booking-activities") && !isAdmin(session.user)) {
       sendJson(res, 403, { error: "Solo admin e super admin possono consultare il report attivita Booking." });
+      return;
+    }
+    // Practice assignment by user ID. Assignable users are the operators (same rule as Gestione
+    // operativa); the list exposes only what the picker shows. assignedTo keeps storing the
+    // username, which the Pratiche filters compare. Who may assign is unchanged: any signed-in
+    // user, except non-admins on practices reserved to admin review.
+    if (pathname === "/api/leads/assignees" && method === "GET") {
+      const assignees = (await listUsers())
+        .filter((user) => user.role === "operatore")
+        .map((user) => ({ id: user.id, username: user.username, name: user.name || "", surname: user.surname || "" }));
+      sendJson(res, 200, assignees);
+      return;
+    }
+    const assignMatch = pathname.replace(/\/+$/, "").match(/^\/api\/leads\/([^/]+)\/assign$/);
+    if (assignMatch && method === "POST") {
+      const body = (await parseJsonBody(req)) as Record<string, any>;
+      const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+      if (!userId || userId.length > 200) return sendJson(res, 400, { error: "Seleziona un operatore." });
+      const target = (await listUsers()).find((user) => user.id === userId);
+      if (!target) return sendJson(res, 422, { error: "Utente non trovato: aggiorna l'elenco e riprova." });
+      if (target.role !== "operatore") return sendJson(res, 422, { error: "Utente non assegnabile: le pratiche si assegnano agli operatori." });
+      const leadId = decodeURIComponent(assignMatch[1]);
+      let practice: { exists: boolean; status: string };
+      try { practice = await fetchLeadStatusForDocumentAuthorization(leadId); } catch { return sendJson(res, 502, { error: "Impossibile verificare lo stato della pratica." }); }
+      if (!practice.exists) return sendJson(res, 404, { error: "Pratica non trovata." });
+      if (!isAdmin(session.user) && [PRACTICE_READY_STATUS, PRACTICE_CLOSED_STATUS].includes(practice.status)) {
+        return sendJson(res, 403, { error: "Questa pratica e riservata alla supervisione admin." });
+      }
+      const upstream = await fetch(`${LEAD_URL}/leads/${encodeURIComponent(leadId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", ...internalIdentityHeaders() },
+        body: JSON.stringify({ assignedTo: target.username, actor: session.user.username, __assignActor: { id: session.user.id, username: session.user.username, role: session.user.role } })
+      });
+      await forwardUpstreamResponse(res, upstream);
       return;
     }
     if (pathname === "/api/whatsapp/diagnostics" && !isAdmin(session.user)) {
