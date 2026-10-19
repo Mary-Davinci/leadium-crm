@@ -32,10 +32,15 @@ async function main() {
     const admin = await fetch(base + "/api/3cx/diagnostics", { headers: { Authorization: "Bearer 3cx-admin" } }); assert.equal(admin.status, 200);
     const body = await admin.json() as any;
     assert.equal(body.enabled, false); assert.equal(body.connected, false);
-    assert.deepEqual(Object.keys(body).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes", "observedDevices", "deviceCount"].sort());
+    assert.deepEqual(Object.keys(body).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes", "observedDevices", "deviceCount", "recentCallAttempts"].sort());
     assert.deepEqual(body.observedDnTypes, {}, "disabled monitoring has no observed types");
+    assert.deepEqual(body.recentCallAttempts, [], "no attempt is listed before any makecall");
     assert.deepEqual(body.observedDevices, {}); assert.deepEqual(body.deviceCount, {});
-    console.log("PASS 3CX diagnostics: anonymous 401, operator 403, admin 200; disabled listener");
+    const direct = await fetch(process.env.CALL_SERVICE_URL + "/3cx/diagnostics");
+    assert.equal(direct.status, 403, "attempt history is not readable by bypassing the admin-gated gateway");
+    const forged = await fetch(process.env.CALL_SERVICE_URL + "/3cx/diagnostics", { headers: { "x-leadium-call-control": "forged" } });
+    assert.equal(forged.status, 403);
+    console.log("PASS 3CX diagnostics: anonymous 401, operator 403, admin 200, direct/forged 403; disabled listener");
     for (const token of ["3cx-admin", "3cx-super", "3cx-op"]) {
       const calls = await fetch(base + "/api/calls?limit=250", { headers: { Authorization: "Bearer " + token } });
       assert.equal(calls.status, 200);

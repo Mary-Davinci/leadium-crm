@@ -12,7 +12,7 @@ Official contract reviewed:
 - https://www.3cx.com/docs/call-control-api-endpoints/
 - https://github.com/3cx/call-control-sdk-ts/blob/master/src/types.ts
 
-These confirm POST /callcontrol/{dn}/makecall with {destination}; participant answer,
+These confirm POST /callcontrol/{dn}/devices/{deviceid}/makecall with {destination, timeout}; participant answer,
 drop and transferto. Answer requires direct_control=true on extension participants.
 Drop/transfer are signaling actions and do not depend on uaCSTA; status and ownership
 are still validated. No documented hold/resume operation exists in this contract.
@@ -133,6 +133,32 @@ Windows cannot certify actual Mac device integration or tenant mutation support.
 
 ## Final pre-commit audit
 
+### Device-specific makecall and current-participant hangup
+
+Call initiation uses only server-observed devices from the monitor's existing DN snapshots,
+scoped to actor DN 901/913. Raw IDs stay in an ephemeral server-only control cache and never
+enter diagnostics, SSE, action audit or browser responses. The cache is unavailable before
+observation, on disconnection, with malformed data or after 30 seconds without refresh.
+Unknown data returns 503; confirmed zero devices returns 409; multiple devices returns 409.
+Exactly one device selects POST /callcontrol/{dn}/devices/{encodedDeviceId}/makecall with
+{destination: normalizedPhone, timeout: 30}; there is no DN-level fallback and no client ID input.
+The official guide labels the timeout field inconsistently in its table (timeoutSec) and
+JSON example (timeout); this implementation follows the JSON example and requested contract.
+
+HTTP 200/202 are acknowledgements; finalstatus must equal Success when present. Native callid
+and returned participant ID are retained server-side when supplied; only callId is returned
+to the browser. Acknowledgement does not prove the mobile client or external phone rang;
+real-device outbound UAT remains necessary after a separately authorized release.
+
+Hangup requires an own-DN live call or a short-lived (10-minute) own-DN makecall reference.
+It re-reads the DN and selects the sole current participant for that native callid, then GETs
+the participant and verifies DN/id/callid/status before drop. Dialing is accepted for hangup
+only. Cached initiator IDs never override the current snapshot. Missing/malformed/ambiguous
+state fails closed. A missing call in a valid snapshot, or a 404 confirmed by another snapshot,
+returns accepted/alreadyEnded for a known own call. An active handover after 404 returns a
+safe retry message instead of incorrectly reporting completion. Unknown/other-DN IDs remain
+forbidden. Gateway errors use a fixed allowlist and never pass through arbitrary provider text.
+
 ### Monitor startup failure classification and checkpoint recovery
 
 The device-diagnostics commit does not change claim, OAuth or WebSocket setup. In that
@@ -186,8 +212,9 @@ by the UI. Diagnostics access remains admin/super-admin; operators remain denied
 
 These changes do not prove which devices are actually registered on the tenant or prove
 the cause of a failed outbound ring. Collect the new diagnostics after a separately
-authorized release. Local tests use synthetic device fixtures only. DN-level makecall,
-participant actions, DN mapping and the normalizer remain unchanged.
+authorized release. Local tests use synthetic device fixtures only. That diagnostics-only
+change kept DN-level makecall, participant actions, DN mapping and the normalizer unchanged;
+the subsequent device-specific action change is documented above.
 
 The activity outcome button is placed in the existing timeline header, outside the practice
 hero. Local browser checks cover its placement, hit testing and opening/closing the existing
@@ -209,3 +236,69 @@ There are no new PBX action paths in the monitor and no classification changes i
 The pre-existing report/CSV/Leadboard working tree remains excluded; it must not be staged
 as part of this tranche. The single-process/replica and physical-device UAT limits above
 remain applicable.
+
+### Outbound attempt diagnostics (makecall observability)
+
+Every makecall attempt gets a random 8-hex reference (`attemptId`), returned to the browser and
+shown in the live panel ("rif."). The controller keeps the last 25 attempts in memory and logs one
+sanitized `[3cx] makecall` line each. Admin GET /api/3cx/diagnostics exposes them as
+`recentCallAttempts` (Calls admin panel). The call-service answers /3cx/diagnostics only with the
+internal capability the admin-gated gateway route attaches; direct calls get 403.
+
+Each row: outcome (`accepted` = PBX acknowledgement only; `rejected_before_pbx`; `rejected_by_pbx`;
+`pbx_unreachable`), code, HTTP status, sanitized finalstatus, device count, selected device as the
+same HMAC pseudonym used by observedDevices, destination format/digit count/last two digits,
+masked callId and a `correlation`:
+
+| correlation | meaning |
+| --- | --- |
+| callid | monitor trace for the native callid returned by makecall, same DN |
+| callid_other_dn | that callid seen only on another agent DN: uncertain |
+| probable_no_callid | no callid returned; exactly one trace on the DN within 60 s: a guess |
+| ambiguous_no_callid | several traces in the window: none attributed |
+| pending | < 60 s, nothing yet |
+| not_observed | nothing seen by this process; not proof that 3CX placed no call |
+| not_applicable | the request never reached the PBX or was refused |
+
+Traces hold `peer:status` steps of the 901/913 legs (`makecall_callback:Ringing`,
+`external:Connected`, `ended`; legs on another agent DN are prefixed, e.g. `901/…`). No number,
+name or provider payload. Trunk legs are not monitored: the 3CX call log remains the authority on
+whether the external number was dialed. The live card omits the callback phase (the `MakeCall`
+peer is not a customer number).
+
+Limits: attempts and traces are in memory (lost on restart, per process). The monitor runs where
+the Mongo lease is held; with more than one replica an attempt and its trace may live in different
+processes and correlate as not_observed. Keep one backend replica.
+
+Command timeouts: the gateway waits 25 s for /3cx/control (controller worst case OAuth 10 s +
+PBX 10 s), so it no longer reports an unknown outcome while the PBX may still place the call.
+Identical requests within 5 s share one result; there is no automatic retry. On a 5xx the panel
+asks the operator to check the device before retrying.
+
+Release note: the committed baseline (e3e2a08) used DN-level makecall. This tranche uses
+device-level makecall (POST /callcontrol/{dn}/devices/{deviceid}/makecall, body {destination,
+timeout}); the 3CX TS SDK only types the DN-level body, the device route is the one listed in the
+official endpoint guide. Community reports (not 3CX staff) describe makecall as ringing the
+originating extension/device first and dialing the destination only after it answers; this is
+consistent with the field report but unproven for this tenant.
+
+### Device selection per attempt
+
+GET /api/3cx/devices returns, for the caller's own persisted DN only, the currently registered
+devices as {device: HMAC pseudonym, label, userAgent (sanitized)}; null when the monitor is not
+ready. The panel asks for a fresh list on every dial: none -> precise message, no request; one ->
+used; several -> the operator picks (e.g. "Client web 3CX" / "App 3CX Android"), or cancels. POST
+/api/3cx/call accepts {phone, device}; the controller resolves the pseudonym only against the DN's
+current registrations (stale, foreign or raw IDs: 409/400, nothing sent). Without a device and
+with several registrations it refuses (409). No device is ever chosen by position, no preference
+is stored and nothing is retried automatically. Pseudonyms change when the backend restarts.
+
+### Trust boundary for identities forwarded by the gateway
+
+The gateway strips `__creator`, `__contactActor`, `__paymentActor` from every browser body and
+re-adds only what the session proves, together with the process-scoped `x-leadium-internal`
+capability (common/internalCapability.ts, same mechanism as the call-control capability). The
+lead service drops those fields from any request without it, so direct callers are anonymous:
+phone correction 403, payment write 401, creation deduplication treated as non-admin.
+Internal services can be bound to loopback with `INTERNAL_SERVICE_HOST=127.0.0.1` (gateway still
+listens on 0.0.0.0); default unchanged.

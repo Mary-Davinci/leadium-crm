@@ -39,7 +39,43 @@ type ThreeCxDiagnostics = {
   observedDnTypes?: Record<string, string>;
   observedDevices?: Record<string, Array<{ deviceIdMasked: string; userAgent: string }>>;
   deviceCount?: Record<string, number>;
+  recentCallAttempts?: ThreeCxCallAttempt[];
 };
+type ThreeCxCallAttempt = {
+  attemptId: string; dn: string; at: string; outcome: string; code: string;
+  httpStatus?: number; finalStatus?: string; deviceCount?: number;
+  destination?: { format: string; digits: number; lastDigits: string };
+  callId?: string; deviceMasked?: string; correlation?: string; candidateCount?: number;
+  observation?: { dn: string; steps: string[]; ended: boolean; firstSeenAt: string; lastSeenAt: string };
+};
+
+const CORRELATION_LABELS: Record<string, string> = {
+  callid: "correlata per callId",
+  callid_other_dn: "callId visto solo su un altro interno (incerta)",
+  probable_no_callid: "probabile, 3CX non ha restituito il callId (incerta)",
+  ambiguous_no_callid: "ambigua: piu chiamate nello stesso intervallo, nessuna attribuita",
+  pending: "in attesa di eventi (finestra 60 s)",
+  not_observed: "nessun evento osservato: non prova che la chiamata non sia avvenuta",
+  not_applicable: "richiesta non arrivata o rifiutata dal centralino"
+};
+
+// "accepted" is only the PBX acknowledgement; the monitor trace shows what was observed afterwards.
+export function ThreeCxRecentAttempts({ attempts }: { attempts?: ThreeCxCallAttempt[] }) {
+  return <div>
+    <dt>recentCallAttempts</dt>
+    <dd>{attempts?.length ? attempts.map(row => <div key={row.attemptId}>
+      <strong>{new Date(row.at).toLocaleTimeString("it-IT")} · rif. {row.attemptId} · {row.dn}</strong> → {row.outcome} ({row.code})
+      {row.httpStatus !== undefined ? ` · HTTP ${row.httpStatus}` : ""}{row.finalStatus ? ` · ${row.finalStatus}` : ""}
+      {row.deviceCount !== undefined ? ` · ${row.deviceCount} device` : ""}{row.deviceMasked ? ` (${row.deviceMasked})` : ""}
+      {row.destination ? ` · ${row.destination.format} ${row.destination.digits} cifre …${row.destination.lastDigits}` : ""}
+      <div>
+        {row.callId ? `callId ${row.callId} · ` : ""}{CORRELATION_LABELS[row.correlation || ""] || row.correlation || "—"}
+        {row.candidateCount && row.candidateCount > 1 ? ` (${row.candidateCount} candidati)` : ""}
+        {row.observation ? `: ${row.observation.steps.join(" → ")}${row.observation.ended ? "" : " (in corso)"}` : ""}
+      </div>
+    </div>) : "Nessun tentativo dal riavvio del servizio"}</dd>
+  </div>;
+}
 
 export function ThreeCxObservedDevices({ devices }: { devices?: ThreeCxDiagnostics["observedDevices"] }) {
   const observed = ["901", "913"].filter(dn => Array.isArray(devices?.[dn]));
@@ -259,6 +295,7 @@ export function CallsPage() {
               <div><dt>lastError</dt><dd>{diagnostics.lastError || "—"}</dd></div>
               <ThreeCxObservedDnTypes types={diagnostics.observedDnTypes} />
               <ThreeCxObservedDevices devices={diagnostics.observedDevices} />
+              <ThreeCxRecentAttempts attempts={diagnostics.recentCallAttempts} />
             </dl>
           ) : null}
         </section>

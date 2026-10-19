@@ -7,6 +7,8 @@ export class ThreeCxDeviceDiagnostics {
   private salt = randomBytes(32);
   private devices = new Map<string, ObservedDevice[]>();
   forget(dn: string) { this.devices.delete(dn); }
+  /** Same pseudonym as observedDevices, so an attempt's device can be matched to that list. */
+  mask(deviceId: string) { return "device-" + createHmac("sha256", this.salt).update(deviceId).digest("hex").slice(0, 12); }
 
   observe(dn: string, value: unknown) {
     if (dn !== "901" && dn !== "913") return;
@@ -23,14 +25,14 @@ export class ThreeCxDeviceDiagnostics {
       observed.push({
         // No raw ID fragments: identifiers may contain SIP identities, hostnames or phones.
         // Stable within this monitor instance only; not a selectable device ID for actions.
-        deviceIdMasked: "device-" + createHmac("sha256", this.salt).update(item.device_id).digest("hex").slice(0, 12),
+        deviceIdMasked: this.mask(item.device_id),
         userAgent: this.userAgent(item.user_agent, item.device_id)
       });
     }
     this.devices.set(dn, observed);
   }
 
-  private userAgent(value: unknown, deviceId: string): string {
+  userAgent(value: unknown, deviceId: string): string {
     if (typeof value !== "string") return "";
     const agent = value.trim();
     // Preserve ordinary product/version labels, redact suspicious identity/auth fields as a whole.

@@ -1,6 +1,8 @@
 import "../../loadEnv";
 import http from "http";
 import { createSessionToken } from "./session-token";
+import { internalIdentityHeaders } from "../common/internalCapability";
+import { callControlInternalHeaders } from "../call-service/threecx-internal";
 import { handleThreeCxV2, isThreeCxV2Path } from "./threecx-routes";
 import {
   authenticateUser,
@@ -144,6 +146,13 @@ function getSessionFromRequest(req: http.IncomingMessage) {
     return null;
   }
   return session;
+}
+
+// Identity fields the lead service trusts only with the internal capability: a browser can
+// never supply them; the gateway removes them and re-adds only what the session proves.
+function stripIdentityFields<T extends Record<string, any>>(body: T): T {
+  for (const key of ["__creator", "__contactActor", "__paymentActor"]) delete body[key];
+  return body;
 }
 
 function isAdmin(user?: AuthPublicUser | null) {
@@ -968,6 +977,12 @@ export const server = http.createServer(async (req, res) => {
       sendJson(res, 403, { error: "Diagnostica 3CX riservata agli amministratori." });
       return;
     }
+    if (pathname === "/api/3cx/diagnostics" && method === "GET") {
+      // The call-service only answers diagnostics with the internal capability (admin checked above).
+      const upstream = await fetch(CALL_URL + "/3cx/diagnostics", { headers: callControlInternalHeaders() });
+      await forwardUpstreamResponse(res, upstream);
+      return;
+    }
     // WhatsApp is a shared inbox by product design: any authenticated operator can read every
     // conversation (including unassigned ones), claim/release ownership, and send messages on
     // any conversation -- that is the point of a shared inbox, not an authorization gap. The one
@@ -1011,11 +1026,20 @@ export const server = http.createServer(async (req, res) => {
       await forwardUpstreamResponse(res, upstream);
       return;
     }
+    // Lead creation can deduplicate into an existing record: the lead service needs the verified
+    // creator role so a non-admin can't touch or read an admin-reserved practice this way.
+    if (pathname.replace(/\/+$/, "") === "/api/leads" && method === "POST") {
+      const body = stripIdentityFields((await parseJsonBody(req)) as Record<string, any>);
+      body.__creator = { id: session.user.id, username: session.user.username, role: session.user.role };
+      const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json", ...internalIdentityHeaders() }, body: JSON.stringify(body) });
+      await forwardUpstreamResponse(res, upstream);
+      return;
+    }
     // Payment writes always derive their actor from the authenticated session. The lead service
     // remains private; client-supplied audit identities are overwritten at this public boundary.
     const paymentWrite = pathname.replace(/\/+/g, "/").replace(/\/$/, "").match(/^\/api\/leads\/([^/]+)(?:\/payments\/([^/]+))?$/);
     if (paymentWrite && method === "PATCH") {
-      const body = (await parseJsonBody(req)) as Record<string, any>;
+      const body = stripIdentityFields((await parseJsonBody(req)) as Record<string, any>);
       if (paymentWrite[2] || Object.prototype.hasOwnProperty.call(body, "payments")) {
         const leadId = decodeURIComponent(paymentWrite[1]);
         let status: string;
@@ -1028,16 +1052,22 @@ export const server = http.createServer(async (req, res) => {
         }
         body.__paymentActor = { id: session.user.id, username: session.user.username, role: session.user.role };
         body.actor = session.user.username;
-        const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json", ...internalIdentityHeaders() }, body: JSON.stringify(body) });
         await forwardUpstreamResponse(res, upstream);
         return;
+      }
+      // Contact identity is never client-supplied: only the session can authorize a phone edit.
+      if (Object.prototype.hasOwnProperty.call(body, "phone")) {
+        if (!isAdmin(session.user)) return sendJson(res, 403, { error: "Solo admin e super admin possono modificare il telefono del lead." });
+        body.__contactActor = { id: session.user.id, username: session.user.username, role: session.user.role };
+        body.actor = session.user.username;
       }
       // Parsing consumed the stream: forward ordinary lead patches through the same gate.
       if (!isAdmin(session.user)) {
         const status = await fetchLeadStatus(decodeURIComponent(paymentWrite[1])).catch(() => "");
         if ([PRACTICE_READY_STATUS, PRACTICE_CLOSED_STATUS].includes(status)) return sendJson(res, 403, { error: "Questa pratica e riservata alla supervisione admin." });
       }
-      const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json", ...internalIdentityHeaders() }, body: JSON.stringify(body) });
       await forwardUpstreamResponse(res, upstream);
       return;
     }

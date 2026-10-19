@@ -1,6 +1,7 @@
 import { getMongoDb, isMongoEnabled } from "./mongo";
 import { newId, readDb, writeDb } from "./jsonStore";
 import { normalizeEmail, normalizePhone } from "./leadStore";
+import { phoneMatchKeys } from "./phoneIdentity";
 
 export type CustomerRecord = {
   id: string;
@@ -64,6 +65,36 @@ export async function findCustomerByContact(phone: string, email: string): Promi
   if (!or.length) return null;
   const doc = await db.collection("customers").findOne({ $or: or });
   return fromCustomerDoc(doc);
+}
+
+/** Compare-and-set of the phone only; false when the stored phone is no longer `expected`. */
+export async function setCustomerPhoneIfUnchanged(customerId: string, expected: string, phone: string, at: string) {
+  if (!isMongoEnabled()) {
+    const db = readDb();
+    const customer = (db.customers || []).find((item: any) => item.id === customerId);
+    if (!customer || String(customer.phone || "") !== expected) return false;
+    customer.phone = phone; customer.updatedAt = at;
+    writeDb(db);
+    return true;
+  }
+  const db = await getMongoDb();
+  const result = await db.collection("customers").updateOne(
+    { _id: customerId, ...(expected ? { phone: expected } : { phone: { $in: ["", null] } }) },
+    { $set: { phone, phoneNormalized: normalizePhone(phone), updatedAt: at } }
+  );
+  return result.matchedCount === 1;
+}
+
+/** Every customer whose phone matches (country-aware keys). Used for conflict detection only. */
+export async function listCustomersByPhone(phone: string, limit = 20): Promise<CustomerRecord[]> {
+  const keys = phoneMatchKeys(phone);
+  if (!keys.length) return [];
+  if (!isMongoEnabled()) {
+    return (readDb().customers || []).filter((customer: any) => keys.includes(normalizePhone(customer.phone))).slice(0, limit);
+  }
+  const db = await getMongoDb();
+  const docs = await db.collection("customers").find({ phoneNormalized: { $in: keys } }).limit(limit).toArray();
+  return docs.map(fromCustomerDoc).filter(Boolean) as CustomerRecord[];
 }
 
 async function persistNewCustomer(customer: CustomerRecord) {

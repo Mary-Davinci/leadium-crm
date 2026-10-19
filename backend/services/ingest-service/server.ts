@@ -3,7 +3,9 @@ require("../../loadEnv");
 
 const http = require("http");
 
-const HOST = "0.0.0.0";
+// Internal service: reached only through the gateway in the same process. INTERNAL_SERVICE_HOST=127.0.0.1
+// keeps its port off the network (the gateway keeps listening on 0.0.0.0).
+const HOST = process.env.INTERNAL_SERVICE_HOST || "0.0.0.0";
 const PORT = Number(process.env.INGEST_SERVICE_PORT || 4305);
 const LEAD_URL = process.env.LEAD_SERVICE_URL || "http://localhost:4301";
 const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || "dev_meta_token";

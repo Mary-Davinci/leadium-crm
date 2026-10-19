@@ -4,6 +4,7 @@ import { MonitorStore } from "./threecx-store";
 import type { LiveCall } from "./threecx-controller";
 import { classifyMonitoredDn } from "./threecx-normalizer";
 import { ThreeCxDeviceDiagnostics } from "./threecx-device-diagnostics";
+import { deviceLabel } from "./threecx-device-label";
 
 export type MonitorConfig = { enabled: boolean; baseUrl: string; clientId: string; configured: boolean; credential: () => string };
 export function monitorConfig(env: NodeJS.ProcessEnv = process.env): MonitorConfig {
@@ -62,6 +63,8 @@ export class ThreeCxMonitor {
   private sequence: number | null = null;
   private dnTypes = new Map<string, string>();
   private deviceDiagnostics = new ThreeCxDeviceDiagnostics();
+  // Raw device IDs stay server-side, separate from the sanitized admin projection.
+  private controlDevices = new Map<string, { ids: string[]; agents: Map<string, string>; observedAt: number }>();
   private liveParticipants = new Map<string, { id: number; callid: number; dn: string; direct_control: boolean }>();
   private now: () => number;
   private http: typeof fetch;
@@ -84,6 +87,37 @@ export class ThreeCxMonitor {
     if (!this.config.configured) { this.status.lastError = "3CX configuration missing or invalid"; return; }
     this.task = this.run();
   }
+  devicesForDn(dn: string): readonly string[] | null {
+    if (!this.config.enabled || !this.status.connected || this.socket?.readyState !== WebSocket.OPEN || !["901", "913"].includes(dn)) return null;
+    const snapshot = this.controlDevices.get(dn);
+    return snapshot && this.now() - snapshot.observedAt <= 30000 ? [...snapshot.ids] : null;
+  }
+  /**
+   * Selectable devices for the operator: pseudonym (same HMAC as diagnostics), sanitized user
+   * agent and a readable label. Same freshness rule as devicesForDn; null when unknown.
+   */
+  deviceOptionsForDn(dn: string): Array<{ device: string; label: string; userAgent: string }> | null {
+    const ids = this.devicesForDn(dn);
+    if (ids === null) return null;
+    const agents = this.controlDevices.get(dn)?.agents || new Map<string, string>();
+    return ids.map(id => {
+      const userAgent = agents.get(id) || "";
+      return { device: this.deviceDiagnostics.mask(id), label: deviceLabel(userAgent), userAgent };
+    });
+  }
+  private observeControlDevices(dn: string, value: unknown) {
+    this.controlDevices.delete(dn);
+    if (!["901", "913"].includes(dn) || !Array.isArray(value)) return;
+    const ids = new Set<string>();
+    const agents = new Map<string, string>();
+    for (const item of value) {
+      if (!item || typeof item.device_id !== "string" || !item.device_id.trim()
+        || (item.dn !== undefined && item.dn !== dn)) return;
+      ids.add(item.device_id);
+      agents.set(item.device_id, this.deviceDiagnostics.userAgent(item.user_agent, item.device_id));
+    }
+    this.controlDevices.set(dn, { ids: [...ids], agents, observedAt: this.now() });
+  }
   /** Ephemeral projection only. No PBX request, token, provider payload or DB write. */
   liveCalls(): LiveCall[] {
     if (!this.config.enabled || !this.status.connected) return [];
@@ -102,7 +136,40 @@ export class ThreeCxMonitor {
     }
     return calls;
   }
+  /**
+   * Admin-only correlation for outbound attempts: per native callId, the sequence of
+   * agent-leg status and peer class observed (e.g. makecall_callback:Ringing). No numbers,
+   * names or provider payloads. Absence of a trace is not proof that 3CX placed no call.
+   */
+  private callTraces = new Map<string, { dn: string; firstSeenAt: string; lastSeenAt: string; steps: string[]; ended: boolean }>();
+  callTrace(callId: string) {
+    const row = this.callTraces.get(callId);
+    return row ? { ...row, steps: [...row.steps] } : null;
+  }
+  /** Traces first seen on a DN inside a time window: used only when 3CX returned no callid. */
+  callTracesBetween(dn: string, fromMs: number, toMs: number) {
+    return [...this.callTraces.entries()]
+      .filter(([, row]) => row.dn === dn && Date.parse(row.firstSeenAt) >= fromMs && Date.parse(row.firstSeenAt) <= toMs)
+      .map(([callId, row]) => ({ callId, ...row, steps: [...row.steps] }));
+  }
+  maskDeviceId(deviceId: string) { return this.deviceDiagnostics.mask(deviceId); }
+  private traceParticipant(p: any, ended = false) {
+    if (!Number.isSafeInteger(p?.callid) || p.callid <= 0 || !["901", "913"].includes(p.dn)) return;
+    const id = String(p.callid), at = this.iso();
+    const row = this.callTraces.get(id) || { dn: p.dn, firstSeenAt: at, lastSeenAt: at, steps: [], ended: false };
+    const party = String(p.party_dn || "");
+    const peer = party === "MakeCall" ? "makecall_callback" : /^\+?[\d ()-]{7,}$/.test(party || String(p.party_caller_id || "")) ? "external"
+      : /^\d{2,6}$/.test(party) ? "internal" : party ? "other" : "none";
+    const status = typeof p.status === "string" && /^[A-Za-z]{1,20}$/.test(p.status) ? p.status : "Unrecognized";
+    // A leg on another agent DN (e.g. after a transfer) is prefixed so it is never read as the initiator.
+    const step = (p.dn !== row.dn ? `${p.dn}/` : "") + (ended ? "ended" : `${peer}:${status}`);
+    if (row.steps[row.steps.length - 1] !== step && row.steps.length < 16) row.steps.push(step);
+    row.lastSeenAt = at; row.ended = ended;
+    this.callTraces.delete(id); this.callTraces.set(id, row);
+    while (this.callTraces.size > 50) this.callTraces.delete(this.callTraces.keys().next().value!);
+  }
   private rememberParticipant(p: any) {
+    try { this.traceParticipant(p); } catch { /* diagnostics never interrupt monitoring */ }
     if (Number.isSafeInteger(p.id) && Number.isSafeInteger(p.callid) && p.callid > 0) this.liveParticipants.set(legKey(p.dn, p.id), {
       id: p.id, callid: p.callid, dn: p.dn, direct_control: p.direct_control === true
     });
@@ -171,6 +238,8 @@ export class ThreeCxMonitor {
       // Diagnostic failures must never interrupt participant processing or startup.
       try { this.deviceDiagnostics.observe(dn, info.devices); }
       catch { this.deviceDiagnostics.forget(dn); }
+      try { this.observeControlDevices(dn, info.devices); }
+      catch { this.controlDevices.delete(dn); }
       for (const summary of info.participants) {
         if (!Number.isSafeInteger(summary.id)) continue;
         const participant = await this.request(`/callcontrol/${dn}/participants/${summary.id}`);
@@ -185,7 +254,10 @@ export class ThreeCxMonitor {
     for (const call of Object.values(this.state.calls)) for (const [key, leg] of Object.entries(call.legs)) {
       if (leg.active && !seen.has(key)) removeParticipant(this.state, leg.dn, Number(key.split("/")[1]), this.iso(), true);
     }
-    for (const key of this.liveParticipants.keys()) if (!seen.has(key)) this.liveParticipants.delete(key);
+    for (const [key, known] of this.liveParticipants) if (!seen.has(key)) {
+      try { this.traceParticipant(known, true); } catch { /* diagnostics only */ }
+      this.liveParticipants.delete(key);
+    }
     await this.save();
   }
   private save() { return atStage("checkpoint_save_failed", () => this.deps.store.save(this.state)); }
@@ -210,7 +282,11 @@ export class ThreeCxMonitor {
     this.enqueue(async () => {
       const [, dn, id] = match;
       if (!id) { await this.reconcile(false); return; }
-      if (event.event_type === 1) { this.liveParticipants.delete(legKey(dn, Number(id))); removeParticipant(this.state, dn, Number(id), this.iso()); }
+      if (event.event_type === 1) {
+        const known = this.liveParticipants.get(legKey(dn, Number(id)));
+        if (known) try { this.traceParticipant(known, true); } catch { /* diagnostics only */ }
+        this.liveParticipants.delete(legKey(dn, Number(id))); removeParticipant(this.state, dn, Number(id), this.iso());
+      }
       else {
         const participant = await this.request(`/callcontrol/${dn}/participants/${id}`);
         if (participant && participant.dn === dn && participant.id === Number(id) && Number.isSafeInteger(participant.callid) && participant.callid > 0) {
@@ -317,6 +393,7 @@ export class ThreeCxMonitor {
         if (!this.abort.signal.aborted) this.status.lastError = error instanceof MonitorStageError ? error.message : new MonitorStageError("monitor_transport_failed").message;
       } finally {
         this.status.connected = false; this.socket?.terminate(); this.socket = null; this.token = "";
+        this.controlDevices.clear();
         await this.queue;
         if (this.lease) {
           for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "disconnected");

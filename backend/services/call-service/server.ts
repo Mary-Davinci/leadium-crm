@@ -5,7 +5,9 @@ import { createMonitorStore } from "./threecx-store";
 import { ThreeCxController, ThreeCxOAuth, CallControlError, capabilities, validateThreeCxDn } from "./threecx-controller";
 import { isCallControlInternal } from "./threecx-internal";
 
-const HOST = "0.0.0.0";
+// Internal service: reached only through the gateway in the same process. INTERNAL_SERVICE_HOST=127.0.0.1
+// keeps its port off the network (the gateway keeps listening on 0.0.0.0).
+const HOST = process.env.INTERNAL_SERVICE_HOST || "0.0.0.0";
 const PORT = Number(process.env.CALL_SERVICE_PORT || 4303);
 const LEAD_URL = process.env.LEAD_SERVICE_URL || "http://localhost:4301";
 
@@ -57,7 +59,7 @@ const monitor = new ThreeCxMonitor(config, {
   store: createMonitorStore(config.baseUrl || "disabled"),
   deliver: async (event, signal) => { await forwardEventToLead(event, signal); }
 });
-const controller = new ThreeCxController(config, oauth, () => monitor.liveCalls());
+const controller = new ThreeCxController(config, oauth, () => monitor.liveCalls(), undefined, undefined, undefined, dn => monitor.devicesForDn(dn), id => monitor.maskDeviceId(id));
 
 export const server = http.createServer(async (req, res) => {
   try {
@@ -65,14 +67,24 @@ export const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const pathname = decodeURIComponent(url.pathname);
     if (method === "GET" && pathname === "/health") return sendJson(res, 200, { ok: true, service: "call-service" });
-    if (method === "GET" && pathname === "/3cx/diagnostics") return sendJson(res, 200, monitor.diagnostics());
-    if (pathname === "/3cx/live" || pathname === "/3cx/control") {
+    if (method === "GET" && pathname === "/3cx/diagnostics") {
+      // Includes recent call attempts: only reachable through the admin-gated gateway route.
+      if (!isCallControlInternal(req.headers["x-leadium-call-control"])) return sendJson(res, 403, { error: "Permesso negato." });
+      return sendJson(res, 200, { ...monitor.diagnostics(), recentCallAttempts: controller.recentAttempts({ trace: id => monitor.callTrace(id), between: (dn, from, to) => monitor.callTracesBetween(dn, from, to) }) });
+    }
+    if (pathname === "/3cx/live" || pathname === "/3cx/control" || pathname === "/3cx/devices") {
       if (!isCallControlInternal(req.headers["x-leadium-call-control"])) return sendJson(res, 403, { error: "Permesso negato." });
       if (pathname === "/3cx/live" && method === "GET") {
         const dn = validateThreeCxDn(url.searchParams.get("dn"));
         if (!dn) return sendJson(res, 403, { error: "Interno 3CX non configurato" });
         const rows = monitor.liveCalls().filter(call => call.agentDn === dn);
         return sendJson(res, 200, { available: config.enabled && monitor.diagnostics().connected, calls: rows.map(({ participantId, directControl, ...call }) => ({ ...call, capabilities: capabilities({ ...call, participantId, directControl }) })) });
+      }
+      if (pathname === "/3cx/devices" && method === "GET") {
+        // Own DN only (the gateway passes the persisted mapping); pseudonyms + readable labels.
+        const dn = validateThreeCxDn(url.searchParams.get("dn"));
+        if (!dn) return sendJson(res, 403, { error: "Interno 3CX non configurato" });
+        return sendJson(res, 200, { available: config.enabled && monitor.diagnostics().connected, devices: monitor.deviceOptionsForDn(dn) });
       }
       if (pathname === "/3cx/control" && method === "POST") {
         if (!monitor.diagnostics().connected) return sendJson(res, 503, { error: "3CX momentaneamente non disponibile" });
@@ -92,7 +104,7 @@ export const server = http.createServer(async (req, res) => {
     return sendJson(res, 500, { error: error.message || "Errore interno." });
   }
 });
-function pathnameIsControl(url?: string) { return Boolean(url && /^\/3cx\/(control|live)(?:\?|$)/.test(url)); }
+function pathnameIsControl(url?: string) { return Boolean(url && /^\/3cx\/(control|live|devices)(?:\?|$)/.test(url)); }
 
 server.listen(PORT, HOST, () => {
   console.log(`call-service su http://localhost:${PORT}`);

@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api } from "../../lib/api";
+import { ArrowRightLeft, ChevronDown, ChevronUp, ExternalLink, Pause, Phone, PhoneIncoming, PhoneOff, PhoneOutgoing, User, X } from "lucide-react";
+import { api, ApiError } from "../../lib/api";
 import { apiUrl } from "../../lib/api-url";
 import { clearSession, getAuthToken } from "../../lib/auth";
 import { buildPracticeUrl } from "../practices/practice-links";
@@ -12,6 +13,7 @@ export type LiveCall = {
   leadId?: string; practiceId?: string; customerName?: string;
   capabilities: { answer: boolean; hangup: boolean; transfer: boolean; hold: boolean; resume: boolean };
 };
+export type DeviceOption = { device: string; label: string; userAgent: string };
 type CallContext = { dial(phone: string): Promise<boolean>; busy: boolean; dn: string; calls: LiveCall[]; message: string };
 const Context = createContext<CallContext>({ dial: async () => false, busy: false, dn: "", calls: [], message: "" });
 export const useThreeCx = () => useContext(Context);
@@ -48,13 +50,16 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
   const [calls, setCalls] = useState<LiveCall[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<"info" | "error">("info");
   const [available, setAvailable] = useState(false);
   const [action, setAction] = useState("");
   const [collapsed, setCollapsed] = useState(false);
+  const [deviceChoice, setDeviceChoice] = useState<DeviceOption[] | null>(null);
+  const chooseDevice = useRef<((device: string | null) => void) | null>(null);
   const locked = useRef(false);
   const knownCallIds = useRef(new Set<string>());
   const panelRef = useRef<HTMLElement>(null);
-  const hasPanel = Boolean(message || calls.length > 0 || (dn && !available));
+  const hasPanel = Boolean(message || deviceChoice || calls.length > 0 || (dn && !available));
   useEffect(() => {
     const panel = panelRef.current;
     const shell = panel?.previousElementSibling;
@@ -103,32 +108,87 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
 
   async function dial(phone: string) {
     if (locked.current) return false;
-    if (!dn) { setMessage("Interno 3CX non configurato"); return false; }
-    locked.current = true; setBusy(true); setCollapsed(false); setMessage("Avvio chiamata...");
+    if (!dn) { setMessageTone("error"); setMessage("Interno 3CX non configurato"); return false; }
+    locked.current = true; setBusy(true); setCollapsed(false); setMessageTone("info"); setMessage("Verifico i dispositivi 3CX...");
+    let posted = false;
     try {
-      await api("/api/3cx/call", { method: "POST", body: JSON.stringify({ phone }) });
-      setMessage("Chiamata inviata a 3CX"); return true;
-    } catch (error) { setMessage(error instanceof Error ? error.message : "3CX momentaneamente non disponibile"); return false; }
+      // Fresh list for every attempt: one device is used directly, several need an explicit
+      // choice (never the first one), none or unknown stop before any PBX request.
+      const options = await api<{ devices: DeviceOption[] | null }>("/api/3cx/devices");
+      if (options.devices === null) {
+        setMessageTone("error"); setMessage("Dispositivi 3CX non ancora disponibili: il collegamento al centralino non e pronto. Riprova tra poco."); return false;
+      }
+      if (!options.devices.length) {
+        setMessageTone("error"); setMessage(`Nessun dispositivo 3CX collegato all'interno ${dn}: apri l'app o il client web 3CX e riprova.`); return false;
+      }
+      let device = options.devices.length === 1 ? options.devices[0].device : null;
+      if (!device) {
+        setMessage("");
+        device = await new Promise<string | null>(resolve => { chooseDevice.current = resolve; setDeviceChoice(options.devices); });
+        chooseDevice.current = null; setDeviceChoice(null);
+        if (!device) { setMessage("Chiamata annullata."); return false; }
+      }
+      setMessage("Avvio chiamata...");
+      posted = true;
+      const result = await api<{ attemptId?: string }>("/api/3cx/call", { method: "POST", body: JSON.stringify({ phone, device }) });
+      // PBX acceptance only: it does not prove that the device or the customer rang.
+      setMessage(`Richiesta accettata da 3CX${result?.attemptId ? ` (rif. ${result.attemptId})` : ""}. Se il tuo dispositivo 3CX squilla, rispondi: può essere il richiamo che precede la chiamata al cliente.`); return true;
+    } catch (error) {
+      setMessageTone("error");
+      // A 503 can be a timeout after the PBX already received the request: never invite a blind retry.
+      const uncertain = posted && (!(error instanceof ApiError) || error.status >= 500);
+      setMessage((error instanceof Error ? error.message : "3CX momentaneamente non disponibile") + (uncertain ? " Prima di riprovare controlla il dispositivo 3CX: la chiamata potrebbe essere partita comunque." : ""));
+      return false;
+    }
     finally { locked.current = false; setBusy(false); }
   }
   async function control(call: LiveCall, verb: string, target?: string) {
     if (locked.current) return;
     locked.current = true; setAction(call.callId); setMessage("");
     try { await api(`/api/3cx/calls/${encodeURIComponent(call.callId)}/${verb}`, { method: "POST", body: JSON.stringify(target ? { target } : {}) }); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "3CX momentaneamente non disponibile"); }
+    catch (error) { setMessageTone("error"); setMessage(error instanceof Error ? error.message : "3CX momentaneamente non disponibile"); }
     finally { locked.current = false; setAction(""); }
   }
+  const ringing = calls.some(call => call.status === "ringing" && call.direction === "inbound");
   return <Context.Provider value={{ dial, busy, dn, calls, message }}>
     {children}
-    {hasPanel && <aside ref={panelRef} className="threecx-live" aria-label="Chiamate 3CX">
-      <button type="button" className="secondary" aria-expanded={!collapsed} onClick={() => setCollapsed(value => !value)}>{collapsed ? `Mostra chiamate (${calls.length})` : "Riduci pannello chiamate"}</button>
-      {!collapsed && <>
-      {message && <p role="status">{message}</p>}
-      {dn && !available && <p role="status">3CX momentaneamente non disponibile</p>}
-      {calls.map(call => <ThreeCxLiveCard key={call.callId} call={call} busy={action !== "" || busy} onAction={(verb, target) => void control(call, verb, target)} />)}
-      </>}
+    {hasPanel && <aside ref={panelRef} className={`threecx-live${collapsed ? " is-collapsed" : ""}`} aria-label="Chiamate 3CX">
+      {collapsed
+        ? <button type="button" className="threecx-live-pill" aria-expanded="false" onClick={() => setCollapsed(false)}>
+          <span className={`threecx-live-dot${ringing ? " is-ringing" : ""}`} aria-hidden="true" />
+          {deviceChoice ? "Scegli il dispositivo 3CX" : calls.length ? `${calls.length} ${calls.length === 1 ? "chiamata" : "chiamate"} 3CX` : "Telefono 3CX"}
+          <ChevronUp size={14} aria-hidden="true" />
+        </button>
+        : <>
+          <header className="threecx-live-head">
+            <span><Phone size={13} aria-hidden="true" /> Telefono 3CX{dn && <em>Interno {dn}</em>}</span>
+            <button type="button" className="threecx-live-icon" aria-expanded="true" aria-label="Riduci pannello chiamate" title="Riduci" onClick={() => setCollapsed(true)}><ChevronDown size={16} aria-hidden="true" /></button>
+          </header>
+          {dn && !available && <p className="threecx-live-notice is-warning" role="status">3CX momentaneamente non disponibile</p>}
+          {message && <p className={`threecx-live-notice${messageTone === "error" ? " is-error" : ""}`} role="status">
+            <span>{message}</span>
+            {!busy && <button type="button" className="threecx-live-icon" aria-label="Chiudi messaggio" onClick={() => setMessage("")}><X size={14} aria-hidden="true" /></button>}
+          </p>}
+          {deviceChoice && <section className="threecx-live-devices" aria-label="Scegli il dispositivo">
+            <strong>Da quale dispositivo vuoi chiamare?</strong>
+            <span>Sul dispositivo scelto puo arrivare prima una chiamata da 3CX: rispondi per collegarti al cliente.</span>
+            {deviceChoice.map(option => <button type="button" key={option.device} className="threecx-live-device" onClick={() => chooseDevice.current?.(option.device)}>
+              <Phone size={14} aria-hidden="true" />
+              <span><b>{option.label}</b><small>{option.userAgent && option.userAgent !== "[redacted]" ? option.userAgent : "Dettagli non disponibili"} · {option.device.slice(-4)}</small></span>
+            </button>)}
+            <button type="button" className="threecx-live-btn is-quiet" onClick={() => chooseDevice.current?.(null)}>Annulla</button>
+          </section>}
+          {calls.map(call => <ThreeCxLiveCard key={call.callId} call={call} busy={action !== "" || busy} onAction={(verb, target) => void control(call, verb, target)} />)}
+        </>}
     </aside>}
   </Context.Provider>;
+}
+
+const STATUS_LABEL = { incoming: "Chiamata in arrivo", outgoing: "Chiamata in uscita", connected: "In chiamata", hold: "In attesa" } as const;
+
+function initials(name?: string) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return parts.length ? (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() : "";
 }
 
 export function ThreeCxLiveCard({ call, busy, onAction }: { call: LiveCall; busy: boolean; onAction(verb: string, target?: string): void }) {
@@ -137,20 +197,35 @@ export function ThreeCxLiveCard({ call, busy, onAction }: { call: LiveCall; busy
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const seconds = Math.max(0, Math.floor((now - Date.parse(call.answeredAt || call.startedAt)) / 1000));
   const duration = `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
-  return <section className="threecx-live-call" aria-label={call.direction === "inbound" && call.status === "ringing" ? "Chiamata in arrivo" : "Chiamata 3CX attiva"}>
-    <strong>{call.status === "ringing" ? call.direction === "inbound" ? "Chiamata in arrivo" : "Chiamata in uscita" : call.status === "hold" ? "In attesa" : "In chiamata"} · {duration}</strong>
-    <span>{call.customerName || "Numero non associato"}</span><span>{call.customerPhone}</span>
-    {call.practiceId && <small>Pratica #{call.practiceId}</small>}
-    <div className="threecx-live-actions">
-      {call.practiceId && <Link className="button secondary" to={buildPracticeUrl(call.practiceId)}>Apri pratica</Link>}
-      {call.capabilities.answer && <button disabled={busy} onClick={() => onAction("answer")}>Rispondi</button>}
-      {call.capabilities.hangup && <button className="secondary" disabled={busy} onClick={() => onAction("hangup")}>{call.status === "ringing" && call.direction === "inbound" ? "Rifiuta" : "Termina"}</button>}
+  const incoming = call.status === "ringing" && call.direction === "inbound";
+  const state = call.status === "ringing" ? (incoming ? "incoming" : "outgoing") : call.status;
+  const StateIcon = state === "incoming" ? PhoneIncoming : state === "outgoing" ? PhoneOutgoing : state === "hold" ? Pause : Phone;
+  const monogram = initials(call.customerName);
+  return <section className={`threecx-live-call is-${state}`} aria-label={incoming ? "Chiamata in arrivo" : "Chiamata 3CX attiva"}>
+    <div className="threecx-live-status">
+      <span className="threecx-live-badge"><StateIcon size={12} aria-hidden="true" />{STATUS_LABEL[state]}</span>
+      <time aria-label="Durata">{duration}</time>
     </div>
-    {call.status === "ringing" && call.direction === "inbound" && !call.capabilities.answer && <small>Rispondi dal dispositivo 3CX</small>}
-    {call.capabilities.transfer && <div className="threecx-live-actions">
+    <div className="threecx-live-identity">
+      <span className="threecx-live-avatar" aria-hidden="true">{monogram || <User size={18} />}</span>
+      <span className="threecx-live-who">
+        <strong>{call.customerName || "Numero non associato"}</strong>
+        <span>{call.customerPhone}</span>
+      </span>
+      {call.practiceId && <Link className="threecx-live-link" to={buildPracticeUrl(call.practiceId)}>Apri pratica <ExternalLink size={12} aria-hidden="true" /></Link>}
+    </div>
+    {incoming
+      ? <div className="threecx-live-answer">
+        <button type="button" className="threecx-live-btn is-accept" disabled={busy || !call.capabilities.answer} onClick={() => onAction("answer")}><Phone size={16} aria-hidden="true" />Rispondi</button>
+        {call.capabilities.hangup && <button type="button" className="threecx-live-btn is-reject" disabled={busy} onClick={() => onAction("hangup")}><PhoneOff size={16} aria-hidden="true" />Rifiuta</button>}
+      </div>
+      : call.capabilities.hangup && <button type="button" className="threecx-live-btn is-reject is-wide" disabled={busy} onClick={() => onAction("hangup")}><PhoneOff size={16} aria-hidden="true" />Termina</button>}
+    {incoming && !call.capabilities.answer && <small className="threecx-live-hint">Rispondi dal dispositivo 3CX</small>}
+    {call.capabilities.transfer && <div className="threecx-live-transfer">
       <select aria-label="Destinazione trasferimento" value={target} onChange={event => setTarget(event.target.value)} disabled={busy}>
-        <option value="">Trasferisci a…</option>{["901", "913", "910", "911", "912"].filter(dn => dn !== call.agentDn).map(dn => <option key={dn} value={dn}>{dn}</option>)}
-      </select><button className="secondary" disabled={busy || !target} onClick={() => onAction("transfer", target)}>Trasferisci</button>
+        <option value="">Trasferisci a…</option>{["901", "913", "910", "911", "912"].filter(dn => dn !== call.agentDn).map(dn => <option key={dn} value={dn}>Interno {dn}</option>)}
+      </select>
+      <button type="button" className="threecx-live-btn is-quiet" disabled={busy || !target} onClick={() => onAction("transfer", target)}><ArrowRightLeft size={14} aria-hidden="true" />Trasferisci</button>
     </div>}
   </section>;
 }

@@ -263,6 +263,55 @@ async function main() {
     });
   });
 
+  await runCase("solo admin puo modificare il telefono del lead; l'autore viene dalla sessione", async () => {
+    await withServers(async (leadUrl, gatewayUrl, gateway) => {
+      const lead = await seedLeadWithStatus("Da contattare");
+      const operator = makeSession(gateway, "operatore");
+      const spoofed = { id: "x", username: "falso_admin", role: "admin" };
+      const denied = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${lead.id}`, { token: operator, body: { phone: "+39 333 7654321", __contactActor: spoofed } });
+      assert.equal(denied.status, 403, "un operatore non puo modificare il telefono, nemmeno falsificando l'autore");
+      assert.equal((await leadStore.getLeadById(lead.id)).phone, lead.phone);
+      const notesOnly = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${lead.id}`, { token: operator, body: { notes: "ok", __contactActor: spoofed } });
+      assert.equal(notesOnly.status, 200, "le altre modifiche operative restano consentite");
+      const admin = makeSession(gateway, "admin");
+      const changed = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${lead.id}`, { token: admin, body: { phone: "+39 333 7654321" } });
+      assert.equal(changed.status, 200);
+      const audit = (await leadStore.getTimelineByLeadId(lead.id)).find((row: any) => row.type === "lead_phone_changed");
+      assert.equal(audit?.actor, "admin_user");
+    });
+  });
+
+  await runCase("confine di fiducia: header interni e identita nel body non sono accettati dal browser ne da accessi diretti", async () => {
+    await withServers(async (leadUrl, gatewayUrl, gateway) => {
+      const lead = await seedLeadWithStatus("Da contattare");
+      const operator = makeSession(gateway, "operatore");
+      // A browser cannot smuggle the internal capability: the gateway never forwards it.
+      const forgedHeader = await fetch(`${gatewayUrl}/api/leads/${lead.id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${operator}`, "Content-Type": "application/json", "x-leadium-internal": "forged" },
+        body: JSON.stringify({ phone: "+39 333 7654321", __contactActor: { id: "x", username: "x", role: "admin" } })
+      });
+      assert.equal(forgedHeader.status, 403);
+      // Direct calls to the lead service (bypassing the gateway) are anonymous whatever the body claims.
+      const direct = await apiRequest(leadUrl, "PATCH", `/leads/${lead.id}`, { body: { phone: "+39 333 7654321", __contactActor: { id: "x", username: "x", role: "super_admin" } } });
+      assert.equal(direct.status, 403);
+      const directPayment = await apiRequest(leadUrl, "PATCH", `/leads/${lead.id}`, { body: { payments: { version: 0, items: [] }, __paymentActor: { id: "x", username: "x", role: "admin" } } });
+      assert.equal(directPayment.status, 401, "payment audit identity is not accepted from a direct caller");
+      assert.equal((await leadStore.getLeadById(lead.id)).phone, lead.phone);
+    });
+  });
+
+  await runCase("la deduplica non espone ne modifica una pratica in supervisione admin per un operatore", async () => {
+    await withServers(async (leadUrl, gatewayUrl, gateway) => {
+      const lead = await seedLeadWithStatus("Pronta per chiusura");
+      const token = makeSession(gateway, "operatore");
+      const res = await apiRequest(gatewayUrl, "POST", "/api/leads", { token, body: { fullName: "Nome diverso", phone: lead.phone, __creator: { role: "admin" } } });
+      assert.equal(res.status, 409, "il ruolo arriva dalla sessione, non dal body");
+      assert.equal((res.body as any).code, "duplicate_admin_reserved");
+      assert.equal((res.body as any).lead, undefined);
+    });
+  });
+
   await runCase("operatore puo lavorare normalmente su lead/pratiche non bloccate (creazione, lettura)", async () => {
     await withServers(async (leadUrl, gatewayUrl, gateway) => {
       const token = makeSession(gateway, "operatore");

@@ -397,6 +397,21 @@
   font-size: var(--font-size-sm);
 }
 
+.pr-duplicate-notice {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--status-contact-border);
+  border-radius: 8px;
+  background: var(--status-contact-bg);
+  color: var(--status-contact-text);
+  font-size: var(--font-size-sm);
+}
+
+.pr-duplicate-notice p {
+  margin: 0;
+}
+
 /* List */
 .pr-list {
   display: grid;

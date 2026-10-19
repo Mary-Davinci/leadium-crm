@@ -12,6 +12,8 @@ delete process.env.MONGO_URL;
 delete process.env.MONGODB_URI;
 
 const leadService = require("./server") as typeof import("./server");
+// Identity fields are trusted only with the gateway's in-process capability.
+const { internalIdentityHeaders } = require("../common/internalCapability") as typeof import("../common/internalCapability");
 const leadStore = require("../common/leadStore") as typeof import("../common/leadStore");
 const taskStore = require("../common/taskStore") as typeof import("../common/taskStore");
 
@@ -314,7 +316,7 @@ async function main() {
       assert.equal(documentsResponse.status, 200);
       const next = buildPayments({ payment_deposit: { status: "verified" }, payment_balance: { status: "verified" } });
       const response = await fetch(baseUrl + "/leads/" + lead.id, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
+        method: "PATCH", headers: { "Content-Type": "application/json", ...internalIdentityHeaders() },
         body: JSON.stringify({
           payments: { version: 0, items: next.items.map(({ receivedAmount, verifiedAmount, ...row }: any) => row) },
           __paymentActor: { id: "test-operator", username: "test-operator", role: "operatore" }

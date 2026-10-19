@@ -2,7 +2,9 @@ import "../../loadEnv";
 import http from "http";
 import { getWorkflowView, isValidTransition } from "../common/workflow";
 
-const HOST = "0.0.0.0";
+// Internal service: reached only through the gateway in the same process. INTERNAL_SERVICE_HOST=127.0.0.1
+// keeps its port off the network (the gateway keeps listening on 0.0.0.0).
+const HOST = process.env.INTERNAL_SERVICE_HOST || "0.0.0.0";
 const PORT = Number(process.env.WORKFLOW_SERVICE_PORT || 4302);
 
 function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown) {

@@ -199,6 +199,7 @@ export function PratichePage() {
   const [newLeadModalOpen, setNewLeadModalOpen] = useState(false);
   const [newLeadSubmitting, setNewLeadSubmitting] = useState(false);
   const [newLeadError, setNewLeadError] = useState("");
+  const [newLeadDuplicate, setNewLeadDuplicate] = useState<{ id: string; fullName: string; status: string; matchedBy: string } | null>(null);
   const [newLeadDraft, setNewLeadDraft] = useState({ fullName: "", phone: "", email: "", notes: "" });
   const [callModalLead, setCallModalLead] = useState<Lead | null>(null);
   const [callSubmitting, setCallSubmitting] = useState(false);
@@ -421,6 +422,7 @@ export function PratichePage() {
   function openNewLeadModal() {
     setNewLeadDraft({ fullName: "", phone: "", email: "", notes: "" });
     setNewLeadError("");
+    setNewLeadDuplicate(null);
     setNewLeadModalOpen(true);
   }
 
@@ -428,6 +430,7 @@ export function PratichePage() {
     if (newLeadSubmitting) return;
     setNewLeadModalOpen(false);
     setNewLeadError("");
+    setNewLeadDuplicate(null);
   }
 
   async function submitNewLead() {
@@ -440,7 +443,7 @@ export function PratichePage() {
     setNewLeadSubmitting(true);
     setNewLeadError("");
     try {
-      const response = await api<{ id?: string; mode?: string; lead?: { id: string } }>("/api/leads", {
+      const response = await api<{ id?: string; mode?: string; matchedBy?: string; lead?: { id: string; fullName?: string; status?: string } }>("/api/leads", {
         method: "POST",
         body: JSON.stringify({
           fullName,
@@ -451,9 +454,16 @@ export function PratichePage() {
           actor: authUser?.name || authUser?.username || "operatore"
         })
       });
-      const newLeadId = response.mode ? response.lead?.id : response.id;
       invalidateTaskBoardCache();
       invalidateDashboardCache();
+      // A deduplicated contact is an existing record, not a new practice: say so instead of
+      // silently opening it (it may be in admin review and look like an unrequested advance).
+      if (response.mode === "deduplicated" && response.lead?.id) {
+        setNewLeadDuplicate({ id: response.lead.id, fullName: response.lead.fullName || "", status: response.lead.status || "", matchedBy: response.matchedBy || "" });
+        await loadPratiche();
+        return;
+      }
+      const newLeadId = response.id;
       setNewLeadModalOpen(false);
       if (newLeadId) {
         navigate(buildPracticeUrl(newLeadId, "overview"));
@@ -1338,14 +1348,37 @@ export function PratichePage() {
             </div>
 
             {newLeadError ? <p className="pr-error">{newLeadError}</p> : null}
+            {newLeadDuplicate ? (
+              <div className="pr-duplicate-notice" role="status">
+                <strong>Lead gia esistente con {newLeadDuplicate.matchedBy === "email" ? "questa email" : "questo telefono"}</strong>
+                <p>
+                  {newLeadDuplicate.fullName || "Cliente senza nome"}
+                  {newLeadDuplicate.status ? ` · ${newLeadDuplicate.status}` : ""}
+                </p>
+                <p>Non e stato creato un nuovo lead. Eventuali note e dati mancanti sono stati aggiunti a quello esistente; stato e avanzamento della pratica non sono cambiati.</p>
+              </div>
+            ) : null}
 
             <div className="pr-call-modal-actions">
-              <button type="button" className="secondary" disabled={newLeadSubmitting} onClick={closeNewLeadModal}>
-                Annulla
-              </button>
-              <button type="button" className="primary" disabled={newLeadSubmitting} onClick={() => void submitNewLead()}>
-                {newLeadSubmitting ? "Creazione..." : "Crea lead"}
-              </button>
+              {newLeadDuplicate ? (
+                <>
+                  <button type="button" className="secondary" onClick={closeNewLeadModal}>
+                    Chiudi
+                  </button>
+                  <button type="button" className="primary" onClick={() => { const id = newLeadDuplicate.id; closeNewLeadModal(); navigate(buildPracticeUrl(id, "overview")); }}>
+                    Apri lead esistente
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="secondary" disabled={newLeadSubmitting} onClick={closeNewLeadModal}>
+                    Annulla
+                  </button>
+                  <button type="button" className="primary" disabled={newLeadSubmitting} onClick={() => void submitNewLead()}>
+                    {newLeadSubmitting ? "Creazione..." : "Crea lead"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

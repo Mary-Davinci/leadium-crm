@@ -15,19 +15,25 @@ import {
   newId,
   normalizeEmail,
   normalizePhone,
+  listLeadsByContact,
   saveLead,
-  savePaymentPlan
+  savePaymentPlan,
+  setLeadPhoneIfUnchanged
 } from "../common/leadStore";
 import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listAllCallLogs, listCallLogs, listCallLogsByLeadId } from "../common/callStore";
 import { createTask, findRecentManualDuplicate, getTaskById, listTasks, listTasksByLeadAndKind, saveTask, TaskRecord } from "../common/taskStore";
-import { findOrCreateCustomerByContact } from "../common/customerStore";
+import { findOrCreateCustomerByContact, setCustomerPhoneIfUnchanged } from "../common/customerStore";
+import { isInternalIdentityRequest } from "../common/internalCapability";
+import { applyLeadPhoneCorrection, ContactCorrectionError, planLeadPhoneCorrection } from "../common/contactCorrection";
 import { createPurchase, listAllPurchases, PurchaseRecord } from "../common/purchaseStore";
 import { isActiveLeadInvariantSatisfied } from "../common/leadInvariants";
 import { resolveLeadAssociationForPhone, tryHandleCustomerRoutes } from "./customer-routes";
 import { rowsToCsv } from "../common/csv";
 import { BOOKING_ACTIVITY_HEADERS, BookingActivityFilters, buildBookingActivityCsvRows, buildBookingActivityRows, filterBookingActivityRows } from "./booking-report";
 
-const HOST = "0.0.0.0";
+// Internal service: reached only through the gateway in the same process. INTERNAL_SERVICE_HOST=127.0.0.1
+// keeps its port off the network (the gateway keeps listening on 0.0.0.0).
+const HOST = process.env.INTERNAL_SERVICE_HOST || "0.0.0.0";
 const PORT = Number(process.env.LEAD_SERVICE_PORT || 4301);
 const WORKFLOW_URL = process.env.WORKFLOW_SERVICE_URL || "http://localhost:4302";
 const WHATSAPP_URL = process.env.WHATSAPP_SERVICE_URL || "http://localhost:4306";
@@ -61,6 +67,8 @@ function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown
   res.end(JSON.stringify(payload));
 }
 
+const IDENTITY_FIELDS = ["__creator", "__contactActor", "__paymentActor"] as const;
+
 function parseBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -71,7 +79,13 @@ function parseBody(req: http.IncomingMessage): Promise<any> {
     req.on("end", () => {
       if (!data) return resolve({});
       try {
-        resolve(JSON.parse(data));
+        const parsed = JSON.parse(data);
+        // Identity fields are only trusted from the gateway (verified session); anyone else
+        // reaching this service directly is anonymous, whatever its body claims.
+        if (parsed && typeof parsed === "object" && !isInternalIdentityRequest(req.headers)) {
+          for (const key of IDENTITY_FIELDS) delete parsed[key];
+        }
+        resolve(parsed);
       } catch {
         reject(new Error("Invalid JSON body"));
       }
@@ -186,6 +200,52 @@ function isDisqualifiedStatus(status: string) {
 
 function requiresExplicitLossReason(status: string) {
   return status === LEAD_STATUSES.LOST;
+}
+
+/**
+ * Admin phone correction (actor injected by the gateway from the verified session, trusted only
+ * with the internal capability). Sent alone; planning and compensated writes live in
+ * common/contactCorrection. leadId, customerId, calls and WhatsApp threads keep their links.
+ */
+async function handleLeadPhoneCorrection(res: http.ServerResponse, lead: any, body: any) {
+  const actor = body.__contactActor;
+  if (!actor || !["admin", "super_admin"].includes(String(actor.role)) || !actor.id || !actor.username) {
+    return sendJson(res, 403, { error: "Solo admin e super admin possono modificare il telefono del lead." });
+  }
+  const allowed = new Set(["phone", "customerPhoneScope", "__contactActor", "actor"]);
+  if (Object.keys(body).some((key) => !allowed.has(key))) {
+    return sendJson(res, 400, { error: "Modifica il telefono separatamente dagli altri dati della pratica." });
+  }
+  const plan = await planLeadPhoneCorrection(lead, body.phone, body.customerPhoneScope);
+  if (plan.ok === false) return sendJson(res, plan.status, plan.body);
+  if (plan.noop) return sendJson(res, 200, safeLead(lead));
+  const customerNote = plan.updateCustomer ? " Aggiornata anche la scheda cliente." : plan.customer ? " Scheda cliente NON modificata (scelta admin): il riconoscimento WhatsApp in arrivo usa ancora il numero del cliente." : " Nessuna scheda cliente collegata.";
+  const activity = createActivity({
+    leadId: lead.id,
+    type: "lead_phone_changed",
+    text: `Telefono modificato da ${plan.previousPhone || "-"} a ${plan.phone}.${customerNote}`,
+    actor: String(actor.username),
+    meta: {
+      previousPhone: plan.previousPhone,
+      newPhone: plan.phone,
+      changedById: String(actor.id),
+      changedByRole: String(actor.role),
+      customerId: plan.customer?.id || null,
+      customerUpdated: plan.updateCustomer,
+      ...(plan.updateCustomer ? { previousCustomerPhone: plan.customer?.phone || "" } : {})
+    }
+  });
+  try {
+    await applyLeadPhoneCorrection(plan, lead.id, activity, {
+      setLeadPhone: setLeadPhoneIfUnchanged,
+      setCustomerPhone: setCustomerPhoneIfUnchanged,
+      appendActivity: (row) => appendActivities([row])
+    });
+  } catch (error) {
+    if (error instanceof ContactCorrectionError) return sendJson(res, error.status, { error: error.message, ...(error.incoherent ? { code: "incoherent_state" } : {}) });
+    throw error;
+  }
+  return sendJson(res, 200, safeLead(await getLeadById(lead.id)));
 }
 
 /**
@@ -1533,8 +1593,33 @@ export const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS); // validate before customer/lead mutations
       if (!body.fullName || !body.phone) return sendJson(res, 400, { error: "fullName e phone sono obbligatori." });
-      const existing = await findLeadByContact(String(body.phone || ""), String(body.email || ""));
+      // Same country-aware matching as the admin phone correction. Several open records for one
+      // contact (e.g. phone -> lead A, email -> lead B) are a conflict: never pick one arbitrarily.
+      const contactMatches = await listLeadsByContact(String(body.phone || ""), String(body.email || ""));
+      const openMatches = contactMatches.filter((row) => !isTerminalClosingOutcome(row.lead));
+      if (openMatches.length > 1) {
+        const split = openMatches.some((row) => row.byPhone) && openMatches.some((row) => row.byEmail) && !openMatches.some((row) => row.byPhone && row.byEmail);
+        return sendJson(res, 409, {
+          code: "contact_conflict",
+          error: split
+            ? "Telefono ed email corrispondono a due lead diversi. Nessun lead creato o modificato: verifica i contatti con un admin."
+            : "Questo contatto corrisponde a piu lead aperti. Nessun lead creato o modificato: verifica i duplicati con un admin."
+        });
+      }
+      const terminalMatches = contactMatches.map((row) => row.lead).sort((a: any, b: any) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+      const existing = openMatches[0]?.lead || terminalMatches[0] || null;
       if (existing && !isTerminalClosingOutcome(existing)) {
+        const matchedBy = openMatches[0].byPhone ? "phone" : "email";
+        // A practice in admin review/closed is admin-reserved: a non-admin creation must neither
+        // modify it nor receive its data. A creation without a verified creator is treated as non-admin (fail closed).
+        const creatorRole = body.__creator ? String(body.__creator.role || "") : "";
+        if (!["admin", "super_admin"].includes(creatorRole) && [LEAD_STATUSES.READY_TO_CLOSE, LEAD_STATUSES.CLOSED_FULL].includes(existing.status)) {
+          return sendJson(res, 409, {
+            error: `Esiste gia una pratica con ${matchedBy === "phone" ? "questo telefono" : "questa email"} ed e in supervisione admin. Nessun nuovo lead creato e nessuna modifica: contatta un admin.`,
+            code: "duplicate_admin_reserved",
+            matchedBy
+          });
+        }
         const now = new Date().toISOString();
         let changed = false;
         if (!isMissing(body.fullName) && isMissing(existing.fullName)) {
@@ -1587,7 +1672,7 @@ export const server = http.createServer(async (req, res) => {
             })
           ]);
         }
-        return sendJson(res, 200, { mode: "deduplicated", lead: safeLead(existing) });
+        return sendJson(res, 200, { mode: "deduplicated", matchedBy, lead: safeLead(existing) });
       }
       const now = new Date().toISOString();
       const assignedTo = body.assignedTo ? String(body.assignedTo).trim() : "";
@@ -1865,6 +1950,7 @@ export const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const lead = await getLeadById(leadByIdParams.leadId);
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+      if (Object.prototype.hasOwnProperty.call(body, "phone")) return await handleLeadPhoneCorrection(res, lead, body);
       if (Object.prototype.hasOwnProperty.call(body, "payments")) {
         const allowed = new Set(["payments", "actor", "paymentReason", "__paymentActor"]);
         if (Object.keys(body).some(key => !allowed.has(key))) throw new PaymentError(400, "Salva i pagamenti separatamente dagli altri dati della pratica.");

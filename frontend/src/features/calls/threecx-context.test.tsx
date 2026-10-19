@@ -23,7 +23,7 @@ describe("native 3CX call card", () => {
   });
   it("unknown caller and device without direct_control show the 3CX device instruction", () => {
     const html = render({ ...call, capabilities: { ...call.capabilities, answer: false } });
-    expect(html).toContain("Numero non associato"); expect(html).toContain("Rispondi dal dispositivo 3CX"); expect(html).not.toContain(">Rispondi</button>"); expect(html).not.toContain("Apri pratica");
+    expect(html).toContain("Numero non associato"); expect(html).toContain("Rispondi dal dispositivo 3CX"); expect(html).toMatch(/<button[^>]*is-accept[^>]*disabled=""/); expect(html).not.toContain("Apri pratica");
   });
   it("connected supports terminating and allowlisted transfer; hold is status only", () => {
     const html = render({ ...call, status: "connected", capabilities: { ...call.capabilities, answer: false, transfer: true } });

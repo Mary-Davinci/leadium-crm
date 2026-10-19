@@ -115,6 +115,7 @@ async function main() {
     const f = fixture({ enabled: false }); await f.start(); await wait(15); await f.monitor.stop(); assert.equal(f.requests.length, 0); assert.equal(f.sockets.length, 0);
     assert.deepEqual(f.monitor.diagnostics().observedDnTypes, {});
     assert.deepEqual(f.monitor.diagnostics().observedDevices, {}); assert.deepEqual(f.monitor.diagnostics().deviceCount, {});
+    assert.equal(f.monitor.devicesForDn("901"), null); assert.equal(f.monitor.devicesForDn("913"), null);
   });
   await test("missing/invalid env fails closed without any connections", async () => {
     for (const env of [{}, { THREECX_ENABLED: "true" }, { THREECX_ENABLED: "true", THREECX_BASE_URL: "http://pbx.test", THREECX_CLIENT_ID: "leadiumcrm", THREECX_API_KEY: SECRET }]) {
@@ -263,6 +264,10 @@ async function main() {
     await f.start();
     try {
       const before = f.requests.length, diagnostics = f.monitor.diagnostics();
+      assert.deepEqual(f.monitor.devicesForDn("901"), devices.map(row => row.device_id));
+      assert.deepEqual(f.monitor.devicesForDn("913"), []); assert.equal(f.monitor.devicesForDn("910"), null);
+      const controlIds = f.monitor.devicesForDn("901") as string[]; controlIds.push("client-mutation");
+      assert.deepEqual(f.monitor.devicesForDn("901"), devices.map(row => row.device_id));
       assert.deepEqual(diagnostics.deviceCount, { "901": size, "913": 0 });
       assert.equal(diagnostics.observedDevices["901"].length, size); assert.deepEqual(diagnostics.observedDevices["913"], []);
       assert.deepEqual(Object.keys(diagnostics.observedDevices).sort(), ["901", "913"]);
@@ -280,6 +285,23 @@ async function main() {
       assert.ok(f.requests.every(row => row.path === "/connect/token" || row.method === "GET"));
       const serialized = JSON.stringify(f.monitor.diagnostics());
       for (const forbidden of ["private-device", "queue-private", SECRET, TOKEN]) assert.ok(!serialized.includes(forbidden));
+    } finally { await f.monitor.stop(); }
+  });
+  await test("server-only device selection expires, refreshes, rejects malformed snapshots and is unavailable on socket close", async () => {
+    const devices: Record<string, unknown> = { "901": [{ dn: "901", device_id: "private-control-device", user_agent: "Fixture" }] };
+    const f = fixture({ reportedDevices: devices });
+    assert.equal(f.monitor.devicesForDn("901"), null);
+    try {
+      await f.start(); assert.deepEqual(f.monitor.devicesForDn("901"), ["private-control-device"]);
+      f.advance(30001); assert.equal(f.monitor.devicesForDn("901"), null, "expired snapshot must not select a device");
+      await until(() => f.monitor.devicesForDn("901") !== null, "device snapshot refreshed");
+      devices["901"] = [{ dn: "913", device_id: "other-dn-device" }]; f.advance(10001);
+      await until(() => f.monitor.devicesForDn("901") === null, "wrong-DN devices excluded");
+      devices["901"] = undefined; f.advance(10001);
+      await until(() => !f.monitor.diagnostics().observedDevices["901"], "missing devices unavailable");
+      assert.equal(f.monitor.devicesForDn("901"), null);
+      f.sockets[0].terminate(); assert.equal(f.monitor.devicesForDn("901"), null);
+      assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes("private-control-device"));
     } finally { await f.monitor.stop(); }
   });
   await test("device diagnostics: sensitive IDs and unsafe user agents are not exposed", async () => {
@@ -578,6 +600,43 @@ async function main() {
       f.sockets[0].emit("message", JSON.stringify({ sequence: 99, event: { event_type: 0, entity: "/callcontrol" } }));
       await until(() => Boolean(f.store.state.calls["999"]?.readyAt), "gap reconcile"); f.advance(4000);
       await until(() => Boolean(f.store.state.finals["999"]), "uncertain call checkpoint"); assert.equal(f.deliveries.length, 0);
+    } finally { await f.monitor.stop(); }
+  });
+  await test("device options: readable labels, same pseudonym as diagnostics, own DN only, unknown stays null", async () => {
+    const devices = [
+      { dn: "901", device_id: "raw-web", user_agent: "3CX Web Client 20.0.1" },
+      { dn: "901", device_id: "raw-android", user_agent: "3CXAndroid 20.1" },
+      { dn: "901", device_id: "raw-desk", user_agent: "Yealink SIP-T46U 66.86" },
+      { dn: "901", device_id: "raw-secret", user_agent: SECRET + " token=abc" }
+    ];
+    const f = fixture({ reportedDevices: { "901": devices, "913": [] } });
+    await f.start();
+    try {
+      const options = f.monitor.deviceOptionsForDn("901")!;
+      assert.deepEqual(options.map(row => row.label), ["Client web 3CX", "App 3CX Android", "Telefono fisso", "Dispositivo 3CX"]);
+      assert.deepEqual(options.map(row => row.device), f.monitor.diagnostics().observedDevices["901"].map((row: any) => row.deviceIdMasked));
+      assert.ok(!JSON.stringify(options).includes("raw-") && !JSON.stringify(options).includes(SECRET), "no raw ID or unsafe user agent");
+      assert.deepEqual(f.monitor.deviceOptionsForDn("913"), []);
+      assert.equal(f.monitor.deviceOptionsForDn("910"), null);
+    } finally { await f.monitor.stop(); }
+    assert.equal(f.monitor.deviceOptionsForDn("901"), null, "not ready / disconnected is unknown, not zero");
+  });
+  await test("outbound trace: MakeCall callback, external leg and end per callid, both agent DNs, other-DN legs marked", async () => {
+    const f = fixture({ reportedDnTypes: TENANT_DN_TYPES }); await f.start();
+    try {
+      await f.upsert("913", 7, 4242, "Ringing", { party_dn: "MakeCall", party_caller_id: "" });
+      assert.deepEqual(f.monitor.liveCalls().filter(row => row.callId === "4242"), [], "callback phase has no customer: not shown in the live card");
+      await f.upsert("913", 7, 4242, "Connected", { party_dn: "+393331234567" });
+      await f.upsert("901", 8, 4242, "Ringing");
+      await f.remove("913", 7);
+      const trace = f.monitor.callTrace("4242")!;
+      assert.equal(trace.dn, "913", "913 is traced too, not only 901");
+      assert.deepEqual(trace.steps, ["makecall_callback:Ringing", "external:Connected", "901/external:Ringing", "ended"]);
+      assert.ok(!JSON.stringify(trace).includes("3331234567"), "no phone number in the trace");
+      const seen = Date.parse(trace.firstSeenAt);
+      assert.equal(f.monitor.callTracesBetween("913", seen - 1000, seen + 1000).length, 1);
+      assert.equal(f.monitor.callTracesBetween("901", seen - 1000, seen + 1000).length, 0, "attributed to its initiating DN only");
+      assert.equal(f.monitor.callTrace("999999"), null);
     } finally { await f.monitor.stop(); }
   });
   console.log("All " + count + " Call Control monitoring checks passed.");

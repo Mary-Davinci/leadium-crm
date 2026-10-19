@@ -1,5 +1,6 @@
 import { getMongoDb, isMongoEnabled } from "./mongo";
 import { newId, readDb, writeDb } from "./jsonStore";
+import { phoneMatchKeys } from "./phoneIdentity";
 
 export function normalizePhone(phone: string) {
   return String(phone || "").replace(/\D+/g, "");
@@ -151,6 +152,48 @@ export async function findLeadByContact(phone: string, email: string) {
   if (!or.length) return null;
   const doc = await db.collection("leads").findOne({ $or: or });
   return fromLeadDoc(doc);
+}
+
+/** Compare-and-set of the phone only; false when the stored phone is no longer `expected`. */
+export async function setLeadPhoneIfUnchanged(leadId: string, expected: string, phone: string, at: string) {
+  if (!isMongoEnabled()) {
+    const db = readDb();
+    const lead = db.leads.find((item: any) => item.id === leadId);
+    if (!lead || String(lead.phone || "") !== expected) return false;
+    lead.phone = phone; lead.updatedAt = at;
+    writeDb(db);
+    return true;
+  }
+  const database = await getMongoDb();
+  const result = await database.collection("leads").updateOne(
+    { _id: leadId, ...(expected ? { phone: expected } : { phone: { $in: ["", null] } }) },
+    { $set: { phone, phoneNormalized: normalizePhone(phone), updatedAt: at } }
+  );
+  return result.matchedCount === 1;
+}
+
+/**
+ * Every lead matching the phone (country-aware keys, see phoneIdentity) or the exact email,
+ * tagged with what matched. Callers decide on ambiguity; nothing is picked arbitrarily here.
+ */
+export async function listLeadsByContact(phone: string, email: string, limit = 50): Promise<Array<{ lead: any; byPhone: boolean; byEmail: boolean }>> {
+  const keys = phoneMatchKeys(phone);
+  const nEmail = normalizeEmail(email);
+  if (!keys.length && !nEmail) return [];
+  const tag = (lead: any) => ({
+    lead,
+    byPhone: keys.includes(normalizePhone(lead.phone)),
+    byEmail: Boolean(nEmail) && normalizeEmail(lead.email) === nEmail
+  });
+  if (!isMongoEnabled()) {
+    return readDb().leads.map(tag).filter((row: any) => row.byPhone || row.byEmail).slice(0, limit);
+  }
+  const db = await getMongoDb();
+  const or: any[] = [];
+  if (keys.length) or.push({ phoneNormalized: { $in: keys } });
+  if (nEmail) or.push({ emailNormalized: nEmail });
+  const docs = await db.collection("leads").find({ $or: or }).limit(limit).toArray();
+  return docs.map(fromLeadDoc).map(tag);
 }
 
 export async function findLeadByExternalOrPhone(externalId: string | null, incomingNumber: string) {

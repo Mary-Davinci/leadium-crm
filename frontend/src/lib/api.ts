@@ -1,6 +1,11 @@
 import { clearSession, getAuthToken } from "./auth";
 import { apiUrl } from "./api-url";
 
+/** Same message as before; also keeps the HTTP status and JSON body (e.g. a conflict `code`). */
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public payload: any) { super(message); }
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getAuthToken();
   const baseHeaders: Record<string, string> = { "Content-Type": "application/json" };
@@ -25,7 +30,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
   if (!response.ok) {
     if (response.status === 401) clearSession();
-    throw new Error(typeof payload === "string" ? payload : payload.error || "Errore API");
+    throw new ApiError(typeof payload === "string" ? payload : payload.error || "Errore API", response.status, payload);
   }
   return payload as T;
 }

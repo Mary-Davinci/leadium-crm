@@ -23,7 +23,7 @@ export async function lookupThreeCxCaller(_externalId: string | null, phone: str
 }
 
 export function isThreeCxV2Path(path: string) {
-  return ["/api/3cx/call", "/api/3cx/session", "/api/3cx/events"].includes(path) || /^\/api\/3cx\/calls\/[^/]+\/(answer|hangup|hold|resume|transfer)$/.test(path);
+  return ["/api/3cx/call", "/api/3cx/session", "/api/3cx/events", "/api/3cx/devices"].includes(path) || /^\/api\/3cx\/calls\/[^/]+\/(answer|hangup|hold|resume|transfer)$/.test(path);
 }
 type Deps = {
   base: string;
@@ -44,21 +44,39 @@ export async function handleThreeCxV2(req: http.IncomingMessage, res: http.Serve
   res.once("close", onClientClose);
   if (res.destroyed) clientAbort.abort();
   try {
-    if (["/api/3cx/session", "/api/3cx/events"].includes(pathname) && req.method !== "GET") { json(res, 405, { error: "Metodo non consentito." }); return; }
+    if (["/api/3cx/session", "/api/3cx/events", "/api/3cx/devices"].includes(pathname) && req.method !== "GET") { json(res, 405, { error: "Metodo non consentito." }); return; }
     const dn = await resolveDn(user);
     if (clientAbort.signal.aborted) return;
     if (!dn) { json(res, pathname.endsWith("/session") ? 200 : 403, pathname.endsWith("/session") ? { threeCxDn: "", available: false } : { error: "Interno 3CX non configurato" }); return; }
-    const internal = async (path: string, input?: unknown, signal?: AbortSignal) => {
+    // Commands wait longer than the controller's worst case (OAuth 10s + PBX 10s): giving up
+    // earlier would report an unknown outcome while the PBX may still place the call, inviting a
+    // manual retry that dials twice.
+    const internal = async (path: string, input?: unknown, signal?: AbortSignal, timeoutMs = 12000) => {
       const response = await httpFetch(deps.base + path, { method: input === undefined ? "GET" : "POST", redirect: "error",
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(12000)]) : AbortSignal.timeout(12000),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         headers: { ...callControlInternalHeaders(), "Content-Type": "application/json" }, ...(input === undefined ? {} : { body: JSON.stringify(input) }) });
       if (!response.ok) {
         // Internal routes return fixed, sanitized messages; never forward an arbitrary upstream body.
         const messages: Record<number, string> = { 400: "Parametri chiamata non validi.", 403: "Chiamata non disponibile per il tuo interno.", 409: "Azione non disponibile per questa chiamata o dispositivo.", 422: "Azione non supportata dall’API 3CX documentata.", 429: "Attendi prima di inviare un altro comando 3CX." };
+        if (response.status === 409) {
+          // Exact local allowlist only: never forward arbitrary internal/provider text.
+          const safeDeviceMessages = new Set(["Nessun dispositivo 3CX registrato per questo interno.", "Più dispositivi 3CX disponibili. Selezione dispositivo necessaria.", "Il dispositivo scelto non e piu collegato al tuo interno. Scegli di nuovo.", "Stato chiamata aggiornato. Riprova."]);
+          try { const payload = await response.json() as any; if (safeDeviceMessages.has(payload?.error)) throw new CallControlError(409, payload.error); }
+          catch (error) { if (error instanceof CallControlError) throw error; }
+        }
         throw new CallControlError(messages[response.status] ? response.status : 503, messages[response.status] || "3CX momentaneamente non disponibile");
       }
       return response.json() as Promise<any>;
     };
+    if (pathname === "/api/3cx/devices") {
+      // Devices of the caller's own persisted DN only; null = not known yet (monitor not ready).
+      const state = await internal("/3cx/devices?dn=" + dn);
+      const devices = Array.isArray(state.devices) ? state.devices
+        .filter((row: any) => row && typeof row.device === "string" && /^device-[a-f0-9]{12}$/.test(row.device))
+        .map((row: any) => ({ device: row.device, label: String(row.label || "Dispositivo 3CX").slice(0, 40), userAgent: String(row.userAgent || "").slice(0, 160) })) : null;
+      json(res, 200, { threeCxDn: dn, available: state.available === true, devices });
+      return;
+    }
     if (pathname === "/api/3cx/session" && req.method === "GET") {
       try { const state = await internal("/3cx/live?dn=" + dn); json(res, 200, { threeCxDn: dn, available: state.available === true }); }
       catch { json(res, 200, { threeCxDn: dn, available: false }); }
@@ -111,8 +129,8 @@ export async function handleThreeCxV2(req: http.IncomingMessage, res: http.Serve
     try { body = text ? JSON.parse(text) : {}; } catch { throw new CallControlError(400, "JSON non valido."); }
     if (!body || Array.isArray(body) || typeof body !== "object") throw new CallControlError(400, "Parametri chiamata non validi.");
     const match = pathname.match(/^\/api\/3cx\/calls\/(\d+)\/(answer|hangup|hold|resume|transfer)$/);
-    const result = await internal("/3cx/control", { actor: { userId: user.id, threeCxDn: dn }, action: pathname === "/api/3cx/call" ? "call" : match?.[2], callId: match?.[1], input: body });
-    json(res, 200, { accepted: result.accepted === true, ...(typeof result.callId === "string" && /^\d+$/.test(result.callId) ? { callId: result.callId } : {}) });
+    const result = await internal("/3cx/control", { actor: { userId: user.id, threeCxDn: dn }, action: pathname === "/api/3cx/call" ? "call" : match?.[2], callId: match?.[1], input: body }, undefined, 25000);
+    json(res, 200, { accepted: result.accepted === true, ...(typeof result.callId === "string" && /^\d+$/.test(result.callId) ? { callId: result.callId } : {}), ...(result.alreadyEnded === true ? { alreadyEnded: true } : {}), ...(typeof result.attemptId === "string" && /^[a-f0-9]{8}$/.test(result.attemptId) ? { attemptId: result.attemptId } : {}) });
   } catch (error) {
     if (res.headersSent) { res.end(); return; }
     json(res, error instanceof CallControlError ? error.status : 503, { error: error instanceof CallControlError ? error.message : "3CX momentaneamente non disponibile" });

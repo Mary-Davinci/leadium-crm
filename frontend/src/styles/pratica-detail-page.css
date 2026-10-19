@@ -130,6 +130,63 @@
   font-size: 18px;
 }
 
+.pd-inline-edit {
+  margin-left: 10px;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.pd-inline-edit:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.pd-inline-edit:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.pd-phone-choice {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--status-contact-border, #f0d39a);
+  border-radius: 8px;
+  background: var(--status-contact-bg, #fff1d8);
+  color: var(--status-contact-text, #87652b);
+  font-size: 13px;
+}
+
+.pd-phone-notice {
+  max-width: 560px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--status-contact-border, #f0d39a);
+  border-radius: 8px;
+  background: var(--status-contact-bg, #fff1d8);
+  color: var(--status-contact-text, #87652b);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pd-phone-choice p {
+  margin: 0;
+}
+
+.pd-inline-error {
+  margin: 0;
+  color: var(--brand-coral-600, #a3083a);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .pd-sub-secondary {
   margin-top: 6px;
   font-size: 17px;
