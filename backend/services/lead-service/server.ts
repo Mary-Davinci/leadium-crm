@@ -929,6 +929,9 @@ function getLeadContactKey(lead: any) {
 
 function getLeadRank(lead: any) {
   let score = 0;
+  // One row per contact: an open opportunity must win over a finished one (closed sale, lost),
+  // otherwise a new lead for a returning customer is hidden behind the old practice.
+  if (!isTerminalClosingOutcome(lead)) score += 100;
   if (lead?.status && !String(lead.status).toLowerCase().includes("pers")) score += 20;
   if (lead?.nextActionAt) score += 8;
   if (lead?.assignedTo) score += 4;
@@ -1675,7 +1678,11 @@ export const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { mode: "deduplicated", matchedBy, lead: safeLead(existing) });
       }
       const now = new Date().toISOString();
-      const assignedTo = body.assignedTo ? String(body.assignedTo).trim() : "";
+      // An operator's list shows only leads assigned to them: a lead an operator creates without
+      // an explicit assignee is theirs to work (verified creator only), otherwise it would exist
+      // but never appear in their Pratiche. Admin-created leads stay unassigned as before.
+      const creatorUsername = body.__creator && !["admin", "super_admin"].includes(String(body.__creator.role || "")) ? String(body.__creator.username || "").trim() : "";
+      const assignedTo = body.assignedTo ? String(body.assignedTo).trim() : creatorUsername;
       const sourceFields = extractLeadSourceFields(body, body.source ? String(body.source) : "");
       const contactCustomer = await findOrCreateCustomerByContact({
         phone: body.phone,

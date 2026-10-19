@@ -301,6 +301,29 @@ async function main() {
     });
   });
 
+  await runCase("operatore: il lead creato e suo, compare nel suo elenco e si apre; admin e assegnatario esplicito invariati", async () => {
+    await withServers(async (leadUrl, gatewayUrl, gateway) => {
+      const operator = makeSession(gateway, "operatore");
+      const created = await apiRequest(gatewayUrl, "POST", "/api/leads", { token: operator, body: { fullName: "Lead Operatore", phone: "+39 333 5550101", assignedTo: "" } });
+      assert.equal(created.status, 201);
+      const lead = created.body as any;
+      assert.equal(lead.assignedTo, "operatore_user", "assegnato al creatore verificato (dalla sessione)");
+      const listed = await apiRequest(gatewayUrl, "GET", "/api/leads?view=summary", { token: operator });
+      const row = (listed.body as any[]).find((item) => item.id === lead.id);
+      assert.ok(row, "il lead e restituito all'operatore dall'API elenco");
+      assert.equal(row.assignedTo, "operatore_user", "e passa il filtro 'assegnate a me' della pagina Pratiche");
+      const opened = await apiRequest(gatewayUrl, "GET", `/api/leads/${lead.id}`, { token: operator });
+      assert.equal(opened.status, 200, "e si apre");
+      const forged = await apiRequest(gatewayUrl, "POST", "/api/leads", { token: operator, body: { fullName: "Lead Forgiato", phone: "+39 333 5550104", __creator: { role: "operatore", username: "altro_utente" } } });
+      assert.equal((forged.body as any).assignedTo, "operatore_user", "l'autore arriva dalla sessione, non dal body");
+      const admin = makeSession(gateway, "admin");
+      const byAdmin = await apiRequest(gatewayUrl, "POST", "/api/leads", { token: admin, body: { fullName: "Lead Admin", phone: "+39 333 5550102" } });
+      assert.equal((byAdmin.body as any).assignedTo, "", "un lead creato da admin resta da assegnare come prima");
+      const explicit = await apiRequest(gatewayUrl, "POST", "/api/leads", { token: operator, body: { fullName: "Lead Collega", phone: "+39 333 5550103", assignedTo: "collega" } });
+      assert.equal((explicit.body as any).assignedTo, "collega", "un assegnatario esplicito non viene sovrascritto");
+    });
+  });
+
   await runCase("la deduplica non espone ne modifica una pratica in supervisione admin per un operatore", async () => {
     await withServers(async (leadUrl, gatewayUrl, gateway) => {
       const lead = await seedLeadWithStatus("Pronta per chiusura");

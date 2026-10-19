@@ -228,6 +228,15 @@ async function main() {
     assert.equal(split.body.code, "contact_conflict");
     assert.equal((await leadStore.listLeads()).length, count, "no record chosen, created or modified");
 
+    // Returning customer: old sale closed 100% (assigned, with notes), new opportunity created.
+    const closedSale = await seedLead({ phone: "+39 335 6000001", fullName: "Vendita chiusa", status: "Chiusa 100%", closingOutcome: "won", assignedTo: "operatore.test", notes: "storico" });
+    const reopened = await request(baseUrl, "POST", "/leads", { fullName: "Nuova richiesta", phone: "+39 335 6000001", __creator: OPERATOR });
+    assert.equal(reopened.status, 201, "a closed sale does not absorb a new opportunity");
+    const listed = (await request(baseUrl, "GET", "/leads?view=summary")).body as any[];
+    assert.ok(listed.some((row) => row.id === reopened.body.id), "the open opportunity is the row listed for this contact");
+    assert.ok(!listed.some((row) => row.id === closedSale.id), "one row per contact (existing compaction kept)");
+    console.log("PASS list compaction: an open opportunity is never hidden behind a closed practice of the same contact");
+
     await seedLead({ phone: "+44 7911 123456", fullName: "UK" });
     const foreign = await request(baseUrl, "POST", "/leads", { fullName: "Nazionale", phone: "07911 123456", __creator: ADMIN });
     assert.equal(foreign.status, 201, "a national number is not assumed to be the +44 one");

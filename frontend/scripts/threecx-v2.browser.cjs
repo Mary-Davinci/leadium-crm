@@ -176,6 +176,28 @@ async function geometry(page) {
       assert.deepEqual(errors,[]);await page.close();
       console.log('PASS shared customer: explicit choice shown with impact, lead-only correction applied and flagged as partial for WhatsApp');
     }
+    {
+      // Operator: create -> practice opens -> back to Pratiche (fresh list, own scope) -> visible.
+      const page=await browser.newPage({viewport:{width:1100,height:900}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+      await page.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-mapped');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.mapped);
+      await page.goto(fixture.frontUrl+'/pratiche');await page.getByRole('button',{name:'+ Nuovo lead'}).click();
+      await page.getByPlaceholder('Nome e cognome del cliente').fill('Lead Operatore UAT');await page.getByPlaceholder('+39 ...').fill('+39 333 4440099');
+      await page.getByRole('button',{name:'Crea lead',exact:true}).click();
+      await page.waitForURL(url=>String(url).includes('/pratiche/lead_'));await page.getByRole('heading',{name:'Lead Operatore UAT'}).waitFor();
+      await page.getByRole('link',{name:'Torna a pratiche'}).click();await page.waitForURL('**/pratiche');
+      await page.getByText('Lead Operatore UAT').first().waitFor({timeout:10000});
+      await page.getByRole('button',{name:'+ Nuovo lead'}).click();
+      await page.getByPlaceholder('Nome e cognome del cliente').fill('Altro nome');await page.getByPlaceholder('+39 ...').fill('+39 333 4440099');
+      await page.getByRole('button',{name:'Crea lead',exact:true}).click();await page.getByText('E gia tra le tue pratiche.').waitFor();
+      await page.getByRole('button',{name:'Chiudi',exact:true}).click();
+      await page.getByRole('button',{name:'+ Nuovo lead'}).click();
+      await page.getByPlaceholder('Nome e cognome del cliente').fill('Nome diverso');await page.getByPlaceholder('+39 ...').fill('+39 333 7777778');
+      await page.getByRole('button',{name:'Crea lead',exact:true}).click();
+      await page.getByText(/Non e assegnato a nessuno: non compare tra le tue pratiche/).waitFor();
+      await page.screenshot({path:path.join(os.tmpdir(),'leadium-operator-duplicate-1100.png')});
+      assert.deepEqual(errors,[]);await page.close();
+      console.log('PASS operator: created lead is assigned, listed in Pratiche after creation and opens; duplicate notice explains own/unassigned');
+    }
   } finally {
     if(browser)await browser.close();
     if(child.exitCode===null&&child.signalCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await exited;}

@@ -19,6 +19,7 @@ import {
   getWorkflowCache as getGlobalWorkflowCache,
   invalidateDashboardCache,
   invalidateLeadDetailCache,
+  invalidatePracticeListCaches,
   invalidateTaskBoardCache,
   isLeadDetailCacheFresh,
   isTaskBoardCacheFresh,
@@ -199,7 +200,7 @@ export function PratichePage() {
   const [newLeadModalOpen, setNewLeadModalOpen] = useState(false);
   const [newLeadSubmitting, setNewLeadSubmitting] = useState(false);
   const [newLeadError, setNewLeadError] = useState("");
-  const [newLeadDuplicate, setNewLeadDuplicate] = useState<{ id: string; fullName: string; status: string; matchedBy: string } | null>(null);
+  const [newLeadDuplicate, setNewLeadDuplicate] = useState<{ id: string; fullName: string; status: string; matchedBy: string; assignedTo: string } | null>(null);
   const [newLeadDraft, setNewLeadDraft] = useState({ fullName: "", phone: "", email: "", notes: "" });
   const [callModalLead, setCallModalLead] = useState<Lead | null>(null);
   const [callSubmitting, setCallSubmitting] = useState(false);
@@ -443,7 +444,7 @@ export function PratichePage() {
     setNewLeadSubmitting(true);
     setNewLeadError("");
     try {
-      const response = await api<{ id?: string; mode?: string; matchedBy?: string; lead?: { id: string; fullName?: string; status?: string } }>("/api/leads", {
+      const response = await api<{ id?: string; mode?: string; matchedBy?: string; lead?: { id: string; fullName?: string; status?: string; assignedTo?: string } }>("/api/leads", {
         method: "POST",
         body: JSON.stringify({
           fullName,
@@ -456,10 +457,12 @@ export function PratichePage() {
       });
       invalidateTaskBoardCache();
       invalidateDashboardCache();
+      // The list cache (2 min) would otherwise hide the new or touched lead when coming back here.
+      invalidatePracticeListCaches();
       // A deduplicated contact is an existing record, not a new practice: say so instead of
       // silently opening it (it may be in admin review and look like an unrequested advance).
       if (response.mode === "deduplicated" && response.lead?.id) {
-        setNewLeadDuplicate({ id: response.lead.id, fullName: response.lead.fullName || "", status: response.lead.status || "", matchedBy: response.matchedBy || "" });
+        setNewLeadDuplicate({ id: response.lead.id, fullName: response.lead.fullName || "", status: response.lead.status || "", matchedBy: response.matchedBy || "", assignedTo: String(response.lead.assignedTo || "") });
         await loadPratiche();
         return;
       }
@@ -1356,6 +1359,15 @@ export function PratichePage() {
                   {newLeadDuplicate.status ? ` · ${newLeadDuplicate.status}` : ""}
                 </p>
                 <p>Non e stato creato un nuovo lead. Eventuali note e dati mancanti sono stati aggiunti a quello esistente; stato e avanzamento della pratica non sono cambiati.</p>
+                {!isAdmin ? (
+                  <p>
+                    {isLeadAssignedToCurrentUser({ assignedTo: newLeadDuplicate.assignedTo } as Lead)
+                      ? "E gia tra le tue pratiche."
+                      : newLeadDuplicate.assignedTo
+                        ? `E assegnato a ${newLeadDuplicate.assignedTo}: non compare tra le tue pratiche.`
+                        : "Non e assegnato a nessuno: non compare tra le tue pratiche finche un admin non lo assegna."}
+                  </p>
+                ) : null}
               </div>
             ) : null}
 
