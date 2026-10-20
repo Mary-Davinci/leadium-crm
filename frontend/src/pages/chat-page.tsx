@@ -1059,7 +1059,7 @@ export function ChatPage() {
   const threeCx = useThreeCx();
   async function callCustomer() {
     const phone = String(currentLead?.phone || selectedConversation?.phone || "").trim();
-    await threeCx.dial(phone);
+    await threeCx.dial(phone, { leadId: currentLead?.id, customerName: currentLead?.fullName || selectedConversation?.customerName });
   }
 
   // Quick actions from the practice panel prefill the composer with the matching template.

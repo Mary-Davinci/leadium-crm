@@ -633,7 +633,7 @@ export function PratichePage() {
 
   const threeCx = useThreeCx();
   async function handleStartCall(lead: Lead) {
-    if (await threeCx.dial(lead.phone || "")) {
+    if (await threeCx.dial(lead.phone || "", { leadId: lead.id, customerName: lead.fullName })) {
       createPending3CXCall(lead);
     }
   }

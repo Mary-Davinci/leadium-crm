@@ -625,13 +625,24 @@ async function main() {
     const f = fixture({ reportedDnTypes: TENANT_DN_TYPES }); await f.start();
     try {
       await f.upsert("913", 7, 4242, "Ringing", { party_dn: "MakeCall", party_caller_id: "" });
-      assert.deepEqual(f.monitor.liveCalls().filter(row => row.callId === "4242"), [], "callback phase has no customer: not shown in the live card");
+      let live = f.monitor.liveCalls().find(row => row.callId === "4242")!;
+      assert.equal(live.phase, "callback_ringing", "the operator's own device is ringing: observed callback phase");
+      assert.equal(live.customerPhone, "", "no customer is invented during the callback");
+      assert.equal(live.connectedAt, undefined);
+      await f.upsert("913", 7, 4242, "Connected", { party_dn: "MakeCall", party_caller_id: "" });
+      assert.equal(f.monitor.liveCalls().find(row => row.callId === "4242")!.phase, "callback_answered");
+      assert.equal(f.monitor.liveCalls().find(row => row.callId === "4242")!.connectedAt, undefined, "answering the callback is not a customer conversation");
+      await f.upsert("913", 7, 4242, "Dialing", { party_dn: "+393331234567" });
+      assert.equal(f.monitor.liveCalls().find(row => row.callId === "4242")!.phase, "dialing_customer");
       await f.upsert("913", 7, 4242, "Connected", { party_dn: "+393331234567" });
+      live = f.monitor.liveCalls().find(row => row.callId === "4242")!;
+      assert.equal(live.phase, "connected");
+      assert.ok(live.connectedAt, "conversation start is the first observed connection with the external party");
       await f.upsert("901", 8, 4242, "Ringing");
       await f.remove("913", 7);
       const trace = f.monitor.callTrace("4242")!;
       assert.equal(trace.dn, "913", "913 is traced too, not only 901");
-      assert.deepEqual(trace.steps, ["makecall_callback:Ringing", "external:Connected", "901/external:Ringing", "ended"]);
+      assert.deepEqual(trace.steps, ["makecall_callback:Ringing", "makecall_callback:Connected", "external:Dialing", "external:Connected", "901/external:Ringing", "ended"]);
       assert.ok(!JSON.stringify(trace).includes("3331234567"), "no phone number in the trace");
       const seen = Date.parse(trace.firstSeenAt);
       assert.equal(f.monitor.callTracesBetween("913", seen - 1000, seen + 1000).length, 1);

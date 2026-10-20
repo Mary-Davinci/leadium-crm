@@ -12,6 +12,7 @@ async function main() {
     { callId: "456", agentDn: "913", customerPhone: "+393337654321", direction: "inbound", status: "connected", startedAt: new Date().toISOString(), participantId: 2, directControl: true }
   ];
   const pbxWrites: string[] = [];
+  let lastMakecall: any = null;
   const observedDevices: Record<string, string[]> = { '901': ['private-device-901'], '913': ['private-device-913'] };
   const config = monitorConfig({ THREECX_ENABLED: "true", THREECX_BASE_URL: "https://pbx.invalid", THREECX_CLIENT_ID: "fixture", THREECX_API_KEY: "synthetic-only" });
   const pbx = (async (url: any, init: any) => {
@@ -23,6 +24,7 @@ async function main() {
       const row = rows.find(row => row.agentDn === dn && row.participantId === Number(parts[parts.length - 1]));
       return row ? Response.json({ id: row.participantId, dn, callid: Number(row.callId), status: 'Ringing', direct_control: true }) : new Response('', { status: 404 });
     }
+    if (String(url).endsWith("/makecall")) lastMakecall = JSON.parse(init.body);
     pbxWrites.push(new URL(url).pathname); return Response.json({ finalstatus: "Success", result: { callid: 789 }, secret: "must-not-reach-ui" });
   }) as typeof fetch;
   const pseudonym = (id: string) => "device-" + require("node:crypto").createHash("sha256").update(id).digest("hex").slice(0, 12);
@@ -44,7 +46,16 @@ async function main() {
   });
   process.env.CALL_SERVICE_URL = await listen(internal);
   const auth = require("./auth-store"), leads = require("../common/leadStore");
-  const originalDn = auth.getUserThreeCxDn, originalLookup = leads.listLeads;
+  const chats = require("../common/chatStore");
+  const originalDn = auth.getUserThreeCxDn, originalLookup = leads.listLeads, originalGetLead = leads.getLeadById, originalConversation = chats.findConversationByPhone;
+  const fixtureLeads: Record<string, any> = {
+    "lead-wa": { id: "lead-wa", phone: "393331112222", source: "whatsapp_chat", status: "Da contattare" },
+    "lead-plain": { id: "lead-plain", phone: "393331112222", source: "manuale", status: "Da contattare" },
+    "lead-uk": { id: "lead-uk", phone: "+44 7911 123456", source: "manuale", status: "Da contattare" },
+    "lead-reserved": { id: "lead-reserved", phone: "+39 333 0000000", source: "manuale", status: "Pronta per chiusura" }
+  };
+  leads.getLeadById = async (id: string) => fixtureLeads[id] ? { ...fixtureLeads[id] } : null;
+  chats.findConversationByPhone = async (phone: string) => String(phone).replace(/\D/g, "") === "393334445555" ? { id: "conv", phone: "393334445555" } : null;
   let revoked = false;
   auth.getUserThreeCxDn = async (user: any) => revoked ? "" : user.id === "a" ? "901" : user.id === "b" ? "913" : "";
   leads.listLeads = async () => [{ id: "lead-901", fullName: "Cliente fixture", phone: "+393331234567" }];
@@ -94,6 +105,29 @@ async function main() {
     assert.equal(stale.status, 409); assert.equal((await stale.json()).error, 'Il dispositivo scelto non e piu collegato al tuo interno. Scegli di nuovo.');
     observedDevices['901'] = ['private-device-901'];
     console.log('PASS V2 gateway device selection: client IDs rejected, zero/multiple errors preserved, own-DN device list, explicit pseudonym honoured, stale/foreign refused');
+    // Dialing format at the telephony boundary: stored numbers untouched, only certain Italian forms become national.
+    const dialCases: Array<[any, string, string, string]> = [
+      [{ leadId: "lead-wa" }, "3331112222", "it_whatsapp", "WhatsApp lead (wa_id 39…)"],
+      [{ leadId: "lead-plain" }, "393331112222", "unchanged", "same digits without WhatsApp evidence"],
+      [{ phone: "393334445555" }, "3334445555", "it_whatsapp", "number of an existing WhatsApp conversation"],
+      [{ phone: "+39 333 6667777" }, "3336667777", "it_plus", "+39"],
+      [{ phone: "0039 333 6667778" }, "3336667778", "it_00", "0039"],
+      [{ phone: "333 6667779" }, "333 6667779", "unchanged", "national"],
+      [{ leadId: "lead-uk" }, "+44 7911 123456", "unchanged", "foreign"]
+    ];
+    for (const [input, destination, rule, why] of dialCases) {
+      (controller as any).rates.clear(); (controller as any).recent.clear(); // test-only: the per-DN rate limit is covered elsewhere
+      const response = await post("/api/3cx/call", "operator-a", input);
+      assert.equal(response.status, 200, why);
+      const result = await response.json() as any;
+      assert.deepEqual({ destination: result.destination, rule: result.dialRule }, { destination, rule }, why);
+      assert.equal(lastMakecall.destination, destination.replace(/[ ()-]/g, ""), why + ": sent to 3CX");
+    }
+    assert.equal(fixtureLeads["lead-wa"].phone, "393331112222", "the stored number is never rewritten");
+    assert.equal((await post("/api/3cx/call", "operator-a", { leadId: "lead-reserved" })).status, 403, "reserved practice not dialable by operators");
+    assert.equal((await post("/api/3cx/call", "operator-a", { leadId: "lead-missing" })).status, 404);
+    assert.equal((await post("/api/3cx/call", "operator-a", { leadId: "../x" })).status, 400);
+    console.log("PASS V2 dial composition: +39/0039/WhatsApp identity -> national, national/ambiguous/foreign unchanged, stored number untouched");
     const session = await fetch(base + "/api/3cx/session", { headers: { Authorization: "Bearer operator-a" } });
     assert.deepEqual(await session.json(), { threeCxDn: "901", available: true });
     const streamAbort = new AbortController();
@@ -114,14 +148,14 @@ async function main() {
     const unknownChunk = await unknown.body!.getReader().read(); const unknownCall = JSON.parse(decoder.decode(unknownChunk.value).split("data: ")[1].split("\n")[0]).calls[0];
     assert.equal(unknownCall.customerName, undefined); assert.equal(unknownCall.customerPhone, "+393337654321"); unknownAbort.abort();
     console.log("PASS V2 SSE: Bearer auth, own-DN isolation despite spoofed query, customer/practice matching, unknown caller, end removes call, sanitized projection");
-    const accepted = await post("/api/3cx/call", "operator-a", { phone: "+393331234567" }); assert.equal(accepted.status, 200); const acceptedBody = await accepted.json() as any; assert.match(acceptedBody.attemptId, /^[a-f0-9]{8}$/); assert.deepEqual(acceptedBody, { accepted: true, callId: "789", attemptId: acceptedBody.attemptId });
+    const accepted = await post("/api/3cx/call", "operator-a", { phone: "+393331234567" }); assert.equal(accepted.status, 200); const acceptedBody = await accepted.json() as any; assert.match(acceptedBody.attemptId, /^[a-f0-9]{8}$/); assert.deepEqual(acceptedBody, { accepted: true, destination: "3331234567", dialRule: "it_plus", callId: "789", attemptId: acceptedBody.attemptId });
     assert.equal(pbxWrites[pbxWrites.length - 1], '/callcontrol/901/devices/private-device-901/makecall');
     const ended = await post('/api/3cx/calls/789/hangup', 'operator-a'); assert.equal(ended.status, 200);
     assert.deepEqual(await ended.json(), { accepted: true, alreadyEnded: true });
     revoked = true; assert.equal((await post("/api/3cx/call", "operator-a", { phone: "+393331234567" })).status, 403);
     console.log("PASS V2 fresh persisted mapping: revocation takes effect without relogin; makecall output sanitized");
   } finally {
-    auth.getUserThreeCxDn = originalDn; leads.listLeads = originalLookup;
+    auth.getUserThreeCxDn = originalDn; leads.listLeads = originalLookup; leads.getLeadById = originalGetLead; chats.findConversationByPhone = originalConversation;
     gateway.server.closeAllConnections(); internal.closeAllConnections();
     await Promise.all([new Promise<void>(resolve => gateway.server.close(() => resolve())), new Promise<void>(resolve => internal.close(() => resolve()))]);
   }

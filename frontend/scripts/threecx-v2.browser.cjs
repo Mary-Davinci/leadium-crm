@@ -19,6 +19,12 @@ const customers=require(root+'/backend/dist/services/common/customerStore.js');c
 for(const [id,extra] of [['shared-a',{status:'In contatto'}],['shared-b',{status:'Perso',closingOutcome:'lost'}]])await store.createLead({id,fullName:'Cliente Condiviso',phone:'+393401112233',customerId:shared.id,createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:[]},...extra});
 const leads=require(root+'/backend/dist/services/lead-service/server.js');process.env.LEAD_SERVICE_URL=await listen(leads.server);
 const mock=http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');res.end('{}')});process.env.WHATSAPP_SERVICE_URL=await listen(mock);
+// Self-contained: the real workflow definition, without depending on a locally running stack.
+const {getWorkflowView,isValidTransition}=require(root+'/backend/dist/services/common/workflow.js');
+const workflow=http.createServer((req,res)=>{const u=new URL(req.url,'http://x');res.setHeader('Content-Type','application/json');
+if(u.pathname==='/workflow'){res.end(JSON.stringify(getWorkflowView()));return}
+if(u.pathname==='/internal/validate-transition'){res.end(JSON.stringify({valid:isValidTransition(String(u.searchParams.get('from')||''),String(u.searchParams.get('to')||''))}));return}
+res.statusCode=404;res.end('{}')});process.env.WORKFLOW_SERVICE_URL=await listen(workflow);
 let rows=[],writes=[];
 const {ThreeCxController,ThreeCxOAuth,capabilities}=require(root+'/backend/dist/services/call-service/threecx-controller.js');
 const {monitorConfig}=require(root+'/backend/dist/services/call-service/threecx-monitor.js');
@@ -111,21 +117,53 @@ async function geometry(page) {
       await page.goto(fixture.frontUrl+'/pratiche/native-fixture');await page.locator('.pd-hero-action-call').waitFor();
       await page.waitForFunction(()=>document.querySelector('.pd-hero-action-call')?.title !== 'Interno 3CX non configurato');
       await page.locator('.pd-hero-action-call').evaluate(el=>{el.click();el.click()});
-      await page.getByText(/^Richiesta accettata da 3CX \(rif\. [a-f0-9]{8}\)\. Se il tuo dispositivo 3CX squilla/).waitFor();
+      const attemptCard=page.getByRole('region',{name:'Chiamata in uscita'});
+      await attemptCard.getByText('Richiesta accettata da 3CX',{exact:true}).waitFor();
+      await attemptCard.getByText(/Riferimento per la diagnostica: [a-f0-9]{8}/).waitFor();
+      await attemptCard.getByText('Cliente Native Fixture').waitFor();
+      await attemptCard.getByText('3331234567',{exact:false}).first().waitFor();
+      assert.ok((await attemptCard.innerText()).includes('salvato: +393331234567'),'dialed national, stored number shown unchanged');
+      assert.equal(await attemptCard.locator('time').count(),0,'no timer before an observed connection');
       let state=await update({});assert.equal(state.writes.filter(p=>p.endsWith('/makecall')).length,1);
+      // Observed phases from the (synthetic) PBX events, keyed by the callid makecall returned (789).
+      const outbound=(extra)=>({callId:'789',agentDn:'901',direction:'outbound',customerPhone:'',status:'ringing',startedAt:new Date().toISOString(),participantId:9,directControl:false,...extra});
+      await update({rows:[outbound({phase:'callback_ringing'})]});
+      await attemptCard.getByText('Rispondi nel client 3CX',{exact:true}).waitFor();
+      await attemptCard.getByRole('button',{name:'Annulla chiamata'}).waitFor();
+      assert.equal(await attemptCard.getByRole('button',{name:/^Rispondi$/}).count(),0,'no in-CRM answer on a device without direct control');
+      await page.screenshot({path:path.join(os.tmpdir(),'leadium-attempt-callback-'+width+'.png')});
+      await update({rows:[outbound({phase:'dialing_customer',customerPhone:'+393331234567'})]});
+      await attemptCard.getByText('Chiamata al cliente in corso',{exact:true}).waitFor();
+      const connectedAt=new Date(Date.now()-65000).toISOString();
+      await update({rows:[outbound({phase:'connected',status:'connected',customerPhone:'+393331234567',connectedAt})]});
+      await attemptCard.getByText('In conversazione',{exact:true}).waitFor();
+      await attemptCard.locator('time').filter({hasText:/^01:0[5-9]$/}).waitFor();
+      await attemptCard.getByRole('button',{name:'Termina'}).waitFor();
+      assert.equal(await page.locator('.threecx-live-call').count(),0,'the attempt call is not duplicated as a second card');
+      await page.screenshot({path:path.join(os.tmpdir(),'leadium-attempt-connected-'+width+'.png')});
+      await update({rows:[]});
+      await attemptCard.getByText('Chiamata conclusa',{exact:true}).waitFor();
+      await attemptCard.getByText(/Durata conversazione 01:0[5-9]\./).waitFor();
+      await page.screenshot({path:path.join(os.tmpdir(),'leadium-attempt-ended-'+width+'.png')});
+      await attemptCard.getByRole('button',{name:'Registra esito'}).click();
+      await page.locator('.pd-note-modal-backdrop').waitFor();
+      assert.ok(page.url().includes('/pratiche/native-fixture'),'existing outcome dialog opened in place');
+      await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelectorAll('.pd-note-modal-backdrop').length===0);
+      await attemptCard.getByRole('button',{name:'Chiudi'}).click();await attemptCard.waitFor({state:'detached'});
       // Two devices (web client + app): explicit choice, the chosen one is dialed, cancel sends nothing.
       await update({reset:true,devices:{'901':[{id:'web-901',ua:'3CX Web Client 20'},{id:'android-901',ua:'3CXAndroid 20.1'}]}});
       await page.locator('.pd-hero-action-call').click();
-      const picker=page.getByRole('region',{name:'Scegli il dispositivo'});await picker.waitFor();
+      const picker=page.getByRole('group',{name:'Scegli il dispositivo'});await picker.waitFor();
       assert.equal(await picker.getByRole('button').filter({hasText:'App 3CX Android'}).count(),1);
       assert.equal(await picker.getByRole('button').filter({hasText:'Client web 3CX'}).count(),1);
       await geometry(page);
       if(width===390)await page.screenshot({path:path.join(os.tmpdir(),'leadium-device-picker-390.png')});
-      await picker.getByRole('button',{name:'Annulla'}).click();await page.getByText('Chiamata annullata.').waitFor();
+      await picker.getByRole('button',{name:'Annulla'}).click();await page.getByText('Chiamata annullata',{exact:true}).waitFor();
       state=await update({});assert.equal(state.writes.filter(p=>p.endsWith('/makecall')).length,0,'cancel never dials');
       await page.locator('.pd-hero-action-call').click();
-      await page.getByRole('region',{name:'Scegli il dispositivo'}).getByRole('button').filter({hasText:'App 3CX Android'}).click();
-      await page.getByText(/^Richiesta accettata da 3CX/).waitFor();
+      await page.getByRole('group',{name:'Scegli il dispositivo'}).getByRole('button').filter({hasText:'App 3CX Android'}).click();
+      await page.getByRole('region',{name:'Chiamata in uscita'}).getByText('Richiesta accettata da 3CX',{exact:true}).waitFor();
+      await page.getByRole('region',{name:'Chiamata in uscita'}).getByText('App 3CX Android',{exact:true}).waitFor();
       state=await update({});assert.deepEqual(state.writes.filter(p=>p.endsWith('/makecall')),['/callcontrol/901/devices/android-901/makecall'],'the chosen device, never the first');
       await update({reset:true,devices:{'901':[],'913':[]}});
       await page.locator('.pd-hero-action-call').click();await page.getByText(/Nessun dispositivo 3CX collegato all'interno 901/).waitFor();

@@ -100,7 +100,7 @@ export const server = http.createServer(async (req, res) => {
     }
     return sendJson(res, 404, { error: "Endpoint non trovato." });
   } catch (error: any) {
-    if (pathnameIsControl(req.url)) return sendJson(res, error instanceof CallControlError ? error.status : 503, { error: error instanceof CallControlError ? error.message : "3CX momentaneamente non disponibile" });
+    if (pathnameIsControl(req.url)) return sendJson(res, error instanceof CallControlError ? error.status : 503, { error: error instanceof CallControlError ? error.message : "3CX momentaneamente non disponibile", ...(error instanceof CallControlError && error.attemptId ? { attemptId: error.attemptId } : {}) });
     return sendJson(res, 500, { error: error.message || "Errore interno." });
   }
 });

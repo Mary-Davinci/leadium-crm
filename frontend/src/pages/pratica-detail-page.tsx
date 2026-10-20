@@ -1267,7 +1267,7 @@ export function PraticaDetailPage() {
   const threeCx = useThreeCx();
   async function startCall() {
     if (!detail?.lead) return;
-    if (await threeCx.dial(detail.lead.phone || "")) {
+    if (await threeCx.dial(detail.lead.phone || "", { leadId: detail.lead.id, customerName: detail.lead.fullName })) {
       createPending3CXCall(detail.lead as ThreeCXLead);
     }
   }
@@ -1986,6 +1986,21 @@ export function PraticaDetailPage() {
   }, [taskModalOpen]);
 
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+
+  // The call panel reuses this practice's own "Registra esito" dialog: in place when this
+  // practice is open, or through ?registraEsito=1 when the panel had to open the practice.
+  const leadIdForOutcome = detail?.lead.id || "";
+  useEffect(() => {
+    if (!leadIdForOutcome) return;
+    return threeCx.registerOutcomeHandler(leadIdForOutcome, () => openCallOutcomeModal());
+  }, [leadIdForOutcome]);
+  useEffect(() => {
+    if (!leadIdForOutcome || searchParams.get("registraEsito") !== "1") return;
+    openCallOutcomeModal();
+    const next = new URLSearchParams(location.search);
+    next.delete("registraEsito");
+    navigate({ pathname: location.pathname, search: next.toString() ? `?${next.toString()}` : "" }, { replace: true });
+  }, [leadIdForOutcome, searchParams]);
 
   const focus = useMemo(() => {
     const value = searchParams.get("focus");

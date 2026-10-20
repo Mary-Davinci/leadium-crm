@@ -3,7 +3,9 @@ import type { AuthPublicUser } from "./auth-store";
 import { getUserThreeCxDn } from "./auth-store";
 import { callControlInternalHeaders } from "../call-service/threecx-internal";
 import { CallControlError } from "../call-service/threecx-controller";
-import { findLeadByExternalOrPhone, listLeads, normalizePhone } from "../common/leadStore";
+import { findLeadByExternalOrPhone, getLeadById, listLeads, normalizePhone } from "../common/leadStore";
+import { findConversationByPhone } from "../common/chatStore";
+import { composeDialNumber, DialRule } from "../common/phoneDial";
 import { getMongoDb, isMongoEnabled } from "../common/mongo";
 
 export async function lookupThreeCxCaller(_externalId: string | null, phone: string) {
@@ -58,13 +60,17 @@ export async function handleThreeCxV2(req: http.IncomingMessage, res: http.Serve
       if (!response.ok) {
         // Internal routes return fixed, sanitized messages; never forward an arbitrary upstream body.
         const messages: Record<number, string> = { 400: "Parametri chiamata non validi.", 403: "Chiamata non disponibile per il tuo interno.", 409: "Azione non disponibile per questa chiamata o dispositivo.", 422: "Azione non supportata dall’API 3CX documentata.", 429: "Attendi prima di inviare un altro comando 3CX." };
-        if (response.status === 409) {
-          // Exact local allowlist only: never forward arbitrary internal/provider text.
-          const safeDeviceMessages = new Set(["Nessun dispositivo 3CX registrato per questo interno.", "Più dispositivi 3CX disponibili. Selezione dispositivo necessaria.", "Il dispositivo scelto non e piu collegato al tuo interno. Scegli di nuovo.", "Stato chiamata aggiornato. Riprova."]);
-          try { const payload = await response.json() as any; if (safeDeviceMessages.has(payload?.error)) throw new CallControlError(409, payload.error); }
-          catch (error) { if (error instanceof CallControlError) throw error; }
-        }
-        throw new CallControlError(messages[response.status] ? response.status : 503, messages[response.status] || "3CX momentaneamente non disponibile");
+        let payload: any = null;
+        try { payload = await response.json(); } catch { payload = null; }
+        // Only the attempt reference (8 hex) passes through, for the diagnostics.
+        const attemptId = typeof payload?.attemptId === "string" && /^[a-f0-9]{8}$/.test(payload.attemptId) ? payload.attemptId : undefined;
+        // Exact local allowlist only: never forward arbitrary internal/provider text.
+        const safeDeviceMessages = new Set(["Nessun dispositivo 3CX registrato per questo interno.", "Più dispositivi 3CX disponibili. Selezione dispositivo necessaria.", "Il dispositivo scelto non e piu collegato al tuo interno. Scegli di nuovo.", "Stato chiamata aggiornato. Riprova."]);
+        const failure = response.status === 409 && safeDeviceMessages.has(payload?.error)
+          ? new CallControlError(409, payload.error)
+          : new CallControlError(messages[response.status] ? response.status : 503, messages[response.status] || "3CX momentaneamente non disponibile");
+        failure.attemptId = attemptId;
+        throw failure;
       }
       return response.json() as Promise<any>;
     };
@@ -97,7 +103,7 @@ export async function handleThreeCxV2(req: http.IncomingMessage, res: http.Serve
           const rows = Array.isArray(state.calls) ? state.calls.filter((call: any) => call.agentDn === dn) : [];
           const calls = await Promise.all(rows.map(async (call: any) => {
             let lead: any = null;
-            try {
+            if (call.customerPhone) try {
               const cached = callerCache.get(call.customerPhone);
               if (cached && cached.expires > Date.now()) lead = cached.lead;
               else { lead = await (deps.lookup || lookupThreeCxCaller)(null, call.customerPhone); callerCache.set(call.customerPhone, { expires: Date.now() + 15000, lead }); }
@@ -105,6 +111,7 @@ export async function handleThreeCxV2(req: http.IncomingMessage, res: http.Serve
             if (user.role === "operatore" && ["Pronta per chiusura", "Chiusa 100%"].includes(lead?.status)) lead = null;
             return { callId: call.callId, agentDn: dn, direction: call.direction, customerPhone: call.customerPhone,
               status: call.status, startedAt: call.startedAt, answeredAt: call.answeredAt,
+              ...(typeof call.phase === "string" ? { phase: call.phase } : {}), ...(typeof call.connectedAt === "string" ? { connectedAt: call.connectedAt } : {}),
               capabilities: call.capabilities,
               ...(lead ? { leadId: lead.id, practiceId: lead.id, customerName: lead.fullName } : {}) };
           }));
@@ -129,11 +136,31 @@ export async function handleThreeCxV2(req: http.IncomingMessage, res: http.Serve
     try { body = text ? JSON.parse(text) : {}; } catch { throw new CallControlError(400, "JSON non valido."); }
     if (!body || Array.isArray(body) || typeof body !== "object") throw new CallControlError(400, "Parametri chiamata non validi.");
     const match = pathname.match(/^\/api\/3cx\/calls\/(\d+)\/(answer|hangup|hold|resume|transfer)$/);
-    const result = await internal("/3cx/control", { actor: { userId: user.id, threeCxDn: dn }, action: pathname === "/api/3cx/call" ? "call" : match?.[2], callId: match?.[1], input: body }, undefined, 25000);
-    json(res, 200, { accepted: result.accepted === true, ...(typeof result.callId === "string" && /^\d+$/.test(result.callId) ? { callId: result.callId } : {}), ...(result.alreadyEnded === true ? { alreadyEnded: true } : {}), ...(typeof result.attemptId === "string" && /^[a-f0-9]{8}$/.test(result.attemptId) ? { attemptId: result.attemptId } : {}) });
+    let input = body, dialed: { destination: string; rule: DialRule } | null = null;
+    if (pathname === "/api/3cx/call") {
+      // Dialing format is decided here, from server data: the stored number never changes.
+      const { leadId, ...rest } = body;
+      let stored = typeof rest.phone === "string" ? rest.phone : "";
+      let whatsappIdentity = false;
+      if (leadId !== undefined) {
+        if (typeof leadId !== "string" || !/^[\w-]{1,120}$/.test(leadId)) throw new CallControlError(400, "Parametri chiamata non validi.");
+        const lead = await getLeadById(leadId);
+        if (!lead) throw new CallControlError(404, "Pratica non trovata.");
+        if (user.role === "operatore" && ["Pronta per chiusura", "Chiusa 100%"].includes(String(lead.status))) throw new CallControlError(403, "Questa pratica e riservata alla supervisione admin.");
+        if (String(lead.phone || "").trim()) stored = String(lead.phone).trim();
+        whatsappIdentity = String(lead.source || "").toLowerCase().startsWith("whatsapp") && normalizePhone(lead.phone) === normalizePhone(stored);
+      }
+      if (!whatsappIdentity && /^\d+$/.test(stored.trim())) {
+        try { whatsappIdentity = Boolean(await findConversationByPhone(stored)); } catch { /* no WhatsApp evidence: dial unchanged */ }
+      }
+      dialed = composeDialNumber(stored, { whatsappIdentity });
+      input = { ...rest, phone: dialed.destination };
+    }
+    const result = await internal("/3cx/control", { actor: { userId: user.id, threeCxDn: dn }, action: pathname === "/api/3cx/call" ? "call" : match?.[2], callId: match?.[1], input }, undefined, 25000);
+    json(res, 200, { accepted: result.accepted === true, ...(dialed ? { destination: dialed.destination, dialRule: dialed.rule } : {}), ...(typeof result.callId === "string" && /^\d+$/.test(result.callId) ? { callId: result.callId } : {}), ...(result.alreadyEnded === true ? { alreadyEnded: true } : {}), ...(typeof result.attemptId === "string" && /^[a-f0-9]{8}$/.test(result.attemptId) ? { attemptId: result.attemptId } : {}) });
   } catch (error) {
     if (res.headersSent) { res.end(); return; }
-    json(res, error instanceof CallControlError ? error.status : 503, { error: error instanceof CallControlError ? error.message : "3CX momentaneamente non disponibile" });
+    json(res, error instanceof CallControlError ? error.status : 503, { error: error instanceof CallControlError ? error.message : "3CX momentaneamente non disponibile", ...(error instanceof CallControlError && error.attemptId ? { attemptId: error.attemptId } : {}) });
   } finally {
     res.off("close", onClientClose);
   }

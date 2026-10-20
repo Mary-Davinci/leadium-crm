@@ -1,10 +1,17 @@
 import WebSocket from "ws";
 import { MONITORED_DNS, emptyMonitorState, finalizeCalls, legKey, markCallIncomplete, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
 import { MonitorStore } from "./threecx-store";
-import type { LiveCall } from "./threecx-controller";
+import type { CallPhase, LiveCall } from "./threecx-controller";
 import { classifyMonitoredDn } from "./threecx-normalizer";
 import { ThreeCxDeviceDiagnostics } from "./threecx-device-diagnostics";
 import { deviceLabel } from "./threecx-device-label";
+
+/** Peer class of an agent leg: the makecall callback, an external number, an internal DN. */
+function peerClass(p: any) {
+  const party = String(p?.party_dn || "");
+  return party === "MakeCall" ? "makecall_callback" : /^\+?[\d ()-]{7,}$/.test(party || String(p?.party_caller_id || "")) ? "external"
+    : /^\d{2,6}$/.test(party) ? "internal" : party ? "other" : "none";
+}
 
 export type MonitorConfig = { enabled: boolean; baseUrl: string; clientId: string; configured: boolean; credential: () => string };
 export function monitorConfig(env: NodeJS.ProcessEnv = process.env): MonitorConfig {
@@ -65,7 +72,7 @@ export class ThreeCxMonitor {
   private deviceDiagnostics = new ThreeCxDeviceDiagnostics();
   // Raw device IDs stay server-side, separate from the sanitized admin projection.
   private controlDevices = new Map<string, { ids: string[]; agents: Map<string, string>; observedAt: number }>();
-  private liveParticipants = new Map<string, { id: number; callid: number; dn: string; direct_control: boolean }>();
+  private liveParticipants = new Map<string, { id: number; callid: number; dn: string; direct_control: boolean; peer?: string }>();
   private now: () => number;
   private http: typeof fetch;
   private deliveryRetryAt = 0;
@@ -123,15 +130,25 @@ export class ThreeCxMonitor {
     if (!this.config.enabled || !this.status.connected) return [];
     const calls: LiveCall[] = [];
     for (const call of Object.values(this.state.calls)) {
-      if (call.uncertain || !call.customer || !call.direction) continue;
+      if (call.uncertain || !call.direction) continue;
       for (const [key, leg] of Object.entries(call.legs)) {
         if (!leg.active || classifyMonitoredDn(leg.dn, this.dnTypes.get(leg.dn) || "Unknown") !== "Agent") continue;
         const participant = this.liveParticipants.get(key);
         if (!participant || String(participant.callid) !== call.callId) continue;
+        // The makecall callback to the operator's own device has no customer yet: it is still
+        // projected so the operator sees "answer in your 3CX client", nothing else is invented.
+        const callback = participant.peer === "makecall_callback";
+        if (!call.customer && !callback) continue;
         const status = leg.status === "Connected" ? "connected" : ["Hold", "Held"].includes(leg.status) ? "hold" : ["Ringing", "Dialing"].includes(leg.status) ? "ringing" : null;
-        if (status) calls.push({ callId: call.callId, direction: call.direction, customerPhone: call.customer, agentDn: leg.dn,
+        if (!status) continue;
+        const phase: CallPhase = status === "hold" ? "hold"
+          : callback ? (status === "connected" ? "callback_answered" : "callback_ringing")
+          : status === "connected" ? (participant.peer === "external" ? "connected" : "other")
+          : call.direction === "inbound" ? "incoming" : participant.peer === "external" ? "dialing_customer" : "other";
+        const connectedAt = this.callTraces.get(call.callId)?.connectedAt;
+        calls.push({ callId: call.callId, direction: call.direction, customerPhone: call.customer || "", agentDn: leg.dn,
           status, startedAt: call.startedAt, ...(call.answeredAt ? { answeredAt: call.answeredAt } : {}),
-          participantId: participant.id, directControl: participant.direct_control });
+          participantId: participant.id, directControl: participant.direct_control, phase, ...(connectedAt ? { connectedAt } : {}) });
       }
     }
     return calls;
@@ -141,7 +158,7 @@ export class ThreeCxMonitor {
    * agent-leg status and peer class observed (e.g. makecall_callback:Ringing). No numbers,
    * names or provider payloads. Absence of a trace is not proof that 3CX placed no call.
    */
-  private callTraces = new Map<string, { dn: string; firstSeenAt: string; lastSeenAt: string; steps: string[]; ended: boolean }>();
+  private callTraces = new Map<string, { dn: string; firstSeenAt: string; lastSeenAt: string; steps: string[]; ended: boolean; connectedAt?: string }>();
   callTrace(callId: string) {
     const row = this.callTraces.get(callId);
     return row ? { ...row, steps: [...row.steps] } : null;
@@ -156,22 +173,21 @@ export class ThreeCxMonitor {
   private traceParticipant(p: any, ended = false) {
     if (!Number.isSafeInteger(p?.callid) || p.callid <= 0 || !["901", "913"].includes(p.dn)) return;
     const id = String(p.callid), at = this.iso();
-    const row = this.callTraces.get(id) || { dn: p.dn, firstSeenAt: at, lastSeenAt: at, steps: [], ended: false };
-    const party = String(p.party_dn || "");
-    const peer = party === "MakeCall" ? "makecall_callback" : /^\+?[\d ()-]{7,}$/.test(party || String(p.party_caller_id || "")) ? "external"
-      : /^\d{2,6}$/.test(party) ? "internal" : party ? "other" : "none";
+    const row: { dn: string; firstSeenAt: string; lastSeenAt: string; steps: string[]; ended: boolean; connectedAt?: string } = this.callTraces.get(id) || { dn: p.dn, firstSeenAt: at, lastSeenAt: at, steps: [], ended: false };
+    const peer = peerClass(p);
     const status = typeof p.status === "string" && /^[A-Za-z]{1,20}$/.test(p.status) ? p.status : "Unrecognized";
     // A leg on another agent DN (e.g. after a transfer) is prefixed so it is never read as the initiator.
     const step = (p.dn !== row.dn ? `${p.dn}/` : "") + (ended ? "ended" : `${peer}:${status}`);
     if (row.steps[row.steps.length - 1] !== step && row.steps.length < 16) row.steps.push(step);
     row.lastSeenAt = at; row.ended = ended;
+    if (!ended && !row.connectedAt && p.status === "Connected" && peer === "external") row.connectedAt = at;
     this.callTraces.delete(id); this.callTraces.set(id, row);
     while (this.callTraces.size > 50) this.callTraces.delete(this.callTraces.keys().next().value!);
   }
   private rememberParticipant(p: any) {
     try { this.traceParticipant(p); } catch { /* diagnostics never interrupt monitoring */ }
     if (Number.isSafeInteger(p.id) && Number.isSafeInteger(p.callid) && p.callid > 0) this.liveParticipants.set(legKey(p.dn, p.id), {
-      id: p.id, callid: p.callid, dn: p.dn, direct_control: p.direct_control === true
+      id: p.id, callid: p.callid, dn: p.dn, direct_control: p.direct_control === true, peer: peerClass(p)
     });
   }
   async stop() {

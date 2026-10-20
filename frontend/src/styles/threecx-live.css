@@ -62,6 +62,42 @@
 .threecx-live-transfer select { flex: 1; min-width: 0; min-height: 36px; padding: 0 8px; border: 1px solid var(--border-default, #d5deea); border-radius: 8px; background: #fff; color: var(--text-strong, #1b2a40); }
 .threecx-live-transfer .threecx-live-btn { min-height: 36px; }
 
+/* Outbound attempt: one operational card, state derived from observed PBX events. */
+.threecx-attempt { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border-default, #d5deea); border-radius: 10px; background: var(--surface-soft, #f7f9fc); min-width: 0; box-shadow: inset 3px 0 0 var(--brand-sky-600, #2f6fe0); }
+.threecx-attempt.is-action { border-color: #f0d39a; background: #fffaf0; box-shadow: inset 3px 0 0 #d9822b; }
+.threecx-attempt.is-live { box-shadow: inset 3px 0 0 #2e8a5e; }
+.threecx-attempt.is-warn { border-color: var(--status-contact-border, #f0d39a); box-shadow: inset 3px 0 0 #b98a2f; }
+.threecx-attempt.is-error { border-color: #f1c3cd; background: #fff7f8; box-shadow: inset 3px 0 0 var(--brand-coral-500, #cc0033); }
+.threecx-attempt.is-done { box-shadow: inset 3px 0 0 var(--brand-navy-200, #b9c6e6); }
+.threecx-attempt-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.threecx-attempt-status time { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--status-converted-text, #246250); }
+.is-action .threecx-live-badge, .is-warn .threecx-live-badge { border-color: var(--status-contact-border, #f0d39a); background: var(--status-contact-bg, #fff1d8); color: var(--status-contact-text, #87652b); }
+.is-live .threecx-live-badge { border-color: var(--status-converted-border, #b8ddcc); background: var(--status-converted-bg, #e0f2ea); color: var(--status-converted-text, #246250); }
+.is-error .threecx-live-badge { border-color: #f1c3cd; background: var(--brand-coral-100, #fbe1e6); color: var(--brand-coral-700, #8c0530); }
+.is-done .threecx-live-badge { border-color: var(--border-default, #d5deea); background: var(--surface-panel, #fff); color: var(--text-secondary, #617795); }
+.threecx-attempt-detail { margin: 0; font-size: 13px; line-height: 1.45; color: var(--text-strong, #1b2a40); }
+.is-action .threecx-attempt-detail { font-weight: 600; color: var(--status-contact-text, #87652b); }
+.threecx-attempt-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-panel, #fff); border: 1px solid var(--border-default, #d5deea); }
+.threecx-attempt-facts div { min-width: 0; }
+.threecx-attempt-facts dt { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary, #617795); }
+.threecx-attempt-facts dd { margin: 1px 0 0; font-size: 13px; font-weight: 600; color: var(--text-strong, #1b2a40); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.threecx-attempt-facts dd small { font-weight: 500; color: var(--text-secondary, #617795); }
+.threecx-attempt-steps { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--text-secondary, #617795); }
+.threecx-attempt-steps li { display: flex; align-items: center; gap: 8px; }
+.threecx-attempt-steps li > span:first-child { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 999px; border: 1.5px solid var(--border-default, #d5deea); background: var(--surface-panel, #fff); }
+.threecx-attempt-steps li.is-done { color: var(--text-strong, #1b2a40); }
+.threecx-attempt-steps li.is-done > span:first-child { border-color: #2e8a5e; background: #2e8a5e; color: #fff; }
+.threecx-attempt-steps li.is-current { color: var(--text-strong, #1b2a40); font-weight: 700; }
+.threecx-attempt-steps li.is-current > span:first-child { border-color: var(--brand-sky-600, #2f6fe0); box-shadow: inset 0 0 0 3px var(--surface-panel, #fff); background: var(--brand-sky-600, #2f6fe0); }
+.threecx-attempt-note { margin: 0; font-size: 12px; color: var(--status-contact-text, #87652b); }
+.threecx-attempt-actions { display: flex; gap: 8px; }
+.threecx-attempt-actions .threecx-live-btn { flex: 1; }
+.threecx-live-btn.is-primary { background: var(--brand-navy-800, #123274); border-color: var(--brand-navy-800, #123274); color: #fff; }
+.threecx-live-btn.is-primary:hover:not(:disabled) { background: var(--brand-navy-900, #0c2456); }
+.threecx-attempt-ref { font-size: 11px; color: var(--text-secondary, #617795); font-variant-numeric: tabular-nums; }
+.threecx-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) { .threecx-attempt-steps li.is-current > span:first-child { animation: threecx-pulse 1.6s ease-out infinite; } }
+
 .threecx-live button:disabled, .threecx-live select:disabled { opacity: 0.5; cursor: not-allowed; }
 .threecx-live button:focus-visible, .threecx-live select:focus-visible, .threecx-live a:focus-visible { outline: 2px solid var(--brand-sky-600, #2f6fe0); outline-offset: 2px; }
 

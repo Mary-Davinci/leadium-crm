@@ -5,6 +5,8 @@ import { randomBytes } from "node:crypto";
 import { DEVICE_PSEUDONYM } from "./threecx-device-label";
 
 export class CallControlError extends Error {
+  /** Reference of the makecall attempt, so a refused call can be found in the admin diagnostics. */
+  attemptId?: string;
   constructor(public status: number, message: string) { super(message); }
 }
 export const agentDns = ["901", "913"];
@@ -79,10 +81,17 @@ export function describeDestination(phone: string): CallAttempt["destination"] {
   return { format: phone.startsWith("+") ? "international" : "national", digits: digits.length, lastDigits: digits.slice(-2) };
 }
 
+/**
+ * Observed phase of the agent leg, derived only from PBX events:
+ * incoming, callback_ringing (makecall rings the operator's own device first),
+ * callback_answered, dialing_customer, connected (agent leg connected to the external party),
+ * hold, other. connectedAt is the first observation of "connected", never the API acceptance.
+ */
+export type CallPhase = "incoming" | "callback_ringing" | "callback_answered" | "dialing_customer" | "connected" | "hold" | "other";
 export type LiveCall = {
   callId: string; direction: "inbound" | "outbound"; customerPhone: string; agentDn: string;
   status: "ringing" | "connected" | "hold"; startedAt: string; answeredAt?: string;
-  participantId: number; directControl: boolean;
+  participantId: number; directControl: boolean; phase?: CallPhase; connectedAt?: string;
 };
 export function capabilities(call: LiveCall) {
   return { answer: call.status === "ringing" && call.direction === "inbound" && call.directControl,
@@ -268,6 +277,7 @@ export class ThreeCxController {
             } else if (requested) attempt.outcome = "rejected_by_pbx";
             this.trackAttempt(attempt);
           }
+          if (error instanceof CallControlError) error.attemptId = attempt.attemptId;
           throw error;
         }
       }

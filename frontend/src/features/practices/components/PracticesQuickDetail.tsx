@@ -42,7 +42,7 @@ export function PracticesQuickDetail({ lead }: PracticesQuickDetailProps) {
       </section>
 
       <footer className="pr-drawer-actions">
-        <button type="button" disabled={threeCx.busy} className="pr-drawer-action pr-drawer-action-primary" onClick={() => void threeCx.dial(lead.phone || "")}>
+        <button type="button" disabled={threeCx.busy} className="pr-drawer-action pr-drawer-action-primary" onClick={() => void threeCx.dial(lead.phone || "", { leadId: lead.id, customerName: lead.fullName })}>
           Chiama
         </button>
         <Link className="pr-drawer-action" to={buildCrmChatPath(lead)}>
