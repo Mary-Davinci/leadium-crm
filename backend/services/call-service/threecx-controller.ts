@@ -152,7 +152,8 @@ export class ThreeCxController {
     private live: () => LiveCall[], private audit: (row: Audit) => Promise<void> = auditThreeCxAction,
     private http: typeof fetch = fetch, private timeoutMs = 10000,
     private devices: (dn: string) => readonly string[] | null = () => null,
-    private maskDevice: (deviceId: string) => string = () => "device-unknown") {}
+    private maskDevice: (deviceId: string) => string = () => "device-unknown",
+    private noteMakecall: (callId: string) => void = () => {}) {}
   private async request(path: string, method: "GET" | "POST", body?: unknown, missingIsEnded = false, acknowledgement = false, trace?: UpstreamTrace) {
     if (!this.config.enabled) throw new CallControlError(503, "3CX momentaneamente non disponibile");
     try {
@@ -258,6 +259,8 @@ export class ThreeCxController {
             attempt.code = "inconsistent_response";
             throw new CallControlError(409, "Risposta chiamata 3CX non coerente con il dispositivo richiesto.");
           }
+          // Before answering the client: the monitor reads phases of this call from now on.
+          if (id) this.noteMakecall(id);
           if (id) this.ownedCalls.set(`${actor.threeCxDn}:${id}`, {
             ...(Number.isSafeInteger(participant?.id) && participant.id >= 0 ? { participantId: participant.id } : {}),
             ended: false, expires: Date.now() + 600000

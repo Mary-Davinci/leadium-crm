@@ -59,7 +59,7 @@ const monitor = new ThreeCxMonitor(config, {
   store: createMonitorStore(config.baseUrl || "disabled"),
   deliver: async (event, signal) => { await forwardEventToLead(event, signal); }
 });
-const controller = new ThreeCxController(config, oauth, () => monitor.liveCalls(), undefined, undefined, undefined, dn => monitor.devicesForDn(dn), id => monitor.maskDeviceId(id));
+const controller = new ThreeCxController(config, oauth, () => monitor.liveCalls(), undefined, undefined, undefined, dn => monitor.devicesForDn(dn), id => monitor.maskDeviceId(id), id => monitor.noteMakecall(id));
 
 export const server = http.createServer(async (req, res) => {
   try {

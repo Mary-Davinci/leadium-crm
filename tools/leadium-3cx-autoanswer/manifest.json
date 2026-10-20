@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Leadium – Risposta automatica 3CX",
+  "version": "0.1.2",
+  "description": "Risponde nel client web 3CX solo al richiamo appena richiesto da Leadium. Le altre chiamate squillano normalmente.",
+  "permissions": ["storage"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Leadium – Risposta automatica 3CX" },
+  "content_scripts": [
+    {
+      "matches": ["https://leadium-crm.vercel.app/*", "http://localhost/*"],
+      "js": ["leadium-page.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://leadium-crm.vercel.app/*", "http://localhost/*"],
+      "js": ["leadium-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://*.my3cx.it/*"],
+      "js": ["threecx.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

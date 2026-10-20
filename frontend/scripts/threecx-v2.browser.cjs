@@ -141,9 +141,19 @@ async function geometry(page) {
       await attemptCard.getByRole('button',{name:'Termina'}).waitFor();
       assert.equal(await page.locator('.threecx-live-call').count(),0,'the attempt call is not duplicated as a second card');
       await page.screenshot({path:path.join(os.tmpdir(),'leadium-attempt-connected-'+width+'.png')});
+      // 3CX replaces legs during a makecall: a short gap in the snapshots is not the end of the call.
+      await update({rows:[]});await new Promise(resolve=>setTimeout(resolve,1500));
+      await update({rows:[outbound({phase:'connected',status:'connected',customerPhone:'+393331234567',connectedAt})]});
+      await new Promise(resolve=>setTimeout(resolve,3500));
+      assert.equal(await attemptCard.getByText('Chiamata conclusa',{exact:true}).count(),0,'a short gap does not end the attempt');
+      await attemptCard.getByText('In conversazione',{exact:true}).waitFor();
+      // A reload of the page keeps the open call card, with its hang-up control.
+      await page.reload();
+      await attemptCard.getByText('In conversazione',{exact:true}).waitFor();
+      await attemptCard.getByRole('button',{name:'Termina'}).waitFor();
       await update({rows:[]});
       await attemptCard.getByText('Chiamata conclusa',{exact:true}).waitFor();
-      await attemptCard.getByText(/Durata conversazione 01:0[5-9]\./).waitFor();
+      await attemptCard.getByText(/Durata conversazione 01:[0-5][0-9]\./).waitFor();
       await page.screenshot({path:path.join(os.tmpdir(),'leadium-attempt-ended-'+width+'.png')});
       await attemptCard.getByRole('button',{name:'Registra esito'}).click();
       await page.locator('.pd-note-modal-backdrop').waitFor();

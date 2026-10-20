@@ -39,15 +39,9 @@
 .is-incoming .threecx-live-badge svg { animation: threecx-ring 1.2s ease-in-out infinite; }
 .threecx-live-status time { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-secondary, #617795); }
 
-.threecx-live-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.threecx-live-avatar { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border-radius: 999px; background: var(--brand-navy-100, #dbe1f2); color: var(--brand-navy-800, #123274); font-size: 13px; font-weight: 700; }
-.threecx-live-who { display: grid; gap: 1px; min-width: 0; flex: 1; }
-.threecx-live-who strong { font-size: 14px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.threecx-live-who span { font-size: 12px; color: var(--text-secondary, #617795); font-variant-numeric: tabular-nums; }
 .threecx-live-link { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 12px; font-weight: 600; color: var(--brand-navy-700, #1c4189); text-decoration: none; padding: 4px 6px; border-radius: 6px; }
 .threecx-live-link:hover { background: var(--brand-navy-50, #f4f6fb); text-decoration: underline; }
 
-.threecx-live-answer { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .threecx-live-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 0 12px; border: 1px solid transparent; border-radius: 8px; font-weight: 600; cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease; }
 .threecx-live-btn.is-wide { width: 100%; }
 .threecx-live-btn.is-accept { background: #2e8a5e; border-color: #2e8a5e; color: #fff; }
@@ -62,6 +56,25 @@
 .threecx-live-transfer select { flex: 1; min-width: 0; min-height: 36px; padding: 0 8px; border: 1px solid var(--border-default, #d5deea); border-radius: 8px; background: #fff; color: var(--text-strong, #1b2a40); }
 .threecx-live-transfer .threecx-live-btn { min-height: 36px; }
 
+/* Call screen: who is on the line, centred; round controls underneath (3CX layout, Leadium tokens). */
+.threecx-screen-identity { display: grid; justify-items: center; gap: 2px; padding: 4px 0 2px; text-align: center; min-width: 0; }
+.threecx-live-avatar { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 4px; flex: none; border-radius: 999px; background: var(--brand-navy-100, #dbe1f2); color: var(--brand-navy-800, #123274); font-size: 16px; font-weight: 700; }
+.threecx-screen-identity strong { max-width: 100%; font-size: 16px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.threecx-screen-number { font-size: 13px; font-weight: 600; color: var(--text-secondary, #617795); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.threecx-screen-number small { font-weight: 500; font-size: 11px; }
+.threecx-screen-identity .threecx-live-link { margin-top: 2px; }
+.threecx-screen-identity.is-compact { justify-items: start; padding: 0; text-align: left; }
+.threecx-screen-identity.is-compact strong { font-size: 14px; }
+.threecx-round-row { display: flex; justify-content: center; gap: 28px; padding: 2px 0; }
+.threecx-round { display: grid; justify-items: center; gap: 5px; padding: 0; border: 0; background: transparent; color: var(--text-strong, #1b2a40); font-size: 11px; font-weight: 600; cursor: pointer; }
+.threecx-round-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 999px; color: #fff; transition: background-color 120ms ease, transform 120ms ease; }
+.threecx-round.is-reject .threecx-round-icon { background: var(--brand-coral-500, #cc0033); }
+.threecx-round.is-reject:hover:not(:disabled) .threecx-round-icon { background: var(--brand-coral-600, #a3083a); }
+.threecx-round.is-accept .threecx-round-icon { background: #2e8a5e; }
+.threecx-round.is-accept:hover:not(:disabled) .threecx-round-icon { background: #246f4b; }
+.threecx-round:active:not(:disabled) .threecx-round-icon { transform: scale(0.96); }
+.is-incoming .threecx-round.is-accept:not(:disabled) .threecx-round-icon { animation: threecx-pulse-green 1.6s ease-out infinite; }
+
 /* Outbound attempt: one operational card, state derived from observed PBX events. */
 .threecx-attempt { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border-default, #d5deea); border-radius: 10px; background: var(--surface-soft, #f7f9fc); min-width: 0; box-shadow: inset 3px 0 0 var(--brand-sky-600, #2f6fe0); }
 .threecx-attempt.is-action { border-color: #f0d39a; background: #fffaf0; box-shadow: inset 3px 0 0 #d9822b; }
@@ -75,20 +88,19 @@
 .is-live .threecx-live-badge { border-color: var(--status-converted-border, #b8ddcc); background: var(--status-converted-bg, #e0f2ea); color: var(--status-converted-text, #246250); }
 .is-error .threecx-live-badge { border-color: #f1c3cd; background: var(--brand-coral-100, #fbe1e6); color: var(--brand-coral-700, #8c0530); }
 .is-done .threecx-live-badge { border-color: var(--border-default, #d5deea); background: var(--surface-panel, #fff); color: var(--text-secondary, #617795); }
-.threecx-attempt-detail { margin: 0; font-size: 13px; line-height: 1.45; color: var(--text-strong, #1b2a40); }
+.threecx-attempt-detail { margin: 0; font-size: 12.5px; line-height: 1.45; text-align: center; color: var(--text-strong, #1b2a40); }
 .is-action .threecx-attempt-detail { font-weight: 600; color: var(--status-contact-text, #87652b); }
-.threecx-attempt-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-panel, #fff); border: 1px solid var(--border-default, #d5deea); }
-.threecx-attempt-facts div { min-width: 0; }
-.threecx-attempt-facts dt { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary, #617795); }
-.threecx-attempt-facts dd { margin: 1px 0 0; font-size: 13px; font-weight: 600; color: var(--text-strong, #1b2a40); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.threecx-attempt-facts dd small { font-weight: 500; color: var(--text-secondary, #617795); }
-.threecx-attempt-steps { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--text-secondary, #617795); }
-.threecx-attempt-steps li { display: flex; align-items: center; gap: 8px; }
-.threecx-attempt-steps li > span:first-child { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 999px; border: 1.5px solid var(--border-default, #d5deea); background: var(--surface-panel, #fff); }
+/* Progress as one thin row: four dots with short labels. */
+.threecx-attempt-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 10.5px; line-height: 1.25; color: var(--text-secondary, #617795); text-align: center; }
+.threecx-attempt-steps li { position: relative; display: grid; justify-items: center; gap: 4px; }
+.threecx-attempt-steps li + li::before { content: ""; position: absolute; top: 7px; right: calc(50% + 10px); width: calc(100% - 16px); height: 1.5px; background: var(--border-default, #d5deea); }
+.threecx-attempt-steps li.is-done + li::before { background: #2e8a5e; }
+.threecx-attempt-steps li > span:first-child { position: relative; z-index: 1; display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 999px; border: 1.5px solid var(--border-default, #d5deea); background: var(--surface-panel, #fff); }
 .threecx-attempt-steps li.is-done { color: var(--text-strong, #1b2a40); }
 .threecx-attempt-steps li.is-done > span:first-child { border-color: #2e8a5e; background: #2e8a5e; color: #fff; }
 .threecx-attempt-steps li.is-current { color: var(--text-strong, #1b2a40); font-weight: 700; }
 .threecx-attempt-steps li.is-current > span:first-child { border-color: var(--brand-sky-600, #2f6fe0); box-shadow: inset 0 0 0 3px var(--surface-panel, #fff); background: var(--brand-sky-600, #2f6fe0); }
+.threecx-attempt-meta { margin: 0; font-size: 11px; text-align: center; color: var(--text-secondary, #617795); font-variant-numeric: tabular-nums; }
 .threecx-attempt-note { margin: 0; font-size: 12px; color: var(--status-contact-text, #87652b); }
 .threecx-attempt-actions { display: flex; gap: 8px; }
 .threecx-attempt-actions .threecx-live-btn { flex: 1; }
@@ -106,6 +118,7 @@
 .threecx-outcome-button:focus-visible { outline: 2px solid #225fb6; outline-offset: 2px; }
 
 @keyframes threecx-pulse { 0% { box-shadow: 0 0 0 0 rgba(217, 130, 43, 0.5); } 100% { box-shadow: 0 0 0 8px rgba(217, 130, 43, 0); } }
+@keyframes threecx-pulse-green { 0% { box-shadow: 0 0 0 0 rgba(46, 138, 94, 0.45); } 100% { box-shadow: 0 0 0 10px rgba(46, 138, 94, 0); } }
 @keyframes threecx-ring { 0%, 50%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(-12deg); } 20%, 40% { transform: rotate(12deg); } }
-@media (prefers-reduced-motion: reduce) { .threecx-live-dot.is-ringing, .is-incoming .threecx-live-badge svg { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .threecx-live-dot.is-ringing, .is-incoming .threecx-live-badge svg, .is-incoming .threecx-round-icon { animation: none !important; } }
 @media (max-width: 600px) { .threecx-live { right: 12px; bottom: 12px; } }

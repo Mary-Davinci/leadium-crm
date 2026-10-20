@@ -143,6 +143,7 @@ export class ThreeCxMonitor {
         if (!status) continue;
         const phase: CallPhase = status === "hold" ? "hold"
           : callback ? (status === "connected" ? "callback_answered" : "callback_ringing")
+          : this.makecalls.has(call.callId) ? this.makecallPhase(call.callId, status)
           : status === "connected" ? (participant.peer === "external" ? "connected" : "other")
           : call.direction === "inbound" ? "incoming" : participant.peer === "external" ? "dialing_customer" : "other";
         const connectedAt = this.callTraces.get(call.callId)?.connectedAt;
@@ -152,6 +153,25 @@ export class ThreeCxMonitor {
       }
     }
     return calls;
+  }
+  /**
+   * Calls placed by Leadium's makecall (callId from the controller). Observed on 3CX V20: the
+   * operator's leg first rings with the customer's number as party (external:Dialing), then,
+   * once the device answered, dials the customer through the trunk (a short DN: internal:Dialing)
+   * and is Connected only when the customer answers. The peer class alone cannot tell these
+   * apart, so for these calls the phase follows the observed sequence.
+   */
+  private makecalls = new Set<string>();
+  noteMakecall(callId: string) {
+    if (!/^\d+$/.test(callId)) return;
+    this.makecalls.delete(callId); this.makecalls.add(callId);
+    while (this.makecalls.size > 50) this.makecalls.delete(this.makecalls.values().next().value!);
+  }
+  private makecallPhase(callId: string, status: "connected" | "ringing"): CallPhase {
+    if (status === "connected") return "connected";
+    // Still the first ring on the operator's device: nothing but Dialing/Ringing observed so far.
+    const steps = this.callTraces.get(callId)?.steps || [];
+    return steps.every(step => /^(external|makecall_callback):(Dialing|Ringing)$/.test(step)) ? "callback_ringing" : "dialing_customer";
   }
   /**
    * Admin-only correlation for outbound attempts: per native callId, the sequence of
@@ -180,7 +200,7 @@ export class ThreeCxMonitor {
     const step = (p.dn !== row.dn ? `${p.dn}/` : "") + (ended ? "ended" : `${peer}:${status}`);
     if (row.steps[row.steps.length - 1] !== step && row.steps.length < 16) row.steps.push(step);
     row.lastSeenAt = at; row.ended = ended;
-    if (!ended && !row.connectedAt && p.status === "Connected" && peer === "external") row.connectedAt = at;
+    if (!ended && !row.connectedAt && p.status === "Connected" && (peer === "external" || (this.makecalls.has(id) && peer !== "makecall_callback"))) row.connectedAt = at;
     this.callTraces.delete(id); this.callTraces.set(id, row);
     while (this.callTraces.size > 50) this.callTraces.delete(this.callTraces.keys().next().value!);
   }

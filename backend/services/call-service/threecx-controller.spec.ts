@@ -10,7 +10,7 @@ const config = monitorConfig({ THREECX_ENABLED: "true", THREECX_BASE_URL: "https
 const actor = (dn = "901") => ({ userId: "user-" + dn, threeCxDn: dn });
 const liveCall = (dn = "901"): LiveCall => ({ callId: "123", agentDn: dn, customerPhone: "+393331234567", direction: "inbound", status: "ringing", startedAt: new Date().toISOString(), participantId: 1, directControl: true });
 function fixture(options: { devices?: readonly string[] | null; accepted?: number; noFinalStatus?: boolean; empty?: boolean; participantMissing?: boolean; dropMissing?: boolean; endOnMissing?: boolean; providerTimeout?: boolean; returnedParticipantId?: number; currentParticipantId?: number; participantStatus?: string; auth?: number; status?: number; finalstatus?: string; direct?: boolean; stale?: boolean; timeout?: boolean; auditFail?: boolean } = {}) {
-  const requests: any[] = [], audits: any[] = [];
+  const requests: any[] = [], audits: any[] = [], makecalls: string[] = [];
   let rows = [liveCall()];
   const http = (async (url: any, init: any) => {
     const path = new URL(url).pathname; requests.push({ path, method: init.method, body: init.body });
@@ -28,8 +28,8 @@ function fixture(options: { devices?: readonly string[] | null; accepted?: numbe
       ...(options.returnedParticipantId !== undefined ? { id: options.returnedParticipantId } : {}) }, secret: SECRET, access_token: TOKEN }), { status: options.accepted || 200 });
   }) as typeof fetch;
   const oauth = new ThreeCxOAuth(config, http, 20);
-  const controller = new ThreeCxController(config, oauth, () => rows, async row => { if (options.auditFail) throw Error(SECRET); audits.push(row); }, http, 20, dn => options.devices === undefined ? [`private-device-${dn}`] : options.devices);
-  return { controller, oauth, http, requests, audits, rows, setRows: (next: LiveCall[]) => { rows = next; } };
+  const controller = new ThreeCxController(config, oauth, () => rows, async row => { if (options.auditFail) throw Error(SECRET); audits.push(row); }, http, 20, dn => options.devices === undefined ? [`private-device-${dn}`] : options.devices, undefined, id => makecalls.push(id));
+  return { controller, makecalls, oauth, http, requests, audits, rows, setRows: (next: LiveCall[]) => { rows = next; } };
 }
 async function main() {
   process.env.NODE_ENV = "test";
@@ -44,6 +44,7 @@ async function main() {
     assert.match((result as any).attemptId, /^[a-f0-9]{8}$/);
     assert.deepEqual({ ...result, attemptId: undefined }, { accepted: true, callId: "123", attemptId: undefined });
     assert.equal(f.requests[f.requests.length - 1].path, `/callcontrol/${dn}/devices/private-device-${dn}/makecall`); assert.deepEqual(JSON.parse(f.requests[f.requests.length - 1].body), { destination: "+393331234567", timeout: 30 });
+    assert.deepEqual(f.makecalls, ["123"], "the monitor learns the callid of a Leadium makecall");
     assert.equal(f.audits[0].userId, "user-" + dn); assert.equal(f.audits[1].result, "success"); assert.equal(f.audits[1].callId, "123"); assert.ok(f.audits[1].timestamp);
     assert.ok(!JSON.stringify([result, f.audits]).includes(SECRET)); assert.ok(!JSON.stringify([result, f.audits]).includes(TOKEN));
   }

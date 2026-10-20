@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { getAuthUser } from "../lib/auth";
+import { MAPPING_CHANGED_EVENT } from "../features/calls/threecx-context";
 import "../styles/users-page.css";
 
 type UserItem = {
@@ -174,6 +175,8 @@ export function UsersPage() {
             body: JSON.stringify({ password: createForm.password.trim() })
           });
         }
+        // The call panel picks up a changed extension of the signed-in user without a reload.
+        if (authUser && updatedUser.username.toLowerCase() === authUser.username.toLowerCase()) window.dispatchEvent(new Event(MAPPING_CHANGED_EVENT));
         setCreateMessage("Utente aggiornato correttamente.");
         setUiAlert({ type: "success", message: "Utente aggiornato correttamente." });
       } else {

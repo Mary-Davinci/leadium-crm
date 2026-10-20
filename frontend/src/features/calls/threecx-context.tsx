@@ -41,6 +41,8 @@ export type Attempt = {
   connectedAt?: string;
   endedAt?: number;
   talkSeconds?: number;
+  /** First snapshot without the matched call: 3CX replaces legs, so a short gap is not an end. */
+  missingSince?: number;
 };
 
 type CallContext = {
@@ -58,6 +60,26 @@ export const OBSERVATION_WINDOW_MS = 60000;
 /** Fallback until /api/3cx/extensions answers; the configured list comes from the backend. */
 export const DEFAULT_TRANSFER_TARGETS = ["901", "913", "910", "911", "912"];
 const PHASE_RANK: Record<string, number> = { callback_ringing: 1, callback_answered: 2, dialing_customer: 3, connected: 4 };
+/** How long a matched call may be missing from the snapshots before the attempt is ended. */
+export const END_GRACE_MS = 4000;
+const ATTEMPT_STORAGE_KEY = "leadium.threecx.attempt";
+/** Event fired after an admin changes the signed-in user's extension mapping. */
+export const MAPPING_CHANGED_EVENT = "leadium:threecx-mapping-changed";
+
+/** An open attempt survives a page reload in this tab only; storage failures are ignored. */
+function storeAttempt(dn: string, attempt: Attempt | null) {
+  try {
+    if (attempt && attempt.stage === "accepted") sessionStorage.setItem(ATTEMPT_STORAGE_KEY, JSON.stringify({ dn, savedAt: Date.now(), attempt }));
+    else sessionStorage.removeItem(ATTEMPT_STORAGE_KEY);
+  } catch { /* private mode or blocked storage */ }
+}
+function restoreAttempt(dn: string): Attempt | null {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ATTEMPT_STORAGE_KEY) || "null");
+    if (!saved || saved.dn !== dn || !(Date.now() - saved.savedAt < 2 * 3600 * 1000) || saved.attempt?.stage !== "accepted") return null;
+    return saved.attempt as Attempt;
+  } catch { return null; }
+}
 
 export function formatDuration(seconds: number) {
   const safe = Math.max(0, Math.floor(seconds));
@@ -164,6 +186,7 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [sessionVersion, setSessionVersion] = useState(0);
   const chooseDevice = useRef<((device: DeviceOption | null) => void) | null>(null);
   const outcomeHandlers = useRef(new Map<string, () => void>());
   const locked = useRef(false);
@@ -194,7 +217,8 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
         const config = await api<{ threeCxDn: string; available: boolean }>("/api/3cx/session", { signal: abort.signal });
         if (abort.signal.aborted) return;
         setDn(config.threeCxDn); setAvailable(config.available);
-        if (!config.threeCxDn) return;
+        // No extension yet: check again later (an admin may map it), without reloading the page.
+        if (!config.threeCxDn) { retryTimer = setTimeout(() => void connect(), 60000); return; }
         api<{ transferTargets?: string[] }>("/api/3cx/extensions", { signal: abort.signal })
           .then(list => { if (Array.isArray(list.transferTargets) && list.transferTargets.length) setTransferTargets(list.transferTargets.filter(value => /^\d{2,6}$/.test(value))); })
           .catch(() => undefined);
@@ -220,7 +244,22 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
     }
     void connect();
     return () => { abort.abort(); clearTimeout(retryTimer); };
+  }, [sessionVersion]);
+
+  useEffect(() => {
+    const refresh = () => setSessionVersion(value => value + 1);
+    window.addEventListener(MAPPING_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(MAPPING_CHANGED_EVENT, refresh);
   }, []);
+
+  // Keep the open attempt across a reload of this tab; bring it back once the extension is known.
+  // Restore is declared first: in the same commit it must read before the store effect writes.
+  useEffect(() => {
+    if (!dn) return;
+    const saved = restoreAttempt(dn);
+    if (saved) setAttempt(current => current || { ...saved, id: ++attemptCounter.current, missingSince: undefined });
+  }, [dn]);
+  useEffect(() => { if (dn) storeAttempt(dn, attempt); }, [dn, attempt]);
 
   // Clock for the conversation timer and the observation window, only while an attempt is open.
   useEffect(() => {
@@ -245,6 +284,7 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
         const rank = PHASE_RANK[call.phase || ""] || 0;
         return {
           ...current,
+          missingSince: undefined,
           matchedCallId: call.callId,
           correlation,
           phase: call.phase,
@@ -253,13 +293,19 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
           connectedAt: current.connectedAt || call.connectedAt
         };
       }
-      if (current.matchedCallId) {
-        const endedAt = Date.now();
-        return { ...current, endedAt, phase: undefined, talkSeconds: current.connectedAt ? Math.round((endedAt - Date.parse(current.connectedAt)) / 1000) : undefined };
-      }
+      if (current.matchedCallId && !current.missingSince) return { ...current, missingSince: Date.now() };
       return current;
     });
   }, [calls]);
+
+  // End only after the call stayed missing for the grace period (the clock ticks while open).
+  useEffect(() => {
+    setAttempt((current) => {
+      if (!current || current.endedAt || !current.missingSince || now - current.missingSince < END_GRACE_MS) return current;
+      const endedAt = current.missingSince;
+      return { ...current, endedAt, missingSince: undefined, phase: undefined, talkSeconds: current.connectedAt ? Math.round((endedAt - Date.parse(current.connectedAt)) / 1000) : undefined };
+    });
+  }, [now]);
 
   const registerOutcomeHandler = useCallback((leadId: string, open: () => void) => {
     outcomeHandlers.current.set(leadId, open);
@@ -277,7 +323,13 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
 
   async function dial(phone: string, target: DialTarget = {}) {
     if (locked.current) return false;
-    if (!dn) { setMessage("Interno 3CX non configurato"); return false; }
+    let ownDn = dn;
+    if (!ownDn) {
+      // The mapping may have been set after this page was opened: ask once before refusing.
+      try { ownDn = (await api<{ threeCxDn: string }>("/api/3cx/session")).threeCxDn || ""; } catch { ownDn = ""; }
+      if (!ownDn) { setMessage("Interno 3CX non configurato"); return false; }
+      setDn(ownDn); setSessionVersion(value => value + 1);
+    }
     const id = ++attemptCounter.current;
     const update = (patch: Partial<Attempt>) => setAttempt((current) => (current && current.id === id ? { ...current, ...patch } : current));
     locked.current = true; setBusy(true); setCollapsed(false); setMessage("");
@@ -291,7 +343,7 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
         update({ stage: "error", error: "Dispositivi 3CX non ancora disponibili: il collegamento al centralino non e pronto. Riprova tra poco." }); return false;
       }
       if (!options.devices.length) {
-        update({ stage: "error", error: `Nessun dispositivo 3CX collegato all'interno ${dn}: apri l'app o il client web 3CX e riprova.` }); return false;
+        update({ stage: "error", error: `Nessun dispositivo 3CX collegato all'interno ${ownDn}: apri l'app o il client web 3CX e riprova.` }); return false;
       }
       let device: DeviceOption | null = options.devices.length === 1 ? options.devices[0] : null;
       if (!device) {
@@ -385,27 +437,60 @@ type AttemptCardProps = {
   onDismiss(): void;
 };
 
+function initials(name?: string) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return parts.length ? (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() : "";
+}
+
+/** Who is on the line, centred like a phone screen: the one place the card spends visual weight. */
+function CallIdentity({ name, number, stored, practiceId, compact }: { name: string; number: string; stored?: string; practiceId?: string; compact?: boolean }) {
+  const monogram = initials(name);
+  // Compact (no call on the line: errors, device choice): name and number only, less height.
+  if (compact) return <div className="threecx-screen-identity is-compact"><strong>{name}</strong>{number ? <span className="threecx-screen-number">{number}{stored ? <small> (salvato: {stored})</small> : null}</span> : null}</div>;
+  return <div className="threecx-screen-identity">
+    <span className="threecx-live-avatar" aria-hidden="true">{monogram || <User size={20} />}</span>
+    <strong>{name}</strong>
+    {number ? <span className="threecx-screen-number">{number}{stored ? <small> (salvato: {stored})</small> : null}</span> : null}
+    {practiceId ? <Link className="threecx-live-link" to={buildPracticeUrl(practiceId)}>Apri pratica <ExternalLink size={12} aria-hidden="true" /></Link> : null}
+  </div>;
+}
+
+/** Round call control with its label underneath, as on the 3CX call screen. Only real actions. */
+function RoundAction({ tone, label, icon, disabled, onClick }: { tone: "accept" | "reject"; label: string; icon: ReactNode; disabled?: boolean; onClick(): void }) {
+  return <button type="button" className={`threecx-round is-${tone}`} disabled={disabled} onClick={onClick}>
+    <span className="threecx-round-icon" aria-hidden="true">{icon}</span>
+    <span className="threecx-round-label">{label}</span>
+  </button>;
+}
+
+function TransferControl({ targets, exclude, busy, onTransfer }: { targets: string[]; exclude: string; busy: boolean; onTransfer(target: string): void }) {
+  const [target, setTarget] = useState("");
+  return <div className="threecx-live-transfer">
+    <select aria-label="Destinazione trasferimento" value={target} onChange={event => setTarget(event.target.value)} disabled={busy}>
+      <option value="">Trasferisci a…</option>{targets.filter(value => value !== exclude).map(value => <option key={value} value={value}>Interno {value}</option>)}
+    </select>
+    <button type="button" className="threecx-live-btn is-quiet" disabled={busy || !target} onClick={() => onTransfer(target)}><ArrowRightLeft size={14} aria-hidden="true" />Trasferisci</button>
+  </div>;
+}
+
 /** The single operational card of an outbound attempt: who, what was dialed, from where, what 3CX reported. */
 export function OutboundAttemptCard({ attempt, call, dn, now, transferTargets = DEFAULT_TRANSFER_TARGETS, busy, onChooseDevice, onAction, onOutcome, onDismiss }: AttemptCardProps) {
-  const [target, setTarget] = useState("");
   const view = describeAttempt(attempt, now);
   const closed = Boolean(attempt.endedAt) || ["error", "cancelled"].includes(attempt.stage);
   const dialed = attempt.destination || (attempt.stage === "accepted" ? attempt.phone : "");
   const talk = view.showTimer && attempt.connectedAt ? formatDuration((now - Date.parse(attempt.connectedAt)) / 1000) : null;
   const canOutcome = Boolean(attempt.target.leadId) && (Boolean(attempt.endedAt) || attempt.phase === "connected");
+  const device = attempt.device?.label || (attempt.stage === "choosing" ? "Da scegliere" : "");
   return <section className={`threecx-attempt is-${view.tone}`} aria-label="Chiamata in uscita" aria-live="polite">
     <div className="threecx-attempt-status">
       <span className="threecx-live-badge"><PhoneOutgoing size={12} aria-hidden="true" />{view.title}</span>
       {talk ? <time aria-label="Durata conversazione">{talk}</time> : null}
     </div>
-    {view.detail ? <p className="threecx-attempt-detail">{view.detail}</p> : null}
 
-    <dl className="threecx-attempt-facts">
-      <div><dt>Cliente</dt><dd>{attempt.target.customerName || "—"}</dd></div>
-      <div><dt>Numero composto</dt><dd>{dialed || "—"}{dialed && dialed !== attempt.phone ? <small> (salvato: {attempt.phone})</small> : null}</dd></div>
-      <div><dt>Interno</dt><dd>{dn || "—"}</dd></div>
-      <div><dt>Dispositivo</dt><dd>{attempt.device?.label || (attempt.stage === "choosing" ? "Da scegliere" : "—")}</dd></div>
-    </dl>
+    <CallIdentity name={attempt.target.customerName || "Cliente"} number={dialed || attempt.phone}
+      stored={dialed && dialed !== attempt.phone ? attempt.phone : undefined} practiceId={attempt.target.leadId}
+      compact={attempt.stage !== "accepted" || Boolean(attempt.endedAt)} />
+    {view.detail ? <p className="threecx-attempt-detail">{view.detail}</p> : null}
 
     {attempt.stage === "choosing" && attempt.devices ? <div className="threecx-live-devices" role="group" aria-label="Scegli il dispositivo">
       <strong>Da quale dispositivo vuoi chiamare?</strong>
@@ -418,22 +503,19 @@ export function OutboundAttemptCard({ attempt, call, dn, now, transferTargets = 
 
     {attempt.stage === "accepted" || attempt.stage === "requesting" ? <ol className="threecx-attempt-steps" aria-label="Avanzamento">
       {view.steps.map(row => <li key={row.label} className={`is-${row.state}`}>
-        <span aria-hidden="true">{row.state === "done" ? <Check size={11} /> : null}</span>{row.label}
+        <span aria-hidden="true">{row.state === "done" ? <Check size={10} /> : null}</span>{row.label}
         <span className="threecx-sr">{row.state === "done" ? " (fatto)" : row.state === "current" ? " (in corso)" : " (in attesa)"}</span>
       </li>)}
     </ol> : null}
 
+    <p className="threecx-attempt-meta">Interno {dn || "—"}{device ? <> · <span>{device}</span></> : null}</p>
+
     {attempt.correlation === "probable" && !closed ? <p className="threecx-attempt-note">Collegamento alla chiamata non certo: 3CX non ha restituito l'identificativo.</p> : null}
 
-    {!closed && call?.capabilities.hangup ? <button type="button" className="threecx-live-btn is-reject is-wide" disabled={busy} onClick={() => onAction("hangup")}>
-      <PhoneOff size={16} aria-hidden="true" />{attempt.phase === "connected" ? "Termina" : "Annulla chiamata"}
-    </button> : null}
-    {!closed && call?.capabilities.transfer ? <div className="threecx-live-transfer">
-      <select aria-label="Destinazione trasferimento" value={target} onChange={event => setTarget(event.target.value)} disabled={busy}>
-        <option value="">Trasferisci a…</option>{transferTargets.filter(value => value !== dn).map(value => <option key={value} value={value}>Interno {value}</option>)}
-      </select>
-      <button type="button" className="threecx-live-btn is-quiet" disabled={busy || !target} onClick={() => onAction("transfer", target)}><ArrowRightLeft size={14} aria-hidden="true" />Trasferisci</button>
+    {!closed && call?.capabilities.hangup ? <div className="threecx-round-row">
+      <RoundAction tone="reject" icon={<PhoneOff size={22} />} label={attempt.phase === "connected" ? "Termina" : "Annulla chiamata"} disabled={busy} onClick={() => onAction("hangup")} />
     </div> : null}
+    {!closed && call?.capabilities.transfer ? <TransferControl targets={transferTargets} exclude={dn} busy={busy} onTransfer={value => onAction("transfer", value)} /> : null}
 
     {canOutcome || closed ? <div className="threecx-attempt-actions">
       {canOutcome ? <button type="button" className="threecx-live-btn is-primary" onClick={onOutcome}><ClipboardCheck size={15} aria-hidden="true" />Registra esito</button> : null}
@@ -446,13 +528,7 @@ export function OutboundAttemptCard({ attempt, call, dn, now, transferTargets = 
 
 const STATUS_LABEL = { incoming: "Chiamata in arrivo", outgoing: "Chiamata in uscita", connected: "In chiamata", hold: "In attesa" } as const;
 
-function initials(name?: string) {
-  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-  return parts.length ? (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() : "";
-}
-
 export function ThreeCxLiveCard({ call, busy, onAction, transferTargets = DEFAULT_TRANSFER_TARGETS }: { call: LiveCall; busy: boolean; onAction(verb: string, target?: string): void; transferTargets?: string[] }) {
-  const [target, setTarget] = useState("");
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const seconds = Math.max(0, Math.floor((now - Date.parse(call.answeredAt || call.startedAt)) / 1000));
@@ -460,32 +536,19 @@ export function ThreeCxLiveCard({ call, busy, onAction, transferTargets = DEFAUL
   const incoming = call.status === "ringing" && call.direction === "inbound";
   const state = call.status === "ringing" ? (incoming ? "incoming" : "outgoing") : call.status;
   const StateIcon = state === "incoming" ? PhoneIncoming : state === "outgoing" ? PhoneOutgoing : state === "hold" ? Pause : Phone;
-  const monogram = initials(call.customerName);
   return <section className={`threecx-live-call is-${state}`} aria-label={incoming ? "Chiamata in arrivo" : "Chiamata 3CX attiva"}>
     <div className="threecx-live-status">
       <span className="threecx-live-badge"><StateIcon size={12} aria-hidden="true" />{STATUS_LABEL[state]}</span>
       <time aria-label="Durata">{duration}</time>
     </div>
-    <div className="threecx-live-identity">
-      <span className="threecx-live-avatar" aria-hidden="true">{monogram || <User size={18} />}</span>
-      <span className="threecx-live-who">
-        <strong>{call.customerName || "Numero non associato"}</strong>
-        <span>{call.customerPhone}</span>
-      </span>
-      {call.practiceId && <Link className="threecx-live-link" to={buildPracticeUrl(call.practiceId)}>Apri pratica <ExternalLink size={12} aria-hidden="true" /></Link>}
-    </div>
+    <CallIdentity name={call.customerName || "Numero non associato"} number={call.customerPhone} practiceId={call.practiceId} />
     {incoming
-      ? <div className="threecx-live-answer">
-        <button type="button" className="threecx-live-btn is-accept" disabled={busy || !call.capabilities.answer} onClick={() => onAction("answer")}><Phone size={16} aria-hidden="true" />Rispondi</button>
-        {call.capabilities.hangup && <button type="button" className="threecx-live-btn is-reject" disabled={busy} onClick={() => onAction("hangup")}><PhoneOff size={16} aria-hidden="true" />Rifiuta</button>}
+      ? <div className="threecx-round-row">
+        <RoundAction tone="accept" icon={<Phone size={22} />} label="Rispondi" disabled={busy || !call.capabilities.answer} onClick={() => onAction("answer")} />
+        {call.capabilities.hangup ? <RoundAction tone="reject" icon={<PhoneOff size={22} />} label="Rifiuta" disabled={busy} onClick={() => onAction("hangup")} /> : null}
       </div>
-      : call.capabilities.hangup && <button type="button" className="threecx-live-btn is-reject is-wide" disabled={busy} onClick={() => onAction("hangup")}><PhoneOff size={16} aria-hidden="true" />Termina</button>}
+      : call.capabilities.hangup ? <div className="threecx-round-row"><RoundAction tone="reject" icon={<PhoneOff size={22} />} label="Termina" disabled={busy} onClick={() => onAction("hangup")} /></div> : null}
     {incoming && !call.capabilities.answer && <small className="threecx-live-hint">Rispondi dal dispositivo 3CX</small>}
-    {call.capabilities.transfer && <div className="threecx-live-transfer">
-      <select aria-label="Destinazione trasferimento" value={target} onChange={event => setTarget(event.target.value)} disabled={busy}>
-        <option value="">Trasferisci a…</option>{transferTargets.filter(dn => dn !== call.agentDn).map(dn => <option key={dn} value={dn}>Interno {dn}</option>)}
-      </select>
-      <button type="button" className="threecx-live-btn is-quiet" disabled={busy || !target} onClick={() => onAction("transfer", target)}><ArrowRightLeft size={14} aria-hidden="true" />Trasferisci</button>
-    </div>}
+    {call.capabilities.transfer && <TransferControl targets={transferTargets} exclude={call.agentDn} busy={busy} onTransfer={value => onAction("transfer", value)} />}
   </section>;
 }

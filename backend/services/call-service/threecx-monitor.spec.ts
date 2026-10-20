@@ -651,6 +651,35 @@ async function main() {
       assert.equal(f.monitor.callTrace("999999"), null);
     } finally { await f.monitor.stop(); }
   });
+  await test("makecall phases follow the sequence observed on 3CX V20 (customer number on the callback, trunk DN after)", async () => {
+    const f = fixture({ reportedDnTypes: TENANT_DN_TYPES }); await f.start();
+    const phase = (id: string) => f.monitor.liveCalls().find(row => row.callId === id)?.phase;
+    try {
+      // The device rings about a second before makecall returns the callid.
+      await f.upsert("913", 1, 5151, "Dialing", { party_dn: "+393331234567", party_caller_id: "3331234567" });
+      f.monitor.noteMakecall("5151");
+      assert.equal(phase("5151"), "callback_ringing", "first ring on the operator device, even with the customer number as party");
+      await f.upsert("913", 1, 5151, "Dialing", { party_dn: "10000", party_caller_id: "10000" });
+      // Same status as before: wait for the event itself, not for a status change.
+      await until(() => f.monitor.callTrace("5151")!.steps.includes("internal:Dialing"), "trunk leg observed");
+      assert.equal(phase("5151"), "dialing_customer", "device answered, 3CX dialing the customer via the trunk");
+      await f.remove("913", 1);
+      await f.upsert("913", 2, 5151, "Dialing", { party_dn: "10000", party_caller_id: "10000" });
+      await until(() => f.monitor.callTrace("5151")!.steps.length === 4, "replacement leg observed");
+      assert.equal(phase("5151"), "dialing_customer", "a replaced leg does not reset the sequence");
+      assert.equal(f.monitor.liveCalls().find(row => row.callId === "5151")!.connectedAt, undefined);
+      await f.upsert("913", 2, 5151, "Connected", { party_dn: "10000", party_caller_id: "10000" });
+      const live = f.monitor.liveCalls().find(row => row.callId === "5151")!;
+      assert.equal(live.phase, "connected", "Connected on a Leadium makecall is the conversation");
+      assert.ok(live.connectedAt);
+      assert.deepEqual(f.monitor.callTrace("5151")!.steps, ["external:Dialing", "internal:Dialing", "ended", "internal:Dialing", "internal:Connected"]);
+      // A call not placed by Leadium keeps the previous, conservative reading.
+      await f.upsert("913", 3, 6161, "Dialing", { party_dn: "+393339999999" });
+      await f.upsert("913", 3, 6161, "Connected", { party_dn: "10000", party_caller_id: "10000" });
+      assert.equal(phase("6161"), "other");
+      f.monitor.noteMakecall("not-a-callid");
+    } finally { await f.monitor.stop(); }
+  });
   console.log("All " + count + " Call Control monitoring checks passed.");
 }
 main().catch(error => { console.error(String(error.stack).split(SECRET).join("[redacted]").split(TOKEN).join("[redacted]")); process.exit(1); });
