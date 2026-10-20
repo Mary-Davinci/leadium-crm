@@ -1,5 +1,6 @@
 import WebSocket from "ws";
-import { MONITORED_DNS, emptyMonitorState, finalizeCalls, legKey, markCallIncomplete, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
+import { emptyMonitorState, finalizeCalls, legKey, markCallIncomplete, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
+import { isAgentDn, isMonitoredDn, monitoredDns } from "./threecx-topology";
 import { MonitorStore } from "./threecx-store";
 import type { CallPhase, LiveCall } from "./threecx-controller";
 import { classifyMonitoredDn } from "./threecx-normalizer";
@@ -33,7 +34,6 @@ type Dependencies = {
   oauth?: { get(): Promise<{ token: string; expiresAt: number }> };
   retryMs?: number; tickMs?: number; timeoutMs?: number;
 };
-const allowed = new Set<string>(MONITORED_DNS);
 // Only locally constructed messages can reach diagnostics; never a provider response body.
 class MonitorReadError extends Error {}
 const failureMessages = {
@@ -83,7 +83,7 @@ export class ThreeCxMonitor {
   diagnostics() {
     // Temporary admin-only projection of already-read DN types. No extra PBX request,
     // classification/normalization, raw DN response or participant data is exposed.
-    const observedDnTypes = Object.fromEntries(MONITORED_DNS
+    const observedDnTypes = Object.fromEntries(monitoredDns()
       .filter(dn => this.dnTypes.has(dn))
       .map(dn => [dn, this.dnTypes.get(dn)!]));
     return { enabled: this.config.enabled, configured: this.config.configured, ...this.status, observedDnTypes,
@@ -95,7 +95,7 @@ export class ThreeCxMonitor {
     this.task = this.run();
   }
   devicesForDn(dn: string): readonly string[] | null {
-    if (!this.config.enabled || !this.status.connected || this.socket?.readyState !== WebSocket.OPEN || !["901", "913"].includes(dn)) return null;
+    if (!this.config.enabled || !this.status.connected || this.socket?.readyState !== WebSocket.OPEN || !isAgentDn(dn)) return null;
     const snapshot = this.controlDevices.get(dn);
     return snapshot && this.now() - snapshot.observedAt <= 30000 ? [...snapshot.ids] : null;
   }
@@ -114,7 +114,7 @@ export class ThreeCxMonitor {
   }
   private observeControlDevices(dn: string, value: unknown) {
     this.controlDevices.delete(dn);
-    if (!["901", "913"].includes(dn) || !Array.isArray(value)) return;
+    if (!isAgentDn(dn) || !Array.isArray(value)) return;
     const ids = new Set<string>();
     const agents = new Map<string, string>();
     for (const item of value) {
@@ -171,7 +171,7 @@ export class ThreeCxMonitor {
   }
   maskDeviceId(deviceId: string) { return this.deviceDiagnostics.mask(deviceId); }
   private traceParticipant(p: any, ended = false) {
-    if (!Number.isSafeInteger(p?.callid) || p.callid <= 0 || !["901", "913"].includes(p.dn)) return;
+    if (!Number.isSafeInteger(p?.callid) || p.callid <= 0 || !isAgentDn(p.dn)) return;
     const id = String(p.callid), at = this.iso();
     const row: { dn: string; firstSeenAt: string; lastSeenAt: string; steps: string[]; ended: boolean; connectedAt?: string } = this.callTraces.get(id) || { dn: p.dn, firstSeenAt: at, lastSeenAt: at, steps: [], ended: false };
     const peer = peerClass(p);
@@ -214,7 +214,7 @@ export class ThreeCxMonitor {
   private async request(path: string, auth = false): Promise<any> {
     if (!this.config.enabled || this.abort.signal.aborted) throw new Error("Monitor disabled");
     const entity = path.match(/^\/callcontrol\/(\d+)(?:\/participants\/\d+)?$/);
-    if (!auth && (!entity || !allowed.has(entity[1]))) throw new Error("Monitoring path rejected");
+    if (!auth && (!entity || !isMonitoredDn(entity[1]))) throw new Error("Monitoring path rejected");
     if (!auth) await atStage("checkpoint_save_failed", () => this.deps.store.renew());
     const controller = new AbortController();
     const cancel = () => controller.abort(); this.abort.signal.addEventListener("abort", cancel, { once: true });
@@ -247,7 +247,7 @@ export class ThreeCxMonitor {
   private async reconcile(recovery: boolean) {
     const seen = new Set<string>();
     // Never enumerate or read any DN outside the fixed allowlist, even if the SP sees more.
-    for (const dn of MONITORED_DNS) {
+    for (const dn of monitoredDns()) {
       const info = await this.request("/callcontrol/" + dn);
       if (!info || info.dn !== dn || !Array.isArray(info.participants) || typeof info.type !== "string") throw new Error("Invalid DN snapshot");
       this.dnTypes.set(dn, info.type);
@@ -293,7 +293,7 @@ export class ThreeCxMonitor {
     if (sequence !== null) this.sequence = sequence;
     if (gap) this.enqueue(async () => { for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "stream_gap"); await this.reconcile(true); });
     if (entity === "/callcontrol" && [0, 1].includes(event.event_type)) { this.status.lastEventAt = this.iso(); this.enqueue(() => this.reconcile(false)); return; }
-    if (!match || !allowed.has(match[1]) || ![0, 1].includes(event.event_type)) return;
+    if (!match || !isMonitoredDn(match[1]) || ![0, 1].includes(event.event_type)) return;
     this.status.lastEventAt = this.iso();
     this.enqueue(async () => {
       const [, dn, id] = match;

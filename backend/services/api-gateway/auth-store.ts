@@ -1,6 +1,7 @@
 import { getMongoDb, isMongoEnabled } from "../common/mongo";
 import { hashPasswordScrypt, resolvePasswordVerification } from "./password-hashing";
 import { validateThreeCxDn } from "../call-service/threecx-controller";
+import { isAgentDn } from "../call-service/threecx-topology";
 
 export type AuthRole = "super_admin" | "admin" | "operatore";
 
@@ -107,7 +108,7 @@ function toPublicMongoUser(user: MongoAuthUser): AuthPublicUser {
     email: user.email || user.username,
     surname: user.surname || "",
     organization: user.organization || "",
-    threeCxDn: user.threeCxDn && ["901", "913"].includes(user.threeCxDn) ? user.threeCxDn : ""
+    threeCxDn: user.threeCxDn && isAgentDn(user.threeCxDn) ? user.threeCxDn : ""
   };
 }
 

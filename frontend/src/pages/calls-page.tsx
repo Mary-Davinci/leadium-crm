@@ -77,8 +77,11 @@ export function ThreeCxRecentAttempts({ attempts }: { attempts?: ThreeCxCallAtte
   </div>;
 }
 
-export function ThreeCxObservedDevices({ devices }: { devices?: ThreeCxDiagnostics["observedDevices"] }) {
-  const observed = ["901", "913"].filter(dn => Array.isArray(devices?.[dn]));
+const DEFAULT_AGENT_DNS = ["901", "913"];
+const INFRASTRUCTURE_DNS = ["910", "911", "912", "920", "921", "922"];
+
+export function ThreeCxObservedDevices({ devices, agents = DEFAULT_AGENT_DNS }: { devices?: ThreeCxDiagnostics["observedDevices"]; agents?: string[] }) {
+  const observed = agents.filter(dn => Array.isArray(devices?.[dn]));
   return <div>
     <dt>observedDevices</dt>
     <dd>{observed.length ? observed.map(dn => <div key={dn}>
@@ -88,8 +91,8 @@ export function ThreeCxObservedDevices({ devices }: { devices?: ThreeCxDiagnosti
   </div>;
 }
 
-export function ThreeCxObservedDnTypes({ types }: { types?: Record<string, string> }) {
-  const observed = ["901", "913", "910", "911", "912", "920", "921", "922"]
+export function ThreeCxObservedDnTypes({ types, agents = DEFAULT_AGENT_DNS }: { types?: Record<string, string>; agents?: string[] }) {
+  const observed = [...agents, ...INFRASTRUCTURE_DNS]
     .filter((dn) => typeof types?.[dn] === "string");
   return (
     <div>
@@ -165,6 +168,7 @@ export function CallsPage() {
   const [diagnostics, setDiagnostics] = useState<ThreeCxDiagnostics | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState("");
+  const [agentDns, setAgentDns] = useState<string[]>(DEFAULT_AGENT_DNS);
 
   function returnToLoginIfSessionInvalid() {
     // api() already clears local credentials on 401. Don't leave the cached admin header
@@ -198,6 +202,9 @@ export function CallsPage() {
     setDiagnosticsError("");
     try {
       setDiagnostics(await api<ThreeCxDiagnostics>("/api/3cx/diagnostics"));
+      api<{ agents?: string[] }>("/api/3cx/extensions")
+        .then((list) => { if (Array.isArray(list.agents) && list.agents.length) setAgentDns(list.agents); })
+        .catch(() => undefined);
     } catch (loadError) {
       setDiagnostics(null);
       if (returnToLoginIfSessionInvalid()) return;
@@ -293,8 +300,8 @@ export function CallsPage() {
               <div><dt>lastEventAt</dt><dd>{diagnostics.lastEventAt ? new Date(diagnostics.lastEventAt).toLocaleString("it-IT") : "—"}</dd></div>
               <div><dt>lastCallId</dt><dd>{diagnostics.lastCallId || "—"}</dd></div>
               <div><dt>lastError</dt><dd>{diagnostics.lastError || "—"}</dd></div>
-              <ThreeCxObservedDnTypes types={diagnostics.observedDnTypes} />
-              <ThreeCxObservedDevices devices={diagnostics.observedDevices} />
+              <ThreeCxObservedDnTypes types={diagnostics.observedDnTypes} agents={agentDns} />
+              <ThreeCxObservedDevices devices={diagnostics.observedDevices} agents={agentDns} />
               <ThreeCxRecentAttempts attempts={diagnostics.recentCallAttempts} />
             </dl>
           ) : null}

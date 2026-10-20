@@ -3,6 +3,7 @@ import type { AuthPublicUser } from "./auth-store";
 import { getUserThreeCxDn } from "./auth-store";
 import { callControlInternalHeaders } from "../call-service/threecx-internal";
 import { CallControlError } from "../call-service/threecx-controller";
+import { agentDns, transferDns } from "../call-service/threecx-topology";
 import { findLeadByExternalOrPhone, getLeadById, listLeads, normalizePhone } from "../common/leadStore";
 import { findConversationByPhone } from "../common/chatStore";
 import { composeDialNumber, DialRule } from "../common/phoneDial";
@@ -25,7 +26,7 @@ export async function lookupThreeCxCaller(_externalId: string | null, phone: str
 }
 
 export function isThreeCxV2Path(path: string) {
-  return ["/api/3cx/call", "/api/3cx/session", "/api/3cx/events", "/api/3cx/devices"].includes(path) || /^\/api\/3cx\/calls\/[^/]+\/(answer|hangup|hold|resume|transfer)$/.test(path);
+  return ["/api/3cx/call", "/api/3cx/session", "/api/3cx/events", "/api/3cx/devices", "/api/3cx/extensions"].includes(path) || /^\/api\/3cx\/calls\/[^/]+\/(answer|hangup|hold|resume|transfer)$/.test(path);
 }
 type Deps = {
   base: string;
@@ -46,7 +47,10 @@ export async function handleThreeCxV2(req: http.IncomingMessage, res: http.Serve
   res.once("close", onClientClose);
   if (res.destroyed) clientAbort.abort();
   try {
-    if (["/api/3cx/session", "/api/3cx/events", "/api/3cx/devices"].includes(pathname) && req.method !== "GET") { json(res, 405, { error: "Metodo non consentito." }); return; }
+    if (["/api/3cx/session", "/api/3cx/events", "/api/3cx/devices", "/api/3cx/extensions"].includes(pathname) && req.method !== "GET") { json(res, 405, { error: "Metodo non consentito." }); return; }
+    // Configured topology only (extension numbers, no PBX data): the user mapping select and the
+    // transfer targets read it, also for users without an own extension (admins).
+    if (pathname === "/api/3cx/extensions") { json(res, 200, { agents: agentDns(), transferTargets: transferDns() }); return; }
     const dn = await resolveDn(user);
     if (clientAbort.signal.aborted) return;
     if (!dn) { json(res, pathname.endsWith("/session") ? 200 : 403, pathname.endsWith("/session") ? { threeCxDn: "", available: false } : { error: "Interno 3CX non configurato" }); return; }

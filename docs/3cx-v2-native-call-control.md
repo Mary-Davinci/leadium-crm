@@ -21,7 +21,11 @@ are still validated. No documented hold/resume operation exists in this contract
 
 Mongo users gain optional threeCxDn. Existing records remain unmapped, with no migration.
 Admin/super admin can edit the field via the existing Users form and POST /api/users or
-PUT /api/users/:username. Only empty, 901 or 913 are accepted. Existing target-role rules
+PUT /api/users/:username. Only empty or a configured operator extension is accepted:
+THREECX_AGENT_DNS (comma separated, default 901,913; queues 910-912 and receptionists
+920-922 are always refused). The monitor reads every listed DN at startup, so a DN must be
+readable by the 3CX API application before it is added. GET /api/3cx/extensions returns the
+configured operators and transfer targets for the Users form and the call cards. Existing target-role rules
 remain in force. Values are never derived from names; no actual user mappings were set.
 Each action and SSE tick re-reads the persisted mapping using the authenticated user's
 identity. Changing/removing a mapping takes effect without trusting cached frontend data.

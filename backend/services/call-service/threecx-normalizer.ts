@@ -1,18 +1,14 @@
 // Wire contract: https://github.com/3cx/call-control-service-example (types.ts).
 // Notifications contain entity paths, not a completed-call payload.
-export const MONITORED_DNS = ["901", "913", "910", "911", "912", "920", "921", "922"] as const;
-const allowed = new Set<string>(MONITORED_DNS);
-const agents = new Set(["901", "913"]);
-const queues = new Set(["910", "911", "912"]);
-const receptionists = new Set(["920", "921", "922"]);
+import { isAgentDn, isMonitoredDn, isQueueDn, isReceptionistDn } from "./threecx-topology";
 
 /** Tenant topology, not a PBX configuration change. Infrastructure can never be an agent. */
 export function classifyMonitoredDn(dn: string, reportedType: string) {
   const type = reportedType.toLowerCase();
-  if (receptionists.has(dn) && type === "routepoint") return "RoutePoint";
-  if (receptionists.has(dn) && ["wivr", "digitalreceptionist", "ivr"].includes(type)) return "DigitalReceptionist";
-  if (queues.has(dn) && ["wqueue", "queue"].includes(type)) return "Queue";
-  if (agents.has(dn) && ["wextension", "extension"].includes(type)) return "Agent";
+  if (isReceptionistDn(dn) && type === "routepoint") return "RoutePoint";
+  if (isReceptionistDn(dn) && ["wivr", "digitalreceptionist", "ivr"].includes(type)) return "DigitalReceptionist";
+  if (isQueueDn(dn) && ["wqueue", "queue"].includes(type)) return "Queue";
+  if (isAgentDn(dn) && ["wextension", "extension"].includes(type)) return "Agent";
   return "Unknown";
 }
 
@@ -50,12 +46,12 @@ function externalNumber(value: unknown) {
   if (!/^\+?[\d ()-]+$/.test(raw)) return null;
   const digits = raw.replace(/\D/g, "");
   // Internal DNs (including non-monitored ones), pseudo-parties and short codes aren't customers.
-  if (digits.length < 7 || digits.length > 15 || allowed.has(digits)) return null;
+  if (digits.length < 7 || digits.length > 15 || isMonitoredDn(digits)) return null;
   return (raw.startsWith("+") ? "+" : "") + digits;
 }
 
 export function observeParticipant(state: MonitorState, p: Participant, at: string, snapshot = false, dnType = "Extension") {
-  if (!p || !allowed.has(p.dn) || !Number.isSafeInteger(p.id) || !Number.isSafeInteger(p.callid) || p.callid <= 0) return;
+  if (!p || !isMonitoredDn(p.dn) || !Number.isSafeInteger(p.id) || !Number.isSafeInteger(p.callid) || p.callid <= 0) return;
   const callId = String(p.callid);
   if (state.finals[callId]) return;
   const key = legKey(p.dn, p.id);
@@ -79,7 +75,7 @@ export function observeParticipant(state: MonitorState, p: Participant, at: stri
   // Never treat an internal peer's caller-id as a customer; trunk/line peers may have a DN.
   if (!/^(Wextension|Wqueue|Wivr|Extension|Queue|RingGroup|RoutePoint|DigitalReceptionist|IVR)$/i.test((p.party_dn_type || "").replace(/\s/g, "")) && party) call.customer ||= party;
   const isAgent = classifyMonitoredDn(p.dn, dnType) === "Agent";
-  if (agents.has(p.dn) && !isAgent && ["Connected", "Hold", "Held"].includes(p.status)) markCallIncomplete(call, "unverified_agent_type");
+  if (isAgentDn(p.dn) && !isAgent && ["Connected", "Hold", "Held"].includes(p.status)) markCallIncomplete(call, "unverified_agent_type");
   if (isAgent && (!call.agent || ["Connected", "Hold", "Held"].includes(p.status))) call.agent = p.dn;
   // Queue acceptance / music on hold is not the customer's conversation with an operator.
   if (isAgent && ["Connected", "Hold", "Held"].includes(p.status)) call.answeredAt ||= at;

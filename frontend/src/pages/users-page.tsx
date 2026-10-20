@@ -58,6 +58,7 @@ export function UsersPage() {
   const [deletingUser, setDeletingUser] = useState<UserItem | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [extensions, setExtensions] = useState<string[]>(["901", "913"]);
 
   function canDeleteTarget(user: UserItem) {
     if (!authUser) return false;
@@ -231,6 +232,9 @@ export function UsersPage() {
 
   useEffect(() => {
     loadUsers().catch(() => undefined);
+    api<{ agents?: string[] }>("/api/3cx/extensions")
+      .then((list) => { if (Array.isArray(list.agents) && list.agents.length) setExtensions(list.agents); })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -403,7 +407,8 @@ export function UsersPage() {
               <label className="users-field">
                 Interno 3CX
                 <select value={createForm.threeCxDn} onChange={event => setCreateForm(prev => ({ ...prev, threeCxDn: event.target.value }))}>
-                  <option value="">Non configurato</option><option value="901">901</option><option value="913">913</option>
+                  <option value="">Non configurato</option>
+                  {[...extensions, ...(createForm.threeCxDn && !extensions.includes(createForm.threeCxDn) ? [createForm.threeCxDn] : [])].map((dn) => <option key={dn} value={dn}>{dn}</option>)}
                 </select>
                 <small>Mapping esplicito per le chiamate da Leadium.</small>
               </label>

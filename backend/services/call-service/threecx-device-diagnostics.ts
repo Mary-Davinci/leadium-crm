@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { isAgentDn } from "./threecx-topology";
 
 type ObservedDevice = { deviceIdMasked: string; userAgent: string };
 
@@ -11,7 +12,7 @@ export class ThreeCxDeviceDiagnostics {
   mask(deviceId: string) { return "device-" + createHmac("sha256", this.salt).update(deviceId).digest("hex").slice(0, 12); }
 
   observe(dn: string, value: unknown) {
-    if (dn !== "901" && dn !== "913") return;
+    if (!isAgentDn(dn)) return;
     // Missing/malformed is unknown, not proof that zero devices are registered.
     this.devices.delete(dn);
     if (!Array.isArray(value)) return;

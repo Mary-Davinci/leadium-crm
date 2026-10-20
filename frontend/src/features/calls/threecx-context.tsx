@@ -55,6 +55,8 @@ const Context = createContext<CallContext>({ dial: async () => false, busy: fals
 export const useThreeCx = () => useContext(Context);
 
 export const OBSERVATION_WINDOW_MS = 60000;
+/** Fallback until /api/3cx/extensions answers; the configured list comes from the backend. */
+export const DEFAULT_TRANSFER_TARGETS = ["901", "913", "910", "911", "912"];
 const PHASE_RANK: Record<string, number> = { callback_ringing: 1, callback_answered: 2, dialing_customer: 3, connected: 4 };
 
 export function formatDuration(seconds: number) {
@@ -157,6 +159,7 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [available, setAvailable] = useState(false);
+  const [transferTargets, setTransferTargets] = useState<string[]>(DEFAULT_TRANSFER_TARGETS);
   const [action, setAction] = useState("");
   const [collapsed, setCollapsed] = useState(false);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
@@ -192,6 +195,9 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
         if (abort.signal.aborted) return;
         setDn(config.threeCxDn); setAvailable(config.available);
         if (!config.threeCxDn) return;
+        api<{ transferTargets?: string[] }>("/api/3cx/extensions", { signal: abort.signal })
+          .then(list => { if (Array.isArray(list.transferTargets) && list.transferTargets.length) setTransferTargets(list.transferTargets.filter(value => /^\d{2,6}$/.test(value))); })
+          .catch(() => undefined);
         const response = await fetch(apiUrl("/api/3cx/events"), { headers: { Authorization: "Bearer " + getAuthToken() }, signal: abort.signal, cache: "no-store" });
         if (response.status === 401) { expired(); return; }
         if (!response.ok) throw new Error();
@@ -353,13 +359,14 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
             call={attemptCall}
             dn={dn}
             now={now}
+            transferTargets={transferTargets}
             busy={action !== "" || busy}
             onChooseDevice={(option) => chooseDevice.current?.(option)}
             onAction={(verb, target) => attemptCall && void control(attemptCall, verb, target)}
             onOutcome={() => attempt.target.leadId && openOutcome(attempt.target.leadId)}
             onDismiss={() => setAttempt(null)}
           />}
-          {otherCalls.map(call => <ThreeCxLiveCard key={call.callId} call={call} busy={action !== "" || busy} onAction={(verb, target) => void control(call, verb, target)} />)}
+          {otherCalls.map(call => <ThreeCxLiveCard key={call.callId} call={call} transferTargets={transferTargets} busy={action !== "" || busy} onAction={(verb, target) => void control(call, verb, target)} />)}
         </>}
     </aside>}
   </Context.Provider>;
@@ -370,6 +377,7 @@ type AttemptCardProps = {
   call?: LiveCall;
   dn: string;
   now: number;
+  transferTargets?: string[];
   busy: boolean;
   onChooseDevice(option: DeviceOption | null): void;
   onAction(verb: string, target?: string): void;
@@ -378,7 +386,7 @@ type AttemptCardProps = {
 };
 
 /** The single operational card of an outbound attempt: who, what was dialed, from where, what 3CX reported. */
-export function OutboundAttemptCard({ attempt, call, dn, now, busy, onChooseDevice, onAction, onOutcome, onDismiss }: AttemptCardProps) {
+export function OutboundAttemptCard({ attempt, call, dn, now, transferTargets = DEFAULT_TRANSFER_TARGETS, busy, onChooseDevice, onAction, onOutcome, onDismiss }: AttemptCardProps) {
   const [target, setTarget] = useState("");
   const view = describeAttempt(attempt, now);
   const closed = Boolean(attempt.endedAt) || ["error", "cancelled"].includes(attempt.stage);
@@ -422,7 +430,7 @@ export function OutboundAttemptCard({ attempt, call, dn, now, busy, onChooseDevi
     </button> : null}
     {!closed && call?.capabilities.transfer ? <div className="threecx-live-transfer">
       <select aria-label="Destinazione trasferimento" value={target} onChange={event => setTarget(event.target.value)} disabled={busy}>
-        <option value="">Trasferisci a…</option>{["901", "913", "910", "911", "912"].filter(value => value !== dn).map(value => <option key={value} value={value}>Interno {value}</option>)}
+        <option value="">Trasferisci a…</option>{transferTargets.filter(value => value !== dn).map(value => <option key={value} value={value}>Interno {value}</option>)}
       </select>
       <button type="button" className="threecx-live-btn is-quiet" disabled={busy || !target} onClick={() => onAction("transfer", target)}><ArrowRightLeft size={14} aria-hidden="true" />Trasferisci</button>
     </div> : null}
@@ -443,7 +451,7 @@ function initials(name?: string) {
   return parts.length ? (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() : "";
 }
 
-export function ThreeCxLiveCard({ call, busy, onAction }: { call: LiveCall; busy: boolean; onAction(verb: string, target?: string): void }) {
+export function ThreeCxLiveCard({ call, busy, onAction, transferTargets = DEFAULT_TRANSFER_TARGETS }: { call: LiveCall; busy: boolean; onAction(verb: string, target?: string): void; transferTargets?: string[] }) {
   const [target, setTarget] = useState("");
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
@@ -475,7 +483,7 @@ export function ThreeCxLiveCard({ call, busy, onAction }: { call: LiveCall; busy
     {incoming && !call.capabilities.answer && <small className="threecx-live-hint">Rispondi dal dispositivo 3CX</small>}
     {call.capabilities.transfer && <div className="threecx-live-transfer">
       <select aria-label="Destinazione trasferimento" value={target} onChange={event => setTarget(event.target.value)} disabled={busy}>
-        <option value="">Trasferisci a…</option>{["901", "913", "910", "911", "912"].filter(dn => dn !== call.agentDn).map(dn => <option key={dn} value={dn}>Interno {dn}</option>)}
+        <option value="">Trasferisci a…</option>{transferTargets.filter(dn => dn !== call.agentDn).map(dn => <option key={dn} value={dn}>Interno {dn}</option>)}
       </select>
       <button type="button" className="threecx-live-btn is-quiet" disabled={busy || !target} onClick={() => onAction("transfer", target)}><ArrowRightLeft size={14} aria-hidden="true" />Trasferisci</button>
     </div>}

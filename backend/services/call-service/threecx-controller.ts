@@ -3,17 +3,16 @@ import { getMongoDb, isMongoEnabled } from "../common/mongo";
 import fs from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { DEVICE_PSEUDONYM } from "./threecx-device-label";
+import { isAgentDn, transferDns } from "./threecx-topology";
 
 export class CallControlError extends Error {
   /** Reference of the makecall attempt, so a refused call can be found in the admin diagnostics. */
   attemptId?: string;
   constructor(public status: number, message: string) { super(message); }
 }
-export const agentDns = ["901", "913"];
-export const transferDns = ["901", "913", "910", "911", "912"];
 export function validateThreeCxDn(value: unknown): string {
   if (value === undefined || value === null || value === "") return "";
-  if (typeof value !== "string" || !agentDns.includes(value)) throw new CallControlError(400, "Interno 3CX non autorizzato.");
+  if (typeof value !== "string" || !isAgentDn(value)) throw new CallControlError(400, "Interno 3CX non autorizzato.");
   return value;
 }
 export function normalizeCallPhone(value: unknown): string {
@@ -312,7 +311,7 @@ export class ThreeCxController {
       const status = participant.status === "Ringing" || (action === "hangup" && participant.status === "Dialing") ? "ringing" : participant.status === "Connected" ? "connected" : ["Hold", "Held"].includes(participant.status) ? "hold" : null;
       if (!status) throw new CallControlError(409, "Stato chiamata non controllabile.");
       if (action !== "hangup" && !capabilities({ ...matches[0], status, directControl: participant.direct_control === true })[action as "answer" | "transfer"]) throw new CallControlError(409, "Azione non supportata dal dispositivo o dallo stato chiamata.");
-      if (action === "transfer" && (typeof input.target !== "string" || !transferDns.includes(input.target) || input.target === actor.threeCxDn)) throw new CallControlError(400, "Destinazione trasferimento non autorizzata.");
+      if (action === "transfer" && (typeof input.target !== "string" || !transferDns().includes(input.target) || input.target === actor.threeCxDn)) throw new CallControlError(400, "Destinazione trasferimento non autorizzata.");
       const providerAction = action === "hangup" ? "drop" : action === "transfer" ? "transferto" : "answer";
       const result = await this.request(`/callcontrol/${actor.threeCxDn}/participants/${participantId}/${providerAction}`, "POST", action === "transfer" ? { destination: input.target, reason: "None", timeout: 30 } : {}, action === "hangup");
       if (action === "hangup") {

@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ThreeCxMonitor, monitorConfig } from "./threecx-monitor";
-import { classifyMonitoredDn, emptyMonitorState, finalizeCalls, MonitorState, observeParticipant, removeParticipant, MONITORED_DNS } from "./threecx-normalizer";
+import { classifyMonitoredDn, emptyMonitorState, finalizeCalls, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
+import { monitoredDns } from "./threecx-topology";
 import { createMonitorStore, MonitorStore } from "./threecx-store";
 import { ThreeCxDeviceDiagnostics } from "./threecx-device-diagnostics";
 import * as mongo from "../common/mongo";
@@ -77,7 +78,7 @@ function fixture(options: { socketFailure?: boolean; authStatus?: number; denied
   const packet = (dn: string, id: number, type: number) => sockets[sockets.length - 1]!.emit("message", JSON.stringify({ sequence: ++sequence, event: { event_type: type, entity: `/callcontrol/${dn}/participants/${id}` } }));
   return { monitor, store, sockets, requests, deliveries, participants,
     advance: (ms: number) => { time += ms; },
-    async start() { monitor.start(); if (options.enabled !== false && !options.authStatus) await until(() => requests.filter(r => /^\/callcontrol\/\d+$/.test(r.path)).length >= MONITORED_DNS.length && store.saves > 0, "initial snapshots"); },
+    async start() { monitor.start(); if (options.enabled !== false && !options.authStatus) await until(() => requests.filter(r => /^\/callcontrol\/\d+$/.test(r.path)).length >= monitoredDns().length && store.saves > 0, "initial snapshots"); },
     async upsert(dn: string, id: number, callid: number, status: string, extra: any = {}) {
       participants.set(dn + "/" + id, { id, dn, callid, legid: id, status, party_dn: "+393339999999", party_caller_id: "+393331234567", party_dn_type: "Line", ...extra });
       packet(dn, id, 0); await until(() => store.state.calls[String(callid)]?.legs[dn + "/" + id]?.status === status || Boolean(store.state.finals[String(callid)]), "upsert persisted");
@@ -229,12 +230,12 @@ async function main() {
     assert.deepEqual(Object.keys(f.monitor.diagnostics()).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes", "observedDevices", "deviceCount"].sort());
     assert.equal(new Set(f.requests.filter(r => r.method === "GET").map(r => r.path)).size, 8);
     const socket = f.sockets[0]; socket.emit("message", JSON.stringify({ sequence: 1, event: { event_type: 0, entity: "/callcontrol/999/participants/1" } }));
-    await wait(10); assert.ok(f.requests.every(r => r.path === "/connect/token" || MONITORED_DNS.some(dn => r.path.startsWith("/callcontrol/" + dn))));
+    await wait(10); assert.ok(f.requests.every(r => r.path === "/connect/token" || monitoredDns().some(dn => r.path.startsWith("/callcontrol/" + dn))));
     await f.monitor.stop(); const size = f.requests.length; await wait(20); assert.equal(f.requests.length, size); assert.ok(socket.terminated); assert.equal(f.store.owner, false);
   });
   await test("observedDnTypes projects exact returned types only, with no participant, phone or credential fields", async () => {
     // Deliberately synthetic, unfamiliar types: diagnostics must not infer or normalize enums.
-    const types: Record<string, unknown> = Object.fromEntries(MONITORED_DNS.map(dn => [dn, "Fixture type::" + dn]));
+    const types: Record<string, unknown> = Object.fromEntries(monitoredDns().map(dn => [dn, "Fixture type::" + dn]));
     const f = fixture({ reportedDnTypes: types });
     f.participants.set("901/1", { dn: "901", id: 1, callid: 54321, status: "Ringing", party_caller_id: "+393331234567", party_dn_type: "Line", api_key: SECRET, access_token: TOKEN });
     assert.deepEqual(f.monitor.diagnostics().observedDnTypes, {});
@@ -243,7 +244,7 @@ async function main() {
       const before = f.requests.length;
       const diagnostics = f.monitor.diagnostics();
       assert.deepEqual(diagnostics.observedDnTypes, types);
-      assert.deepEqual(Object.keys(diagnostics.observedDnTypes).sort(), [...MONITORED_DNS].sort());
+      assert.deepEqual(Object.keys(diagnostics.observedDnTypes).sort(), monitoredDns().sort());
       for (const value of Object.values(diagnostics.observedDnTypes)) assert.equal(typeof value, "string");
       const serialized = JSON.stringify(diagnostics);
       for (const forbidden of [SECRET, TOKEN, "+393331234567", "participants", "party_caller_id", "api_key", "access_token"]) assert.ok(!serialized.includes(forbidden));
@@ -436,7 +437,7 @@ async function main() {
     assert.ok(state.finals["128"].incompleteReasons.includes("unverified_agent_type"));
   });
   await test("exact tenant type mapping stays DN-scoped; unknown and mismatched types never become agents", () => {
-    for (const dn of MONITORED_DNS) {
+    for (const dn of monitoredDns()) {
       assert.equal(classifyMonitoredDn(dn, TENANT_DN_TYPES[dn]), ["901", "913"].includes(dn) ? "Agent" : ["910", "911", "912"].includes(dn) ? "Queue" : "DigitalReceptionist");
       for (const type of ["", "Unknown", "Wextension-extra", "SomeWextension", " Wextension", "Wextension "]) assert.equal(classifyMonitoredDn(dn, type), "Unknown");
       if (!["901", "913"].includes(dn)) for (const type of ["Wextension", "Extension"]) assert.equal(classifyMonitoredDn(dn, type), "Unknown");
@@ -512,7 +513,7 @@ async function main() {
     } finally { await f.monitor.stop(); }
   });
   await test("no synthetic callid; internal customers, busy and commercial outcomes are never invented", () => {
-    for (const dn of MONITORED_DNS) {
+    for (const dn of monitoredDns()) {
       const state = emptyMonitorState();
       observeParticipant(state, { dn: "901", id: 1, callid: 888, status: "Ringing", party_caller_id: dn, party_dn: dn }, "2026-10-16T10:00:00Z");
       removeParticipant(state, "901", 1, "2026-10-16T10:00:01Z"); finalizeCalls(state, Date.parse("2026-10-16T10:00:05Z")); assert.equal(state.finals["888"].event, null);
