@@ -3,6 +3,19 @@
 (() => {
   const ANSWER = /^(rispondi|answer|accept|accetta)$/i;
   let current = null; // the Answer button of the incoming screen being handled
+  let observer = null;
+
+  // After the extension is updated or reloaded, this old copy stays in an already open tab and
+  // chrome.runtime throws "Extension context invalidated": stop quietly instead of erroring.
+  function send(message) {
+    try {
+      if (!chrome.runtime || !chrome.runtime.id) throw new Error("invalidated");
+      return chrome.runtime.sendMessage(message).catch(() => undefined);
+    } catch {
+      if (observer) observer.disconnect();
+      return Promise.resolve(undefined);
+    }
+  }
 
   const visible = (el) => {
     const r = el.getBoundingClientRect();
@@ -49,18 +62,18 @@
     current = button; // reset to null when the screen goes away, so a reused button counts again
     if (!button) return;
     const digits = shownDigits(button);
-    chrome.runtime.sendMessage({ type: "claim", shownDigits: digits }).then((result) => {
+    send({ type: "claim", shownDigits: digits }).then((result) => {
       if (!result || result.decision !== "answer" || !button.isConnected) return;
       button.click();
-      chrome.runtime.sendMessage({ type: "note", text: "Rispondi premuto nella scheda 3CX" }).catch(() => undefined);
-    }).catch(() => undefined);
+      send({ type: "note", text: "Rispondi premuto nella scheda 3CX" });
+    });
   }
 
   // Diagnostic: shows in the log that the extension reached the 3CX page (top frame only).
-  if (window === window.top) chrome.runtime.sendMessage({ type: "note", text: "Collegata alla scheda 3CX (" + location.host + ")" }).catch(() => undefined);
+  if (window === window.top) send({ type: "note", text: "Collegata alla scheda 3CX (" + location.host + ")" });
 
   let pending = false;
-  new MutationObserver(() => {
+  observer = new MutationObserver(() => {
     if (pending) return;
     pending = true;
     // Background tabs still run microtasks: no timers, so throttling cannot delay the answer.

@@ -26,8 +26,8 @@ rispondere da sola e la chiamata squilla come prima.
 3. **Carica estensione non pacchettizzata** → scegliere questa cartella.
 4. Ricaricare la scheda di Leadium e la scheda 3CX.
 5. Aprire l'icona dell'estensione: nel registro devono comparire «Collegata alla pagina Leadium»
-   e «Collegata alla scheda 3CX». Alla prima installazione è attiva la **modalità diagnostica**
-   (osserva senza rispondere): fare una prova, poi togliere la spunta.
+   e «Collegata alla scheda 3CX». L'estensione parte già attiva; la **modalità diagnostica**
+   (osserva senza rispondere) serve solo per capire un problema.
 
 ## Aggiornamento
 Sostituire i file della cartella e premere ↻ sull'estensione in `chrome://extensions`, poi

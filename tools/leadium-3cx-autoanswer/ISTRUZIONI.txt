@@ -1,0 +1,72 @@
+LEADIUM - RISPOSTA AUTOMATICA 3CX
+=================================
+
+A cosa serve
+------------
+Clicchi "Chiama" in Leadium e la chiamata parte da sola: non devi piu' rispondere
+nel client 3CX. Le altre chiamate (colleghi, clienti in arrivo) squillano come sempre.
+
+
+PRIMA DI INSTALLARE (una volta sola)
+------------------------------------
+1. Usa Google Chrome (va bene anche Microsoft Edge). Non Safari.
+2. Apri 3CX in una SCHEDA di Chrome (il client web, ad esempio
+   https://davinciformazione.my3cx.it:5001), non l'app 3CX installata.
+   Se hai l'app 3CX installata (PWA o Softphone), chiudila o disinstallala:
+   la chiamata deve arrivare solo alla scheda di Chrome.
+
+
+INSTALLAZIONE (2 minuti)
+------------------------
+1. Estrai lo zip in una cartella che non cancellerai,
+   ad esempio Documenti\leadium-3cx-autoanswer.
+   (Su Mac: doppio clic sullo zip, poi sposta la cartella in Documenti.)
+2. In Chrome scrivi nella barra degli indirizzi:   chrome://extensions
+   (in Edge:   edge://extensions)
+3. In alto a destra accendi "Modalita' sviluppatore".
+4. Clicca "Carica estensione non pacchettizzata" e scegli la cartella
+   leadium-3cx-autoanswer (quella che contiene il file manifest.json).
+5. Compare "Leadium - Risposta automatica 3CX" con l'interruttore acceso.
+6. Clicca l'icona del puzzle in alto a destra e poi la puntina accanto a
+   "Leadium - Risposta automatica 3CX", cosi' l'icona resta visibile.
+
+
+OGNI GIORNO
+-----------
+- Apri la scheda 3CX in Chrome e clicca una volta dentro la pagina
+  (serve a Chrome per far partire l'audio).
+- Tieni aperta la scheda 3CX, anche dietro ad altre schede.
+- In Leadium clicca "Chiama": rispondi solo dal cellulare/cuffia quando il
+  cliente risponde. Per chiudere usa "Termina" nella card di Leadium.
+
+
+CONTROLLO VELOCE
+----------------
+Clicca l'icona dell'estensione. Devono comparire:
+  - "Collegata alla pagina Leadium"
+  - "Collegata alla scheda 3CX"
+Se manca una delle due, ricarica quella scheda (F5).
+Dopo una chiamata deve comparire "e' il richiamo di Leadium, rispondo".
+
+
+SE NON RISPONDE DA SOLA
+-----------------------
+- La scheda 3CX era chiusa o la chiamata e' arrivata all'app 3CX:
+  usa solo la scheda di Chrome.
+- Leadium chiede "Da quale dispositivo vuoi chiamare?": sul tuo interno ci
+  sono piu' dispositivi 3CX collegati. Scegli il client web oppure chiudi gli altri.
+- Manda uno screenshot del registro dell'estensione a chi gestisce Leadium.
+
+
+AGGIORNAMENTI
+-------------
+Quando ricevi una nuova versione: sostituisci i file nella stessa cartella,
+apri chrome://extensions, premi la freccia circolare sull'estensione e
+ricarica le schede di Leadium e 3CX.
+
+
+PRIVACY
+-------
+L'estensione legge solo il comando "Chiama" di Leadium e il riquadro della
+chiamata in arrivo nella scheda 3CX. Non invia dati da nessuna parte; il
+registro resta nel tuo browser e mostra solo le ultime 3 cifre dei numeri.

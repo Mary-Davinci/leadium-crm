@@ -29,7 +29,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
         if ((expected && expected.until > Date.now()) || Date.now() >= deadline) break;
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      const { settings = { enabled: true, diagnostic: true } } = await chrome.storage.local.get("settings");
+      const { settings = { enabled: true, diagnostic: false } } = await chrome.storage.local.get("settings");
       const shown = String(message.shownDigits || "");
       const valid = expected && expected.until > Date.now();
       const match = valid && shown.length >= 6 && expected.digits.slice(-9) !== "" && shown.includes(expected.digits.slice(-9));

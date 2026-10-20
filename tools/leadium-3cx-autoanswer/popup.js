@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 
 async function render() {
-  const { settings = { enabled: true, diagnostic: true }, events = [] } = await chrome.storage.local.get(["settings", "events"]);
+  const { settings = { enabled: true, diagnostic: false }, events = [] } = await chrome.storage.local.get(["settings", "events"]);
   $("enabled").checked = settings.enabled;
   $("diagnostic").checked = settings.diagnostic;
   $("events").replaceChildren(...(events.length ? events : [{ at: "", text: "Nessun evento" }]).map((event) => {
