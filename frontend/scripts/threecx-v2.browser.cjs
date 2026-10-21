@@ -192,21 +192,39 @@ async function geometry(page) {
     const unmapped=await browser.newPage();await unmapped.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-unmapped');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.unmapped);
     await unmapped.goto(fixture.frontUrl+'/pratiche/native-fixture');await unmapped.locator('.pd-hero-action-call').click();await unmapped.getByText('Interno 3CX non configurato',{exact:true}).waitFor();await unmapped.close();
     console.log('PASS V2 no mapping: readable unavailable state, no local URI/audio dependency');
-    // Admin phone correction and duplicate notice, against the real gateway + lead-service.
+    // Contact correction (operator: name/email; admin: phone) and duplicate notice, real gateway + lead-service.
     for (const width of [1440, 390]) {
-      const operatorPage=await browser.newPage({viewport:{width,height:900}});await operatorPage.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-mapped');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.mapped);
-      await operatorPage.goto(fixture.frontUrl+'/pratiche/native-fixture');await operatorPage.locator('.pd-hero-action-call').waitFor();
-      assert.equal(await operatorPage.getByRole('button',{name:'Modifica telefono'}).count(),0,'operators get no phone edit control');await operatorPage.close();
+      const operatorPage=await browser.newPage({viewport:{width,height:900}});const operatorErrors=[];operatorPage.on('pageerror',error=>operatorErrors.push(error.message));
+      await operatorPage.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-mapped');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.mapped);
+      await operatorPage.goto(fixture.frontUrl+'/pratiche/native-fixture');await operatorPage.getByRole('button',{name:'Modifica dati'}).click();
+      const opDialog=operatorPage.getByRole('dialog',{name:'Modifica dati cliente'});await opDialog.waitFor();
+      await opDialog.getByLabel('Email').fill('non-valida@');await opDialog.getByRole('button',{name:'Salva dati'}).click();
+      await opDialog.getByRole('alert').getByText(/Email non valida/).waitFor();
+      const renamed='Cliente Rinominato '+width;
+      await opDialog.getByLabel('Nome',{exact:true}).fill('Cliente');await opDialog.getByLabel('Cognome').fill('Rinominato '+width);
+      await opDialog.getByLabel('Email').fill('cliente.'+width+'@example.test');
+      await operatorPage.screenshot({path:path.join(os.tmpdir(),'leadium-contact-modal-'+width+'.png')});
+      await geometryOf(operatorPage,opDialog);
+      await opDialog.getByRole('button',{name:'Salva dati'}).click();await opDialog.waitFor({state:'detached'});
+      await operatorPage.locator('.pd-hero-main h4').getByText(renamed,{exact:true}).waitFor();
+      await operatorPage.getByText('cliente.'+width+'@example.test').first().waitFor();
+      await operatorPage.getByText('Dati cliente modificati').first().waitFor();
+      // Back to the fixture name used by the later checks (the edit itself is what was under test).
+      await operatorPage.getByRole('button',{name:'Modifica dati'}).click();
+      await opDialog.getByLabel('Nome',{exact:true}).fill('Cliente');await opDialog.getByLabel('Cognome').fill('Native Fixture');
+      await opDialog.getByRole('button',{name:'Salva dati'}).click();await opDialog.waitFor({state:'detached'});
+      await operatorPage.locator('.pd-hero-main h4').getByText('Cliente Native Fixture',{exact:true}).waitFor();
+      assert.deepEqual(operatorErrors,[]);await operatorPage.close();
       const page=await browser.newPage({viewport:{width,height:900}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
       await page.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-admin');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.admin);
-      await page.goto(fixture.frontUrl+'/pratiche/native-fixture');await page.getByRole('button',{name:'Modifica telefono'}).click();
-      const dialog=page.getByRole('dialog',{name:'Modifica telefono'});await dialog.waitFor();
+      await page.goto(fixture.frontUrl+'/pratiche/native-fixture');await page.getByRole('button',{name:'Modifica dati'}).click();
+      const dialog=page.getByRole('dialog',{name:'Modifica dati cliente'});await dialog.waitFor();
       const target=width===1440?'+39 333 7777777':'+39 333 7777778';
-      await dialog.getByLabel('Nuovo telefono').fill(target.replace('+39 ',''));await dialog.getByRole('button',{name:'Salva telefono'}).click();
+      await dialog.getByLabel('Telefono').fill(target.replace('+39 ',''));await dialog.getByRole('button',{name:'Salva dati'}).click();
       await dialog.getByRole('alert').getByText(/formato internazionale/).waitFor();
       await page.screenshot({path:path.join(os.tmpdir(),'leadium-phone-modal-'+width+'.png')});
-      await dialog.getByLabel('Nuovo telefono').fill(target);await dialog.getByRole('button',{name:'Salva telefono'}).click();
-      await page.waitForFunction(()=>!document.querySelector('[role=dialog][aria-labelledby=pd-phone-modal-title]'));
+      await dialog.getByLabel('Telefono').fill(target);await dialog.getByRole('button',{name:'Salva dati'}).click();
+      await dialog.waitFor({state:'detached'});
       await page.locator('.pd-sub').first().getByText(target).waitFor();
       await page.getByText('Telefono modificato').first().waitFor();
       await page.goto(fixture.frontUrl+'/pratiche');await page.getByRole('button',{name:'+ Nuovo lead'}).click();
@@ -217,17 +235,17 @@ async function geometry(page) {
       await page.screenshot({path:path.join(os.tmpdir(),'leadium-duplicate-'+width+'.png')});
       await page.getByRole('button',{name:'Apri lead esistente'}).click();await page.waitForURL('**/pratiche/native-fixture**');
       assert.deepEqual(errors,[]);await page.close();
-      console.log('PASS '+width+'px: admin phone correction (ambiguous refused, saved, audited), operator has no control, duplicate notice without silent navigation');
+      console.log('PASS '+width+'px: operator corrects name/email (invalid refused, saved, audited), admin phone (ambiguous refused, saved, audited), duplicate notice without silent navigation');
     }
     {
       const page=await browser.newPage({viewport:{width:1100,height:900}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
       await page.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-admin');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.admin);
-      await page.goto(fixture.frontUrl+'/pratiche/shared-a');await page.getByRole('button',{name:'Modifica telefono'}).click();
-      const dialog=page.getByRole('dialog',{name:'Modifica telefono'});await dialog.getByLabel('Nuovo telefono').fill('+39 340 1112244');
-      await dialog.getByRole('button',{name:'Salva telefono'}).click();
+      await page.goto(fixture.frontUrl+'/pratiche/shared-a');await page.getByRole('button',{name:'Modifica dati'}).click();
+      const dialog=page.getByRole('dialog',{name:'Modifica dati cliente'});await dialog.getByLabel('Telefono').fill('+39 340 1112244');
+      await dialog.getByRole('button',{name:'Salva dati'}).click();
       const choice=dialog.getByRole('group',{name:'Scheda cliente collegata'});await choice.getByText(/condivisa con un'altra pratica/).waitFor();
       await page.screenshot({path:path.join(os.tmpdir(),'leadium-phone-choice-1100.png')});
-      await choice.getByRole('button',{name:'Solo questo lead'}).click();
+      await choice.getByRole('button',{name:'Solo questa pratica'}).click();
       await page.locator('.pd-sub').first().getByText('+39 340 1112244').waitFor();await page.locator('.pd-phone-notice').getByText(/Correzione parziale.*WhatsApp/).waitFor();
       assert.deepEqual(errors,[]);await page.close();
       console.log('PASS shared customer: explicit choice shown with impact, lead-only correction applied and flagged as partial for WhatsApp');

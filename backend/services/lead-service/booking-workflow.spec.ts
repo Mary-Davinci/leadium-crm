@@ -16,6 +16,7 @@ const leadService = require("./server") as typeof import("./server");
 const leadStore = require("../common/leadStore") as typeof import("../common/leadStore");
 const taskStore = require("../common/taskStore") as typeof import("../common/taskStore");
 const chatStore = require("../common/chatStore") as typeof import("../common/chatStore");
+const { internalIdentityHeaders } = require("../common/internalCapability") as typeof import("../common/internalCapability");
 
 function resetDb() {
   fs.mkdirSync(path.dirname(TEST_DB_FILE), { recursive: true });
@@ -233,7 +234,8 @@ async function main() {
         const history = (await getJson(baseUrl, `/leads/${lead.id}/calls`)).body;
         const tasks = await taskStore.listTasks({ leadId: lead.id, includeDismissed: true });
         if (attempts) assert.ok(tasks.some(task => task.kind === "next_action" && task.status === "open"));
-        const updated = await fetch(`${baseUrl}/leads/${lead.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: `attempts-${attempts}@example.test` }) });
+        // Contact data change as the gateway sends it: verified author, internal capability.
+        const updated = await fetch(`${baseUrl}/leads/${lead.id}`, { method: "PATCH", headers: { "Content-Type": "application/json", ...internalIdentityHeaders() }, body: JSON.stringify({ email: `attempts-${attempts}@example.test`, __contactActor: { id: "u-op", username: "operatore.test", role: "operatore" } }) });
         assert.equal(updated.status, 200);
         assert.equal((await getJson(baseUrl, `/leads/${lead.id}`)).body.lead.email, `attempts-${attempts}@example.test`);
         assert.deepEqual((await getJson(baseUrl, `/leads/${lead.id}/calls`)).body, history);

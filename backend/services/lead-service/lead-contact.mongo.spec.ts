@@ -82,7 +82,7 @@ async function main() {
   const before = JSON.stringify([await rawLead(a.lead.id), await rawCustomer(a.customer!.id)]);
   assert.equal((await call("PATCH", `/leads/${a.lead.id}`, { phone: "0039 333 2220001", __contactActor: ADMIN })).body.code, "phone_conflict_lead");
   assert.equal((await call("PATCH", `/leads/${a.lead.id}`, { phone: "+39 333 9990009", __contactActor: ADMIN }, false)).status, 403);
-  assert.equal((await call("PATCH", `/leads/${a.lead.id}`, { phone: "+39 333 9990009", __contactActor: OPERATOR })).status, 403);
+  assert.equal((await call("PATCH", `/leads/${a.lead.id}`, { phone: "+39 333 9990009", __contactActor: { ...OPERATOR, role: "ospite" } })).status, 403, "only signed-in CRM roles");
   await seed("+39 333 3330009", {}, "+39 333 3330001");
   assert.equal((await call("PATCH", `/leads/${a.lead.id}`, { phone: "+39 333 3330001", __contactActor: ADMIN })).body.code, "phone_conflict_customer");
   assert.equal(JSON.stringify([await rawLead(a.lead.id), await rawCustomer(a.customer!.id)]), before, "no write on conflict");
@@ -90,36 +90,36 @@ async function main() {
   void b;
   console.log("PASS mongo: lead/customer conflicts and forged identities change nothing");
 
-  const writer = { setLeadPhone: leadStore.setLeadPhoneIfUnchanged, setCustomerPhone: customerStore.setCustomerPhoneIfUnchanged,
+  const writer = { setLeadContact: leadStore.setLeadContactIfUnchanged, setCustomerContact: customerStore.setCustomerContactIfUnchanged,
     appendActivity: async (row: any) => leadStore.appendActivities([row]) };
   const quiet = console.error; console.error = () => {};
   try {
     // 3. Failure after the first write (customer done, lead write throws): customer restored, no audit.
     const c = await seed("+39 333 4440001");
-    const planC = await correction.planLeadPhoneCorrection(c.lead, "+39 333 4440002", undefined);
+    const planC = await correction.planLeadContactCorrection(c.lead, { phone: "+39 333 4440002" }, undefined);
     assert.ok(planC.ok && planC.updateCustomer);
     if (!planC.ok) return;
-    await assert.rejects(correction.applyLeadPhoneCorrection(planC, c.lead.id, { leadId: c.lead.id, type: "lead_phone_changed" },
-      { ...writer, setLeadPhone: async () => { throw new Error("write failed"); } }), /nessuna modifica applicata/);
+    await assert.rejects(correction.applyLeadContactCorrection(planC, c.lead.id, { leadId: c.lead.id, type: "lead_phone_changed" },
+      { ...writer, setLeadContact: async () => { throw new Error("write failed"); } }), /nessuna modifica applicata/);
     assert.equal((await rawCustomer(c.customer!.id))!.phone, "+39 333 4440001");
     assert.equal((await rawCustomer(c.customer!.id))!.phoneNormalized, "393334440001");
     assert.equal((await activities(c.lead.id, "lead_phone_changed")).length, 0);
 
     // 4. Concurrent edit of the lead between plan and apply: refused, customer restored.
-    const planC2 = await correction.planLeadPhoneCorrection(await leadStore.getLeadById(c.lead.id), "+39 333 4440003", undefined);
+    const planC2 = await correction.planLeadContactCorrection(await leadStore.getLeadById(c.lead.id), { phone: "+39 333 4440003" }, undefined);
     if (!planC2.ok) throw new Error("plan");
     await (await db()).collection("leads").updateOne({ _id: c.lead.id }, { $set: { phone: "+39 333 4449999", phoneNormalized: "393334449999" } });
-    await assert.rejects(correction.applyLeadPhoneCorrection(planC2, c.lead.id, { leadId: c.lead.id, type: "lead_phone_changed" }, writer), /modificato nel frattempo/);
+    await assert.rejects(correction.applyLeadContactCorrection(planC2, c.lead.id, { leadId: c.lead.id, type: "lead_phone_changed" }, writer), /modificato nel frattempo/);
     assert.equal((await rawLead(c.lead.id))!.phone, "+39 333 4449999", "the concurrent value is kept");
     assert.equal((await rawCustomer(c.customer!.id))!.phone, "+39 333 4440001", "customer restored");
     assert.equal((await activities(c.lead.id, "lead_phone_changed")).length, 0);
 
     // 5. Compensation never overwrites a later change: reported as incoherent, later value kept.
     const d = await seed("+39 333 5550001");
-    const planD = await correction.planLeadPhoneCorrection(d.lead, "+39 333 5550002", undefined);
+    const planD = await correction.planLeadContactCorrection(d.lead, { phone: "+39 333 5550002" }, undefined);
     if (!planD.ok) throw new Error("plan");
-    await assert.rejects(correction.applyLeadPhoneCorrection(planD, d.lead.id, { leadId: d.lead.id, type: "lead_phone_changed" }, { ...writer,
-      setLeadPhone: async () => {
+    await assert.rejects(correction.applyLeadContactCorrection(planD, d.lead.id, { leadId: d.lead.id, type: "lead_phone_changed" }, { ...writer,
+      setLeadContact: async () => {
         await (await db()).collection("customers").updateOne({ _id: d.customer!.id }, { $set: { phone: "+39 333 5557777", phoneNormalized: "393335557777" } });
         throw new Error("write failed");
       } }), (error: any) => error.incoherent === true);
@@ -128,9 +128,9 @@ async function main() {
 
     // 6. Audit write fails: both writes compensated, nothing recorded as done.
     const e = await seed("+39 333 6660001");
-    const planE = await correction.planLeadPhoneCorrection(e.lead, "+39 333 6660002", undefined);
+    const planE = await correction.planLeadContactCorrection(e.lead, { phone: "+39 333 6660002" }, undefined);
     if (!planE.ok) throw new Error("plan");
-    await assert.rejects(correction.applyLeadPhoneCorrection(planE, e.lead.id, {}, { ...writer, appendActivity: async () => { throw new Error("audit down"); } }), /Audit non disponibile/);
+    await assert.rejects(correction.applyLeadContactCorrection(planE, e.lead.id, {}, { ...writer, appendActivity: async () => { throw new Error("audit down"); } }), /Audit non disponibile/);
     assert.equal((await rawLead(e.lead.id))!.phone, "+39 333 6660001");
     assert.equal((await rawLead(e.lead.id))!.phoneNormalized, "393336660001");
     assert.equal((await rawCustomer(e.customer!.id))!.phone, "+39 333 6660001");

@@ -3662,3 +3662,10 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
 .pd-amounts-editor input:disabled { opacity: .7; cursor: not-allowed; }
 .pd-amounts-lock { margin: 0; color: #5f7595; font-size: 12px; overflow-wrap: anywhere; }
 .pd-amounts-actions { flex-wrap: wrap; }
+
+/* Contact correction dialog: name, surname, phone and email in one compact form. */
+.pd-contact-form { display: grid; gap: 10px; }
+.pd-contact-form label { display: grid; gap: 4px; font-size: 12px; font-weight: 600; color: #244061; }
+.pd-contact-form label .pd-notes-input { min-height: 38px; }
+.pd-contact-form small { font-weight: 400; font-size: 11px; color: #6d83a3; }
+@media (min-width: 640px) { .pd-contact-form { grid-template-columns: 1fr 1fr; } .pd-contact-form > :not(label) { grid-column: 1 / -1; } }

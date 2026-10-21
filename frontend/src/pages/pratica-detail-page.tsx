@@ -559,9 +559,29 @@ function isPostSalePracticeStatus(status?: string | null) {
   );
 }
 
+type ContactDraft = { firstName: string; lastName: string; phone: string; email: string };
+const EMPTY_CONTACT_DRAFT: ContactDraft = { firstName: "", lastName: "", phone: "", email: "" };
+
+/** The CRM stores one "fullName": the first word is shown as Nome, the rest as Cognome (editable). */
+export function splitContactDraft(lead?: { fullName?: string; phone?: string; email?: string } | null): ContactDraft {
+  const words = String(lead?.fullName || "").trim().split(/\s+/).filter(Boolean);
+  return { firstName: words[0] || "", lastName: words.slice(1).join(" "), phone: String(lead?.phone || ""), email: String(lead?.email || "") };
+}
+
+/** Only what the user actually changed, so untouched values (even legacy formats) are never re-validated. */
+export function contactPatch(initial: ContactDraft, draft: ContactDraft) {
+  const patch: { fullName?: string; phone?: string; email?: string } = {};
+  const name = (value: ContactDraft) => `${value.firstName.trim()} ${value.lastName.trim()}`.trim().replace(/\s+/g, " ");
+  if (name(draft) !== name(initial)) patch.fullName = name(draft);
+  if (draft.phone.trim() !== initial.phone.trim()) patch.phone = draft.phone.trim();
+  if (draft.email.trim() !== initial.email.trim()) patch.email = draft.email.trim();
+  return patch;
+}
+
 function getTimelineLabel(type: string) {
   const t = String(type || "").toLowerCase();
   if (t === "lead_phone_changed") return "Telefono modificato";
+  if (t === "lead_contact_changed") return "Dati cliente modificati";
   if (t === "lead_deduplicated") return "Inserimento duplicato";
   if (t.includes("3cx") || t.includes("call")) return "Chiamata";
   if (t.includes("whatsapp")) return "WhatsApp";
@@ -844,11 +864,12 @@ export function PraticaDetailPage() {
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [returnModalOpen, setReturnModalOpen] = useState(false);
   const [returnReasonDraft, setReturnReasonDraft] = useState("");
-  const [phoneModalOpen, setPhoneModalOpen] = useState(false);
-  const [phoneDraft, setPhoneDraft] = useState("");
-  const [phoneError, setPhoneError] = useState("");
-  const [phoneChoice, setPhoneChoice] = useState<{ message: string; otherLeadCount: number; customerPhoneDiffers: boolean; customerPhoneTail: string } | null>(null);
-  const [phoneNotice, setPhoneNotice] = useState("");
+  const [contactModalOpen, setContactModalOpen] = useState(false);
+  const [contactDraft, setContactDraft] = useState<ContactDraft>(EMPTY_CONTACT_DRAFT);
+  const [contactInitial, setContactInitial] = useState<ContactDraft>(EMPTY_CONTACT_DRAFT);
+  const [contactError, setContactError] = useState("");
+  const [contactChoice, setContactChoice] = useState<{ message: string; otherLeadCount: number; customerPhoneDiffers: boolean; customerPhoneTail: string; phoneChanged: boolean } | null>(null);
+  const [contactNotice, setContactNotice] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
   const [noteHistory, setNoteHistory] = useState<NoteEntry[]>([]);
@@ -907,42 +928,52 @@ export function PraticaDetailPage() {
     setReturnModalOpen(false);
   }
 
-  function openPhoneModal() {
-    setPhoneDraft(detail?.lead.phone || "");
-    setPhoneError("");
-    setPhoneChoice(null);
-    setPhoneModalOpen(true);
+  function openContactModal() {
+    const initial = splitContactDraft(detail?.lead);
+    setContactInitial(initial);
+    setContactDraft(initial);
+    setContactError("");
+    setContactChoice(null);
+    setContactModalOpen(true);
   }
 
-  function closePhoneModal() {
+  function closeContactModal() {
     if (busy) return;
-    setPhoneModalOpen(false);
-    setPhoneError("");
-    setPhoneChoice(null);
+    setContactModalOpen(false);
+    setContactError("");
+    setContactChoice(null);
   }
 
-  async function savePhone(customerPhoneScope?: "lead_only" | "lead_and_customer") {
-    if (!detail?.lead.id || !isAdmin) return;
+  function updateContactDraft(field: keyof ContactDraft, value: string) {
+    setContactDraft((prev) => ({ ...prev, [field]: value }));
+    setContactChoice(null);
+    setContactError("");
+  }
+
+  const contactChanges = contactPatch(contactInitial, contactDraft);
+
+  async function saveContact(customerScope?: "lead_only" | "lead_and_customer") {
+    if (!detail?.lead.id || !Object.keys(contactChanges).length) return;
     setBusy(true);
-    setPhoneError("");
+    setContactError("");
     try {
-      // Admin-only on the backend too; conflicts are reported, never merged. A shared or
-      // discordant customer card needs the admin's explicit choice (second step below).
+      // Only the fields actually changed are sent. Conflicts are reported, never merged; a shared or
+      // discordant customer card needs an explicit choice (second step below). Author from the session.
       const updated = await api<Lead>(`/api/leads/${detail.lead.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ phone: phoneDraft.trim(), ...(customerPhoneScope ? { customerPhoneScope } : {}) })
+        body: JSON.stringify({ ...contactChanges, ...(customerScope ? { customerScope } : {}) })
       });
-      setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, phone: updated.phone } } : prev));
-      setPhoneNotice(customerPhoneScope === "lead_only"
-        ? "Correzione parziale: la scheda cliente ha ancora il numero precedente, quindi i messaggi WhatsApp dal nuovo numero non vengono collegati a questo cliente. Aggiorna anche la scheda cliente quando l'identita e confermata."
+      setDetail((prev) => (prev ? { ...prev, lead: { ...prev.lead, fullName: updated.fullName, phone: updated.phone, email: updated.email } } : prev));
+      setContactNotice(customerScope === "lead_only"
+        ? `Correzione parziale: la scheda cliente mantiene i dati precedenti${contactChanges.phone !== undefined ? ", quindi i messaggi WhatsApp dal nuovo numero non vengono collegati a questo cliente" : ""}. Aggiorna anche la scheda cliente quando l'identita e confermata.`
         : "");
-      setPhoneModalOpen(false);
+      setContactModalOpen(false);
       await load();
     } catch (e) {
       if (e instanceof ApiError && e.payload?.code === "customer_choice_required") {
-        setPhoneChoice({ message: e.message, otherLeadCount: Number(e.payload.impact?.otherLeadCount || 0), customerPhoneDiffers: Boolean(e.payload.impact?.customerPhoneDiffers), customerPhoneTail: String(e.payload.impact?.customerPhoneTail || "").split("..").pop() || "" });
+        setContactChoice({ message: e.message, otherLeadCount: Number(e.payload.impact?.otherLeadCount || 0), customerPhoneDiffers: Boolean(e.payload.impact?.customerPhoneDiffers), customerPhoneTail: String(e.payload.impact?.customerPhoneTail || "").split("..").pop() || "", phoneChanged: contactChanges.phone !== undefined });
       } else {
-        setPhoneError(e instanceof Error ? e.message : "Impossibile salvare il telefono.");
+        setContactError(e instanceof Error ? e.message : "Impossibile salvare i dati del cliente.");
       }
     } finally {
       setBusy(false);
@@ -2157,13 +2188,11 @@ export function PraticaDetailPage() {
               <h4>{detail.lead.fullName}</h4>
               <p className="pd-sub">
                 {detail.lead.phone}
-                {isAdmin ? (
-                  <button type="button" className="pd-inline-edit" onClick={openPhoneModal} disabled={busy}>
-                    Modifica telefono
-                  </button>
-                ) : null}
+                <button type="button" className="pd-inline-edit" onClick={openContactModal} disabled={busy}>
+                  Modifica dati
+                </button>
               </p>
-              {phoneNotice ? <p className="pd-phone-notice" role="status">{phoneNotice}</p> : null}
+              {contactNotice ? <p className="pd-phone-notice" role="status">{contactNotice}</p> : null}
               <p className="pd-sub pd-sub-secondary">{detail.lead.email || "-"}</p>
               {detail.lead.customerId ? (
                 <Link className="pd-customer-link" to={`/customers/${detail.lead.customerId}`}>
@@ -3250,76 +3279,85 @@ export function PraticaDetailPage() {
             </div>
           ) : null}
 
-          {phoneModalOpen ? (
-            <div className="pd-note-modal-backdrop" role="presentation" onClick={closePhoneModal}>
+          {contactModalOpen ? (
+            <div className="pd-note-modal-backdrop" role="presentation" onClick={closeContactModal}>
               <div
                 className="pd-note-modal"
                 role="dialog"
                 aria-modal="true"
-                aria-labelledby="pd-phone-modal-title"
+                aria-labelledby="pd-contact-modal-title"
                 onClick={(event) => event.stopPropagation()}
               >
                 <div className="pd-note-modal-head">
                   <div>
-                    <h5 id="pd-phone-modal-title">Modifica telefono</h5>
+                    <h5 id="pd-contact-modal-title">Modifica dati cliente</h5>
                     <p>
-                      Usa il formato internazionale (+39 ...). Chiamate e conversazioni gia registrate restano su questa pratica; se la
-                      scheda cliente appartiene solo a questo lead viene aggiornata anche lei. Se il numero e gia di un altro lead o
-                      cliente la modifica viene bloccata, senza unire record.
+                      Chiamate, messaggi e storico restano su questa pratica. Se la scheda cliente appartiene solo a questa pratica
+                      viene aggiornata anche lei. Se telefono o email sono gia di un'altra persona la modifica viene bloccata, senza unire record.
                     </p>
                   </div>
-                  <button type="button" className="pd-note-modal-close" onClick={closePhoneModal} disabled={busy}>
+                  <button type="button" className="pd-note-modal-close" onClick={closeContactModal} disabled={busy}>
                     Chiudi
                   </button>
                 </div>
-                <input
-                  className="pd-notes-input"
-                  type="tel"
-                  value={phoneDraft}
-                  onChange={(event) => { setPhoneDraft(event.target.value); setPhoneChoice(null); }}
-                  placeholder="+39 333 1234567"
-                  aria-label="Nuovo telefono"
-                  autoFocus
-                />
-                {phoneError ? <p className="pd-inline-error" role="alert">{phoneError}</p> : null}
-                {phoneChoice ? (
-                  <div className="pd-phone-choice" role="group" aria-label="Scheda cliente collegata">
-                    <strong>{phoneChoice.message}</strong>
-                    <p>
-                      {phoneChoice.otherLeadCount > 0
-                        ? `Aggiornando anche il cliente, il nuovo numero vale per la sua identita (WhatsApp in arrivo); ${phoneChoice.otherLeadCount === 1 ? "l'altra pratica mantiene" : `le altre ${phoneChoice.otherLeadCount} pratiche mantengono`} il proprio telefono.`
-                        : "Il cliente ha un numero diverso da quello del lead: scegli quale identita correggere."}{" "}
-                    </p>
-                    <p>
-                      <b>Solo questo lead e una correzione parziale:</b> chiamate e messaggi in uscita useranno il nuovo numero, ma il
-                      riconoscimento WhatsApp in arrivo resta legato al numero della scheda cliente
-                      {phoneChoice.customerPhoneTail ? ` (che termina con ${phoneChoice.customerPhoneTail})` : ""}: i messaggi dal nuovo
-                      numero non verranno collegati a questo cliente.
-                    </p>
+                <form
+                  className="pd-contact-form"
+                  noValidate
+                  onSubmit={(event) => { event.preventDefault(); if (!contactChoice) void saveContact(); }}
+                >
+                  <label>
+                    Nome
+                    <input className="pd-notes-input" value={contactDraft.firstName} onChange={(event) => updateContactDraft("firstName", event.target.value)} autoComplete="off" autoFocus />
+                  </label>
+                  <label>
+                    Cognome
+                    <input className="pd-notes-input" value={contactDraft.lastName} onChange={(event) => updateContactDraft("lastName", event.target.value)} autoComplete="off" />
+                  </label>
+                  <label>
+                    Telefono
+                    <input className="pd-notes-input" type="tel" value={contactDraft.phone} onChange={(event) => updateContactDraft("phone", event.target.value)} placeholder="+39 333 1234567" autoComplete="off" />
+                    <small>Formato internazionale, con il prefisso del paese (+39 ...).</small>
+                  </label>
+                  <label>
+                    Email
+                    <input className="pd-notes-input" type="email" value={contactDraft.email} onChange={(event) => updateContactDraft("email", event.target.value)} placeholder="nome@dominio.it" autoComplete="off" />
+                  </label>
+                  {contactError ? <p className="pd-inline-error" role="alert">{contactError}</p> : null}
+                  {contactChoice ? (
+                    <div className="pd-phone-choice" role="group" aria-label="Scheda cliente collegata">
+                      <strong>{contactChoice.message}</strong>
+                      <p>
+                        {contactChoice.otherLeadCount > 0
+                          ? `Aggiornando anche la scheda cliente, i nuovi dati valgono per la persona; ${contactChoice.otherLeadCount === 1 ? "l'altra pratica mantiene" : `le altre ${contactChoice.otherLeadCount} pratiche mantengono`} i propri dati.`
+                          : "La scheda cliente ha dati diversi da quelli di questa pratica: scegli se correggere anche lei."}
+                      </p>
+                      {contactChoice.phoneChanged ? (
+                        <p>
+                          <b>Solo questa pratica e una correzione parziale:</b> chiamate e messaggi in uscita useranno il nuovo numero, ma il
+                          riconoscimento WhatsApp in arrivo resta legato al numero della scheda cliente
+                          {contactChoice.customerPhoneTail ? ` (che termina con ${contactChoice.customerPhoneTail})` : ""}.
+                        </p>
+                      ) : null}
+                      <div className="pd-note-modal-actions">
+                        <button type="button" className="pd-note-modal-cancel" disabled={busy} onClick={() => void saveContact("lead_only")}>
+                          Solo questa pratica
+                        </button>
+                        <button type="button" className="pd-note-modal-submit" disabled={busy} onClick={() => void saveContact("lead_and_customer")}>
+                          Pratica e scheda cliente
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                     <div className="pd-note-modal-actions">
-                      <button type="button" className="pd-note-modal-cancel" disabled={busy} onClick={() => void savePhone("lead_only")}>
-                        Solo questo lead (parziale)
+                      <button type="button" className="pd-note-modal-cancel" onClick={closeContactModal} disabled={busy}>
+                        Annulla
                       </button>
-                      <button type="button" className="pd-note-modal-submit" disabled={busy} onClick={() => void savePhone("lead_and_customer")}>
-                        Lead e scheda cliente
+                      <button type="submit" className="pd-note-modal-submit" disabled={busy || !Object.keys(contactChanges).length}>
+                        Salva dati
                       </button>
                     </div>
-                  </div>
-                ) : (
-                  <div className="pd-note-modal-actions">
-                    <button type="button" className="pd-note-modal-cancel" onClick={closePhoneModal} disabled={busy}>
-                      Annulla
-                    </button>
-                    <button
-                      type="button"
-                      className="pd-note-modal-submit"
-                      disabled={busy || !phoneDraft.trim() || phoneDraft.trim() === (detail.lead.phone || "")}
-                      onClick={() => void savePhone()}
-                    >
-                      Salva telefono
-                    </button>
-                  </div>
-                )}
+                  )}
+                </form>
               </div>
             </div>
           ) : null}

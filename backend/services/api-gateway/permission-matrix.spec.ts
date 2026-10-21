@@ -263,21 +263,27 @@ async function main() {
     });
   });
 
-  await runCase("solo admin puo modificare il telefono del lead; l'autore viene dalla sessione", async () => {
+  await runCase("operatore e admin modificano i dati di contatto; l'autore viene dalla sessione; pratiche riservate escluse", async () => {
     await withServers(async (leadUrl, gatewayUrl, gateway) => {
       const lead = await seedLeadWithStatus("Da contattare");
       const operator = makeSession(gateway, "operatore");
       const spoofed = { id: "x", username: "falso_admin", role: "admin" };
-      const denied = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${lead.id}`, { token: operator, body: { phone: "+39 333 7654321", __contactActor: spoofed } });
-      assert.equal(denied.status, 403, "un operatore non puo modificare il telefono, nemmeno falsificando l'autore");
-      assert.equal((await leadStore.getLeadById(lead.id)).phone, lead.phone);
+      const byOperator = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${lead.id}`, { token: operator, body: { phone: "+39 333 7654321", fullName: "Nome Corretto", __contactActor: spoofed } });
+      assert.equal(byOperator.status, 200, JSON.stringify(byOperator.body));
+      const audit = (await leadStore.getTimelineByLeadId(lead.id)).find((row: any) => row.type === "lead_contact_changed");
+      assert.equal(audit?.actor, "operatore_user", "l'autore falsificato nel body e ignorato");
+      assert.equal(audit?.meta?.changedByRole, "operatore");
       const notesOnly = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${lead.id}`, { token: operator, body: { notes: "ok", __contactActor: spoofed } });
       assert.equal(notesOnly.status, 200, "le altre modifiche operative restano consentite");
       const admin = makeSession(gateway, "admin");
-      const changed = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${lead.id}`, { token: admin, body: { phone: "+39 333 7654321" } });
+      const changed = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${lead.id}`, { token: admin, body: { phone: "+39 333 7654300" } });
       assert.equal(changed.status, 200);
-      const audit = (await leadStore.getTimelineByLeadId(lead.id)).find((row: any) => row.type === "lead_phone_changed");
-      assert.equal(audit?.actor, "admin_user");
+      const phoneAudit = (await leadStore.getTimelineByLeadId(lead.id)).find((row: any) => row.type === "lead_phone_changed");
+      assert.equal(phoneAudit?.actor, "admin_user");
+      const reserved = await seedLeadWithStatus("Pronta per chiusura");
+      const blocked = await apiRequest(gatewayUrl, "PATCH", `/api/leads/${reserved.id}`, { token: operator, body: { fullName: "Altro Nome" } });
+      assert.equal(blocked.status, 403, "pratica riservata alla supervisione admin");
+      assert.equal((await leadStore.getLeadById(reserved.id)).fullName, reserved.fullName);
     });
   });
 
@@ -291,13 +297,15 @@ async function main() {
         headers: { Authorization: `Bearer ${operator}`, "Content-Type": "application/json", "x-leadium-internal": "forged" },
         body: JSON.stringify({ phone: "+39 333 7654321", __contactActor: { id: "x", username: "x", role: "admin" } })
       });
-      assert.equal(forgedHeader.status, 403);
+      assert.equal(forgedHeader.status, 200, "contact edits are allowed to operators: the forged header changes nothing");
+      const forgedAudit = (await leadStore.getTimelineByLeadId(lead.id)).find((row: any) => row.type === "lead_phone_changed");
+      assert.equal(forgedAudit?.meta?.changedByRole, "operatore", "the author is the session, never the body or a forged header");
       // Direct calls to the lead service (bypassing the gateway) are anonymous whatever the body claims.
       const direct = await apiRequest(leadUrl, "PATCH", `/leads/${lead.id}`, { body: { phone: "+39 333 7654321", __contactActor: { id: "x", username: "x", role: "super_admin" } } });
       assert.equal(direct.status, 403);
       const directPayment = await apiRequest(leadUrl, "PATCH", `/leads/${lead.id}`, { body: { payments: { version: 0, items: [] }, __paymentActor: { id: "x", username: "x", role: "admin" } } });
       assert.equal(directPayment.status, 401, "payment audit identity is not accepted from a direct caller");
-      assert.equal((await leadStore.getLeadById(lead.id)).phone, lead.phone);
+      assert.equal((await leadStore.getLeadById(lead.id)).phone, "+39 333 7654321", "only the authorised gateway edit applied");
     });
   });
 

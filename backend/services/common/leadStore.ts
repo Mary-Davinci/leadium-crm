@@ -155,20 +155,31 @@ export async function findLeadByContact(phone: string, email: string) {
 }
 
 /** Compare-and-set of the phone only; false when the stored phone is no longer `expected`. */
-export async function setLeadPhoneIfUnchanged(leadId: string, expected: string, phone: string, at: string) {
+type ContactValues = Partial<Record<"fullName" | "phone" | "email", string>>;
+
+/** Mongo filter/set for a compare-and-set of contact fields (empty expected = empty or missing). */
+export function contactCompareAndSet(expected: ContactValues, next: ContactValues, at: string) {
+  const filter: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(expected)) filter[key] = value ? value : { $in: ["", null] };
+  const set: Record<string, unknown> = { ...next, updatedAt: at };
+  if (next.phone !== undefined) set.phoneNormalized = normalizePhone(next.phone);
+  if (next.email !== undefined) set.emailNormalized = normalizeEmail(next.email);
+  return { filter, set };
+}
+
+/** Compare-and-set of contact fields only; false when a stored value is no longer `expected`. */
+export async function setLeadContactIfUnchanged(leadId: string, expected: ContactValues, next: ContactValues, at: string) {
   if (!isMongoEnabled()) {
     const db = readDb();
     const lead = db.leads.find((item: any) => item.id === leadId);
-    if (!lead || String(lead.phone || "") !== expected) return false;
-    lead.phone = phone; lead.updatedAt = at;
+    if (!lead || Object.entries(expected).some(([key, value]) => String(lead[key] || "") !== value)) return false;
+    Object.assign(lead, next, { updatedAt: at });
     writeDb(db);
     return true;
   }
   const database = await getMongoDb();
-  const result = await database.collection("leads").updateOne(
-    { _id: leadId, ...(expected ? { phone: expected } : { phone: { $in: ["", null] } }) },
-    { $set: { phone, phoneNormalized: normalizePhone(phone), updatedAt: at } }
-  );
+  const { filter, set } = contactCompareAndSet(expected, next, at);
+  const result = await database.collection("leads").updateOne({ _id: leadId, ...filter }, { $set: set });
   return result.matchedCount === 1;
 }
 

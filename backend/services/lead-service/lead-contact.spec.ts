@@ -96,20 +96,20 @@ async function partialFailureChecks() {
   resetDb();
   const customer = await seedCustomer("+39 333 5550001");
   const lead = await seedLead({ phone: "+39 333 5550001", customerId: customer!.id });
-  const plan = await correction.planLeadPhoneCorrection(lead, "+39 333 5550002", undefined);
+  const plan = await correction.planLeadContactCorrection(lead, { phone: "+39 333 5550002" }, undefined);
   assert.ok(plan.ok && plan.updateCustomer, "sole lead with aligned customer: customer follows automatically");
   if (!plan.ok) return;
-  const real = { setLeadPhone: leadStore.setLeadPhoneIfUnchanged, setCustomerPhone: customerStore.setCustomerPhoneIfUnchanged, appendActivity: async () => {} };
+  const real = { setLeadContact: leadStore.setLeadContactIfUnchanged, setCustomerContact: customerStore.setCustomerContactIfUnchanged, appendActivity: async () => {} };
   const silence = console.error; console.error = () => {};
   try {
-    await assert.rejects(correction.applyLeadPhoneCorrection(plan, lead.id, {}, { ...real, setLeadPhone: async () => { throw new Error("db down"); } }), /nessuna modifica applicata/);
+    await assert.rejects(correction.applyLeadContactCorrection(plan, lead.id, {}, { ...real, setLeadContact: async () => { throw new Error("db down"); } }), /nessuna modifica applicata/);
     assert.equal((await customerStore.getCustomerById(customer!.id))!.phone, "+39 333 5550001", "customer restored when the lead write fails");
-    await assert.rejects(correction.applyLeadPhoneCorrection(plan, lead.id, {}, { ...real, appendActivity: async () => { throw new Error("audit down"); } }), /Audit non disponibile/);
+    await assert.rejects(correction.applyLeadContactCorrection(plan, lead.id, {}, { ...real, appendActivity: async () => { throw new Error("audit down"); } }), /Audit non disponibile/);
     assert.equal((await leadStore.getLeadById(lead.id)).phone, "+39 333 5550001", "lead restored when the audit cannot be written");
     assert.equal((await customerStore.getCustomerById(customer!.id))!.phone, "+39 333 5550001", "customer restored when the audit cannot be written");
     let calls = 0;
-    const brokenUndo = { ...real, setCustomerPhone: async (...args: [string, string, string, string]) => (++calls === 1 ? real.setCustomerPhone(...args) : false), setLeadPhone: async () => { throw new Error("db down"); } };
-    await assert.rejects(correction.applyLeadPhoneCorrection(plan, lead.id, {}, brokenUndo), (error: any) => error.incoherent === true && /verificare manualmente/.test(error.message));
+    const brokenUndo = { ...real, setCustomerContact: async (...args: Parameters<typeof real.setCustomerContact>) => (++calls === 1 ? real.setCustomerContact(...args) : false), setLeadContact: async () => { throw new Error("db down"); } };
+    await assert.rejects(correction.applyLeadContactCorrection(plan, lead.id, {}, brokenUndo), (error: any) => error.incoherent === true && /verificare manualmente/.test(error.message));
   } finally { console.error = silence; }
   console.log("PASS partial failures are compensated; an impossible rollback is reported as incoherent, never as success");
 }
@@ -128,8 +128,8 @@ async function main() {
 
     const forged = await request(baseUrl, "PATCH", `/leads/${lead.id}`, { phone: "+39 333 9998888", __contactActor: ADMIN }, false);
     assert.equal(forged.status, 403, "a direct caller cannot claim an admin identity in the body");
-    const operator = await request(baseUrl, "PATCH", `/leads/${lead.id}`, { phone: "+39 333 9998888", __contactActor: OPERATOR });
-    assert.equal(operator.status, 403);
+    const guest = await request(baseUrl, "PATCH", `/leads/${lead.id}`, { phone: "+39 333 9998888", __contactActor: { ...OPERATOR, role: "ospite" } });
+    assert.equal(guest.status, 403, "only signed-in CRM roles");
     assert.equal((await request(baseUrl, "PATCH", `/leads/${lead.id}`, { phone: "333 9998888", __contactActor: ADMIN })).status, 400, "national format is ambiguous");
     assert.equal((await request(baseUrl, "PATCH", `/leads/${lead.id}`, { phone: "+39 333 9998888", notes: "x", __contactActor: ADMIN })).status, 400, "phone is corrected alone");
     const conflict = await request(baseUrl, "PATCH", `/leads/${lead.id}`, { phone: "0039 333 3334444", __contactActor: ADMIN });
@@ -157,7 +157,7 @@ async function main() {
     assert.deepEqual({ customerId: inbound.customerId, leadId: inbound.leadId }, { customerId: lead.customerId, leadId: lead.id });
     const outbound = await leadStore.getLeadById(lead.id);
     assert.equal(outbound.phone, "+39 333 9998888", "calls and outbound messages use the corrected lead phone");
-    console.log("PASS correction: admin only, forged identity ignored, conflict without merge, customer follows, audited, WhatsApp resolves");
+    console.log("PASS correction: CRM roles only, forged identity ignored, conflict without merge, customer follows, audited, WhatsApp resolves");
 
     // --- Shared or discordant customer: explicit choice --------------------------------------
     const shared = await seedCustomer("+39 347 1000001");
@@ -187,6 +187,43 @@ async function main() {
     assert.equal(customerClash.status, 409);
     assert.equal(customerClash.body.code, "phone_conflict_customer");
     console.log("PASS shared/discordant customer needs an explicit choice; another customer's number is a conflict");
+
+    // --- Name and email, by an operator ------------------------------------------------------
+    const named = await request(baseUrl, "POST", "/leads", { fullName: "Anna Verdi", phone: "+39 333 7001001", email: "anna@example.test", __creator: ADMIN });
+    assert.equal(named.status, 201);
+    const nl = named.body;
+    assert.equal((await request(baseUrl, "PATCH", `/leads/${nl.id}`, { fullName: "   ", __contactActor: OPERATOR })).status, 400, "name and surname are required");
+    const badEmail = await request(baseUrl, "PATCH", `/leads/${nl.id}`, { email: "anna@", __contactActor: OPERATOR });
+    assert.equal(badEmail.status, 400); assert.equal(badEmail.body.field, "email");
+    assert.equal((await request(baseUrl, "PATCH", `/leads/${nl.id}`, { fullName: "Anna Bianchi", notes: "x", __contactActor: OPERATOR })).status, 400, "contact data are corrected alone");
+    assert.equal((await request(baseUrl, "PATCH", `/leads/${nl.id}`, { fullName: "Anna Bianchi" }, false)).status, 403, "no anonymous rename through the generic patch");
+    const renamed = await request(baseUrl, "PATCH", `/leads/${nl.id}`, { fullName: "  Anna   Maria Verdi ", email: "anna.verdi@example.test", phone: "+39 333 7001001", __contactActor: OPERATOR, actor: "spoofed" });
+    assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+    assert.equal(renamed.body.fullName, "Anna Maria Verdi");
+    assert.equal(renamed.body.email, "anna.verdi@example.test");
+    assert.equal(renamed.body.phone, "+39 333 7001001", "an unchanged phone is not touched");
+    const renamedCustomer = (await customerStore.getCustomerById(nl.customerId))!;
+    assert.deepEqual([renamedCustomer.fullName, renamedCustomer.email], ["Anna Maria Verdi", "anna.verdi@example.test"], "sole, aligned customer follows");
+    const contactAudit = (await leadStore.getTimelineByLeadId(nl.id)).filter((row: any) => row.type === "lead_contact_changed");
+    assert.equal(contactAudit.length, 1);
+    assert.equal(contactAudit[0].actor, OPERATOR.username, "author from the verified session");
+    assert.deepEqual(contactAudit[0].meta.changes, { fullName: { from: "Anna Verdi", to: "Anna Maria Verdi" }, email: { from: "anna@example.test", to: "anna.verdi@example.test" } });
+    assert.equal(contactAudit[0].meta.changedByRole, "operatore");
+    await request(baseUrl, "POST", "/leads", { fullName: "Carla Neri", phone: "+39 333 7002002", email: "carla@example.test", __creator: ADMIN });
+    const emailClash = await request(baseUrl, "PATCH", `/leads/${nl.id}`, { email: "CARLA@example.test", __contactActor: OPERATOR });
+    assert.equal(emailClash.status, 409); assert.equal(emailClash.body.code, "email_conflict_lead");
+    assert.equal((await leadStore.getLeadById(nl.id)).email, "anna.verdi@example.test", "refused corrections have no side effects");
+    const cleared = await request(baseUrl, "PATCH", `/leads/${nl.id}`, { email: "", __contactActor: OPERATOR });
+    assert.equal(cleared.status, 200); assert.equal(cleared.body.email, "");
+    assert.equal((await customerStore.getCustomerById(nl.customerId))!.email, "", "the customer follows a cleared email too");
+    const sharedNameCustomer = await customerStore.findOrCreateCustomerByContact({ phone: "+39 347 7003003", email: "", fullName: "Paolo Gialli" });
+    const p1 = await seedLead({ phone: "+39 347 7003003", fullName: "Paolo Gialli", customerId: sharedNameCustomer!.id });
+    await seedLead({ phone: "+39 347 7003003", fullName: "Paolo Gialli", customerId: sharedNameCustomer!.id, closingOutcome: "lost", status: "Perso" });
+    const nameChoice = await request(baseUrl, "PATCH", `/leads/${p1.id}`, { fullName: "Paolo Gialli Rossi", __contactActor: OPERATOR });
+    assert.equal(nameChoice.status, 409); assert.equal(nameChoice.body.code, "customer_choice_required");
+    assert.equal((await request(baseUrl, "PATCH", `/leads/${p1.id}`, { fullName: "Paolo Gialli Rossi", customerScope: "lead_and_customer", __contactActor: OPERATOR })).status, 200);
+    assert.equal((await customerStore.getCustomerById(sharedNameCustomer!.id))!.fullName, "Paolo Gialli Rossi");
+    console.log("PASS name/email: operator allowed, validated, conflict without merge, customer follows or needs a choice, audited");
 
     // --- Duplicate on creation ----------------------------------------------------------------
     const ambiguous = await request(baseUrl, "POST", "/leads", { fullName: "Senza paese", phone: "333 3334444", __creator: ADMIN });

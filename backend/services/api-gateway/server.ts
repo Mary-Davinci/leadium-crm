@@ -1090,9 +1090,9 @@ export const server = http.createServer(async (req, res) => {
         await forwardUpstreamResponse(res, upstream);
         return;
       }
-      // Contact identity is never client-supplied: only the session can authorize a phone edit.
-      if (Object.prototype.hasOwnProperty.call(body, "phone")) {
-        if (!isAdmin(session.user)) return sendJson(res, 403, { error: "Solo admin e super admin possono modificare il telefono del lead." });
+      // Contact data (name, phone, email): admins and operators; the author always comes from the
+      // session, and operators stay out of admin-reserved practices (checked just below).
+      if (["fullName", "phone", "email"].some((key) => Object.prototype.hasOwnProperty.call(body, key))) {
         body.__contactActor = { id: session.user.id, username: session.user.username, role: session.user.role };
         body.actor = session.user.username;
       }

@@ -1,6 +1,6 @@
 import { getMongoDb, isMongoEnabled } from "./mongo";
 import { newId, readDb, writeDb } from "./jsonStore";
-import { normalizeEmail, normalizePhone } from "./leadStore";
+import { contactCompareAndSet, normalizeEmail, normalizePhone } from "./leadStore";
 import { phoneMatchKeys } from "./phoneIdentity";
 
 export type CustomerRecord = {
@@ -67,22 +67,32 @@ export async function findCustomerByContact(phone: string, email: string): Promi
   return fromCustomerDoc(doc);
 }
 
-/** Compare-and-set of the phone only; false when the stored phone is no longer `expected`. */
-export async function setCustomerPhoneIfUnchanged(customerId: string, expected: string, phone: string, at: string) {
+/** Compare-and-set of contact fields only; false when a stored value is no longer `expected`. */
+export async function setCustomerContactIfUnchanged(customerId: string, expected: Partial<Record<"fullName" | "phone" | "email", string>>, next: Partial<Record<"fullName" | "phone" | "email", string>>, at: string) {
   if (!isMongoEnabled()) {
     const db = readDb();
     const customer = (db.customers || []).find((item: any) => item.id === customerId);
-    if (!customer || String(customer.phone || "") !== expected) return false;
-    customer.phone = phone; customer.updatedAt = at;
+    if (!customer || Object.entries(expected).some(([key, value]) => String(customer[key] || "") !== value)) return false;
+    Object.assign(customer, next, { updatedAt: at });
     writeDb(db);
     return true;
   }
   const db = await getMongoDb();
-  const result = await db.collection("customers").updateOne(
-    { _id: customerId, ...(expected ? { phone: expected } : { phone: { $in: ["", null] } }) },
-    { $set: { phone, phoneNormalized: normalizePhone(phone), updatedAt: at } }
-  );
+  const { filter, set } = contactCompareAndSet(expected, next, at);
+  const result = await db.collection("customers").updateOne({ _id: customerId, ...filter }, { $set: set });
   return result.matchedCount === 1;
+}
+
+/** Every customer with this email (case-insensitive). Used for conflict detection only. */
+export async function listCustomersByEmail(email: string, limit = 20): Promise<CustomerRecord[]> {
+  const key = normalizeEmail(email);
+  if (!key) return [];
+  if (!isMongoEnabled()) {
+    return (readDb().customers || []).filter((customer: any) => normalizeEmail(customer.email) === key).slice(0, limit);
+  }
+  const db = await getMongoDb();
+  const docs = await db.collection("customers").find({ emailNormalized: key }).limit(limit).toArray();
+  return docs.map(fromCustomerDoc).filter(Boolean) as CustomerRecord[];
 }
 
 /** Every customer whose phone matches (country-aware keys). Used for conflict detection only. */

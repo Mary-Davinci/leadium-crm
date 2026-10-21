@@ -18,13 +18,13 @@ import {
   listLeadsByContact,
   saveLead,
   savePaymentPlan,
-  setLeadPhoneIfUnchanged
+  setLeadContactIfUnchanged
 } from "../common/leadStore";
 import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listAllCallLogs, listCallLogs, listCallLogsByLeadId } from "../common/callStore";
 import { createTask, findRecentManualDuplicate, getTaskById, listTasks, listTasksByLeadAndKind, saveTask, TaskRecord } from "../common/taskStore";
-import { findOrCreateCustomerByContact, setCustomerPhoneIfUnchanged } from "../common/customerStore";
+import { findOrCreateCustomerByContact, setCustomerContactIfUnchanged } from "../common/customerStore";
 import { isInternalIdentityRequest } from "../common/internalCapability";
-import { applyLeadPhoneCorrection, ContactCorrectionError, planLeadPhoneCorrection } from "../common/contactCorrection";
+import { applyLeadContactCorrection, CONTACT_FIELDS, ContactCorrectionError, ContactField, planLeadContactCorrection } from "../common/contactCorrection";
 import { createPurchase, listAllPurchases, PurchaseRecord } from "../common/purchaseStore";
 import { isActiveLeadInvariantSatisfied } from "../common/leadInvariants";
 import { resolveLeadAssociationForPhone, tryHandleCustomerRoutes } from "./customer-routes";
@@ -203,42 +203,48 @@ function requiresExplicitLossReason(status: string) {
 }
 
 /**
- * Admin phone correction (actor injected by the gateway from the verified session, trusted only
- * with the internal capability). Sent alone; planning and compensated writes live in
- * common/contactCorrection. leadId, customerId, calls and WhatsApp threads keep their links.
+ * Contact correction (name, phone, email) by an admin or an operator; the actor is injected by
+ * the gateway from the verified session and trusted only with the internal capability. Sent
+ * alone; planning and compensated writes live in common/contactCorrection. leadId, customerId,
+ * calls and WhatsApp threads keep their links.
  */
-async function handleLeadPhoneCorrection(res: http.ServerResponse, lead: any, body: any) {
+const CONTACT_FIELD_LABELS: Record<ContactField, string> = { fullName: "Nome", phone: "Telefono", email: "Email" };
+async function handleLeadContactCorrection(res: http.ServerResponse, lead: any, body: any) {
   const actor = body.__contactActor;
-  if (!actor || !["admin", "super_admin"].includes(String(actor.role)) || !actor.id || !actor.username) {
-    return sendJson(res, 403, { error: "Solo admin e super admin possono modificare il telefono del lead." });
+  if (!actor || !["admin", "super_admin", "operatore"].includes(String(actor.role)) || !actor.id || !actor.username) {
+    return sendJson(res, 403, { error: "Modifica dei dati di contatto non autorizzata." });
   }
-  const allowed = new Set(["phone", "customerPhoneScope", "__contactActor", "actor"]);
+  const allowed = new Set([...CONTACT_FIELDS, "customerScope", "customerPhoneScope", "__contactActor", "actor"]);
   if (Object.keys(body).some((key) => !allowed.has(key))) {
-    return sendJson(res, 400, { error: "Modifica il telefono separatamente dagli altri dati della pratica." });
+    return sendJson(res, 400, { error: "Modifica i dati di contatto separatamente dagli altri dati della pratica." });
   }
-  const plan = await planLeadPhoneCorrection(lead, body.phone, body.customerPhoneScope);
+  // customerPhoneScope: name used by clients built for the phone-only correction.
+  const plan = await planLeadContactCorrection(lead, body, body.customerScope ?? body.customerPhoneScope);
   if (plan.ok === false) return sendJson(res, plan.status, plan.body);
   if (plan.noop) return sendJson(res, 200, safeLead(lead));
-  const customerNote = plan.updateCustomer ? " Aggiornata anche la scheda cliente." : plan.customer ? " Scheda cliente NON modificata (scelta admin): il riconoscimento WhatsApp in arrivo usa ancora il numero del cliente." : " Nessuna scheda cliente collegata.";
-  const activity = createActivity({
-    leadId: lead.id,
-    type: "lead_phone_changed",
-    text: `Telefono modificato da ${plan.previousPhone || "-"} a ${plan.phone}.${customerNote}`,
-    actor: String(actor.username),
-    meta: {
-      previousPhone: plan.previousPhone,
-      newPhone: plan.phone,
-      changedById: String(actor.id),
-      changedByRole: String(actor.role),
-      customerId: plan.customer?.id || null,
-      customerUpdated: plan.updateCustomer,
-      ...(plan.updateCustomer ? { previousCustomerPhone: plan.customer?.phone || "" } : {})
-    }
-  });
+  const customerNote = plan.updateCustomer ? " Aggiornata anche la scheda cliente." : plan.customer ? " Scheda cliente NON modificata (scelta esplicita): resta con i dati precedenti." : " Nessuna scheda cliente collegata.";
+  const audit = { changedById: String(actor.id), changedByRole: String(actor.role), customerId: plan.customer?.id || null, customerUpdated: plan.updateCustomer };
+  const phoneOnly = plan.changed.length === 1 && plan.changed[0] === "phone";
+  const activity = phoneOnly
+    ? createActivity({
+      leadId: lead.id,
+      type: "lead_phone_changed",
+      text: `Telefono modificato da ${plan.previous.phone || "-"} a ${plan.next.phone}.${customerNote}`,
+      actor: String(actor.username),
+      meta: { previousPhone: plan.previous.phone, newPhone: plan.next.phone, ...audit,
+        ...(plan.updateCustomer ? { previousCustomerPhone: plan.customer?.phone || "" } : {}) }
+    })
+    : createActivity({
+      leadId: lead.id,
+      type: "lead_contact_changed",
+      text: `Dati di contatto modificati: ${plan.changed.map((field) => `${CONTACT_FIELD_LABELS[field]} da "${plan.previous[field] || "-"}" a "${plan.next[field] || "-"}"`).join("; ")}.${customerNote}`,
+      actor: String(actor.username),
+      meta: { changes: Object.fromEntries(plan.changed.map((field) => [field, { from: plan.previous[field] || "", to: plan.next[field] || "" }])), ...audit }
+    });
   try {
-    await applyLeadPhoneCorrection(plan, lead.id, activity, {
-      setLeadPhone: setLeadPhoneIfUnchanged,
-      setCustomerPhone: setCustomerPhoneIfUnchanged,
+    await applyLeadContactCorrection(plan, lead.id, activity, {
+      setLeadContact: setLeadContactIfUnchanged,
+      setCustomerContact: setCustomerContactIfUnchanged,
       appendActivity: (row) => appendActivities([row])
     });
   } catch (error) {
@@ -1957,7 +1963,8 @@ export const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const lead = await getLeadById(leadByIdParams.leadId);
       if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
-      if (Object.prototype.hasOwnProperty.call(body, "phone")) return await handleLeadPhoneCorrection(res, lead, body);
+      // Name, phone and email only through the checked correction (conflicts, customer card, audit).
+      if (CONTACT_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(body, field))) return await handleLeadContactCorrection(res, lead, body);
       if (Object.prototype.hasOwnProperty.call(body, "payments")) {
         const allowed = new Set(["payments", "actor", "paymentReason", "__paymentActor"]);
         if (Object.keys(body).some(key => !allowed.has(key))) throw new PaymentError(400, "Salva i pagamenti separatamente dagli altri dati della pratica.");
@@ -2021,7 +2028,7 @@ export const server = http.createServer(async (req, res) => {
         }
         lead.whatsappAutomation = next;
       }
-      for (const key of ["fullName", "phone", "email", "source", "budget", "assignedTo", "notes"]) {
+      for (const key of ["source", "budget", "assignedTo", "notes"]) {
         if (Object.prototype.hasOwnProperty.call(body, key)) lead[key] = body[key];
       }
       if (Object.prototype.hasOwnProperty.call(body, "sourceLeadId")) lead.sourceLeadId = cleanOptionalString(body.sourceLeadId);
@@ -2050,7 +2057,7 @@ export const server = http.createServer(async (req, res) => {
       const hasNotesUpdate = Object.prototype.hasOwnProperty.call(body, "notes");
       const hasDocumentsUpdate = Object.prototype.hasOwnProperty.call(body, "documents");
       const hasLeadFieldUpdate =
-        ["fullName", "phone", "email", "source", "budget", "assignedTo"].some((key) => Object.prototype.hasOwnProperty.call(body, key)) ||
+        ["source", "budget", "assignedTo"].some((key) => Object.prototype.hasOwnProperty.call(body, key)) ||
         ["sourceLeadId", "sourcePlatform", "sourceCampaignId", "sourceFormId", "assignedAt", "firstContactAt", "lastContactAt", "slaDueAt", "practiceReview", "closingOutcome", "lossReason", "lossDetail"].some((key) =>
           Object.prototype.hasOwnProperty.call(body, key)
         );
