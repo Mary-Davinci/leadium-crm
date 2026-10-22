@@ -321,6 +321,40 @@ async function geometry(page) {
       await fetch(fixture.gatewayUrl+'/api/leads/native-fixture/assign',{method:'POST',headers:{Authorization:'Bearer native-admin','Content-Type':'application/json'},body:JSON.stringify({userId:'u-giuseppe-r'})});
       console.log('PASS '+width+'px assign dialog: real operators, homonyms distinct, cancel/no change, error keeps dialog, keyboard select+confirm, notice, visible to Giuseppe after reload');
     }
+    {
+      // Booking report: a real call outcome, then the Excel and CSV downloads read back as files.
+      const recorded=await fetch(fixture.gatewayUrl+'/api/leads/native-fixture/calls',{method:'POST',headers:{Authorization:'Bearer native-admin','Content-Type':'application/json'},
+        body:JSON.stringify({disposition:'interested',note:'Richiamare; dopo\nle 18',startedAt:'2026-10-20T08:15:00.000Z',endedAt:'2026-10-20T08:20:00.000Z',idempotencyKey:'booking-report-uat'})});
+      assert.ok(recorded.ok,'call outcome recorded: '+recorded.status);
+      const page=await browser.newPage({viewport:{width:1280,height:900},acceptDownloads:true});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+      await page.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-admin');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.admin);
+      await page.goto(fixture.frontUrl+'/reports/booking-activities');
+      const [xlsxDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Esporta Excel'}).click()]);
+      assert.equal(xlsxDownload.suggestedFilename(),'booking-activities.xlsx');
+      const xlsxPath=path.join(os.tmpdir(),'leadium-booking-uat.xlsx');await xlsxDownload.saveAs(xlsxPath);
+      const XLSX=require(path.join(__dirname,'..','node_modules','xlsx'));
+      const sheet=XLSX.readFile(xlsxPath,{cellNF:true}).Sheets['Attivita booking'];
+      const table=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false});
+      assert.deepEqual(table[0].slice(0,6),['Operatore','Cliente','Lead/Pratica','Data','Ora','Numero contatto']);
+      const line=table.find(r=>r[1]==='Cliente Native Fixture');assert.ok(line,'the recorded call is exported');
+      const rowIndex=table.indexOf(line)+1;
+      assert.equal(sheet['D'+rowIndex].t,'n','Data is a real Excel date');assert.equal(sheet['D'+rowIndex].w,'20/10/2026');
+      assert.equal(sheet['E'+rowIndex].v,'10:15','Ora in Italian time (08:15 UTC)');
+      assert.equal(sheet['F'+rowIndex].t,'s','phone stays text');assert.match(String(sheet['F'+rowIndex].v),/^\+39\d{9,10}$/,'phone in +39 form, digits kept (number changed by the contact checks above)');
+      assert.equal(sheet['I'+rowIndex].v,'Richiamare; dopo le 18','note on one line');
+      const [csvDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'CSV (altri programmi)'}).click()]);
+      const csvPath=path.join(os.tmpdir(),'leadium-booking-uat.csv');await csvDownload.saveAs(csvPath);
+      const csvLines=fs.readFileSync(csvPath,'utf8').replace(/^\uFEFF/,'').split('\r\n');
+      assert.ok(csvLines[0].startsWith('Operatore;Cliente;'),'Italian Excel separator');
+      assert.ok(csvLines.some(l=>l.includes(';Cliente Native Fixture;')&&l.includes('"Richiamare; dopo le 18"')),'a field containing ; stays in one column');
+      await page.screenshot({path:path.join(os.tmpdir(),'leadium-booking-report-1280.png')});
+      // Gestione operativa: per-operator load shows practices and open tasks separately.
+      await page.goto(fixture.frontUrl+'/tasks');
+      await page.locator('.ops-operator-stack').getByText(/\d+ pratich[ea] · \d+ attivit/).first().waitFor();
+      await page.screenshot({path:path.join(os.tmpdir(),'leadium-operations-1280.png')});
+      assert.deepEqual(errors,[]);await page.close();
+      console.log('PASS booking report: Excel with real dates, text phones, one-line notes; CSV with ";"; operations load shows practices and tasks');
+    }
   } finally {
     if(browser)await browser.close();
     if(child.exitCode===null&&child.signalCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await exited;}

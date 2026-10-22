@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { apiUrl } from "../lib/api-url";
 import { getAuthToken } from "../lib/auth";
 import { ReportTabs } from "../features/reports/components/ReportTabs";
+import { buildBookingWorkbook, type BookingReportRow } from "../features/reports/booking-excel";
 import "../styles/report-page.css";
 import "../styles/booking-report-page.css";
 
@@ -28,26 +29,6 @@ const EMPTY_FILTERS: BookingReportFilters = {
   canale: "",
   esito: "",
   statoLead: ""
-};
-
-type BookingReportRow = {
-  operatore: string;
-  cliente: string;
-  leadId: string;
-  data: string;
-  ora: string;
-  numeroContatto: string;
-  tipoAttivita: string;
-  esito: string;
-  note: string;
-  appuntamento: string;
-  preventivo: string;
-  motivoPerdita: string;
-  campagna: string;
-  prodotto: string;
-  prossimaAzione: string;
-  canale: string;
-  statoLead: string;
 };
 
 type BookingReportResponse = {
@@ -160,6 +141,27 @@ export function BookingReportPage() {
     }
   }, [buildQuery]);
 
+  // Excel export (main format for the booking team): real dates, everything else as text, so phone
+  // numbers keep their digits instead of turning into 3,93E+11 and nothing becomes a formula.
+  const exportExcel = useCallback(async () => {
+    setExporting(true);
+    setError("");
+    try {
+      const params = buildQuery();
+      params.set("full", "1");
+      const [response, XLSX] = await Promise.all([
+        api<BookingReportResponse>(`/api/report/booking-activities?${params.toString()}`),
+        import("xlsx")
+      ]);
+      const workbook = buildBookingWorkbook(XLSX, response.rows);
+      XLSX.writeFile(workbook, "booking-activities.xlsx");
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : "Esportazione Excel non riuscita.");
+    } finally {
+      setExporting(false);
+    }
+  }, [buildQuery]);
+
   function resetFilters() {
     setFilters(EMPTY_FILTERS);
     setResult(null);
@@ -262,8 +264,11 @@ export function BookingReportPage() {
           <button type="button" className="bkr-btn bkr-btn-primary" onClick={() => void runSearch()} disabled={loading}>
             {loading ? "Ricerca..." : "Cerca"}
           </button>
+          <button type="button" className="bkr-btn" onClick={() => void exportExcel()} disabled={exporting}>
+            {exporting ? "Esportazione..." : "Esporta Excel"}
+          </button>
           <button type="button" className="bkr-btn" onClick={() => void exportCsv()} disabled={exporting}>
-            {exporting ? "Esportazione..." : "Esporta CSV"}
+            CSV (altri programmi)
           </button>
         </div>
 

@@ -1587,7 +1587,8 @@ export const server = http.createServer(async (req, res) => {
       const filteredRows = filterBookingActivityRows(allRows, filters);
 
       if (pathname === "/report/booking-activities/csv") {
-        const csv = rowsToCsv(BOOKING_ACTIVITY_HEADERS, buildBookingActivityCsvRows(filteredRows));
+        // ";" is the list separator Italian Excel expects: with "," every row lands in column A.
+        const csv = rowsToCsv(BOOKING_ACTIVITY_HEADERS, buildBookingActivityCsvRows(filteredRows), ";");
         res.writeHead(200, {
           "Content-Type": "text/csv; charset=utf-8",
           "Content-Disposition": `attachment; filename="booking-activities.csv"`
@@ -1595,7 +1596,9 @@ export const server = http.createServer(async (req, res) => {
         res.end(csv);
         return;
       }
-      return sendJson(res, 200, { count: filteredRows.length, rows: filteredRows.slice(0, 500) });
+      // full=1 returns every row (Excel export); the on-screen preview stays capped.
+      const limit = query.full === "1" ? filteredRows.length : 500;
+      return sendJson(res, 200, { count: filteredRows.length, rows: filteredRows.slice(0, limit) });
     }
 
     if (method === "POST" && pathname === "/leads") {

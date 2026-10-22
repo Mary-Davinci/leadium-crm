@@ -57,6 +57,58 @@ const OUTCOME_LABELS: Record<string, string> = {
 
 const QUOTE_OUTCOMES = new Set(["quote_required", "quote_sent"]);
 
+// Report values come from hand-typed and imported data (newlines in notes, stray tabs, phones
+// written every possible way), so every cell is normalized here once, for the preview, the CSV
+// and the Excel export alike.
+const ROME_PARTS = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Rome",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23"
+});
+
+function romeParts(value: unknown) {
+  const date = value ? new Date(String(value)) : null;
+  if (!date || !Number.isFinite(date.getTime())) return null;
+  const parts = Object.fromEntries(ROME_PARTS.formatToParts(date).map((part) => [part.type, part.value]));
+  return { isoDate: `${parts.year}-${parts.month}-${parts.day}`, itDate: `${parts.day}/${parts.month}/${parts.year}`, time: `${parts.hour}:${parts.minute}` };
+}
+
+/** Italian date + time in Europe/Rome ("10/03/2026 10:00"), or "" for missing/invalid input. */
+export function formatReportDateTime(value: unknown) {
+  const parts = romeParts(value);
+  return parts ? `${parts.itDate} ${parts.time}` : "";
+}
+
+/** One-line, trimmed text: newlines/tabs become spaces, control characters are dropped. */
+export function cleanReportText(value: unknown) {
+  return String(value ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * One international form per number, never an invented prefix:
+ * "+39 333-123 4567" / "0039 333..." -> "+393331234567"; Italian national mobile (3...) and
+ * landline (0...) get +39; WhatsApp ids ("39" + 9-10 digits) get "+"; any other shape stays
+ * digits only; nothing without digits -> "".
+ */
+export function cleanReportPhone(value: unknown) {
+  const raw = String(value ?? "").trim();
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
+  if (raw.startsWith("+")) return `+${digits}`;
+  if (digits.startsWith("00")) return `+${digits.slice(2)}`;
+  if (/^3\d{8,9}$/.test(digits) || /^0\d{5,10}$/.test(digits)) return `+39${digits}`;
+  if (/^39\d{9,10}$/.test(digits)) return `+${digits}`;
+  return digits;
+}
+
 export const BOOKING_ACTIVITY_HEADERS = [
   "Operatore",
   "Cliente",
@@ -95,27 +147,27 @@ export function buildBookingActivityRows(
     if (!lead) continue;
     const purchases = purchasesByLeadId.get(call.leadId) || [];
     const latestPurchase = purchases[0] || null;
-    const startedAt = new Date(call.startedAt);
-    const hasValidDate = Number.isFinite(startedAt.getTime());
-    const outcome = String(call.outcome || "");
+    // Date/time in Italian local time: toISOString() would be UTC, one or two hours early.
+    const started = romeParts(call.startedAt);
+    const outcome = cleanReportText(call.outcome);
     rows.push({
-      operatore: String(call.actor || ""),
-      cliente: String(lead.fullName || ""),
-      leadId: String(lead.id || ""),
-      data: hasValidDate ? startedAt.toISOString().slice(0, 10) : "",
-      ora: hasValidDate ? startedAt.toISOString().slice(11, 16) : "",
-      numeroContatto: String(lead.phone || ""),
+      operatore: cleanReportText(call.actor),
+      cliente: cleanReportText(lead.fullName),
+      leadId: cleanReportText(lead.id),
+      data: started ? started.isoDate : "",
+      ora: started ? started.time : "",
+      numeroContatto: cleanReportPhone(lead.phone),
       tipoAttivita: "Chiamata",
       esito: OUTCOME_LABELS[outcome] || outcome,
-      note: String(call.note || ""),
-      appuntamento: outcome === "appointment_set" ? String(lead.nextActionAt || "") : "",
+      note: cleanReportText(call.note),
+      appuntamento: outcome === "appointment_set" ? formatReportDateTime(lead.nextActionAt) : "",
       preventivo: QUOTE_OUTCOMES.has(outcome) ? "Si" : "",
-      motivoPerdita: String(lead.lossReason || ""),
-      campagna: String(lead.sourceCampaignId || lead.sourcePlatform || ""),
-      prodotto: String(latestPurchase?.product || ""),
-      prossimaAzione: String(lead.nextActionAt || ""),
-      canale: String(call.source || ""),
-      statoLead: String(lead.status || "")
+      motivoPerdita: cleanReportText(lead.lossReason),
+      campagna: cleanReportText(lead.sourceCampaignId || lead.sourcePlatform),
+      prodotto: cleanReportText(latestPurchase?.product),
+      prossimaAzione: formatReportDateTime(lead.nextActionAt),
+      canale: cleanReportText(call.source),
+      statoLead: cleanReportText(lead.status)
     });
   }
   return rows.sort((a, b) => `${b.data}${b.ora}`.localeCompare(`${a.data}${a.ora}`));
@@ -144,12 +196,13 @@ export function filterBookingActivityRows(rows: BookingActivityRow[], filters: B
   });
 }
 
+// Shared by the CSV and the Excel export so both always have the same columns in the same order.
 export function buildBookingActivityCsvRows(rows: BookingActivityRow[]): Array<Array<string>> {
   return rows.map((row) => [
     row.operatore,
     row.cliente,
     row.leadId,
-    row.data,
+    row.data ? row.data.split("-").reverse().join("/") : "",
     row.ora,
     row.numeroContatto,
     row.tipoAttivita,

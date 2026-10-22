@@ -40,14 +40,47 @@ function buildCallLog(overrides: Record<string, unknown> = {}) {
 }
 
 function main() {
+  runCase("dati sporchi: note su piu righe, spazi e telefoni scritti a mano vengono normalizzati", () => {
+    const rows = report.buildBookingActivityRows(
+      [buildCallLog({ note: "  Richiamare\r\ndopo le 18\t\tse possibile  ", actor: " operatore1 \n" })],
+      new Map([["lead_1", buildLead({ fullName: "Mario\nRossi", phone: "333-123 4567", nextActionAt: "non una data" })]]),
+      new Map()
+    );
+    assert.equal(rows[0].note, "Richiamare dopo le 18 se possibile");
+    assert.equal(rows[0].operatore, "operatore1");
+    assert.equal(rows[0].cliente, "Mario Rossi");
+    assert.equal(rows[0].numeroContatto, "+393331234567");
+    assert.equal(rows[0].prossimaAzione, "", "una data non valida diventa vuota invece di finire grezza nel file");
+  });
+
+  runCase("telefoni: 0039 e prefissi esteri restano corretti, senza cifre diventa vuoto", () => {
+    assert.equal(report.cleanReportPhone("0039 333 1234567"), "+393331234567");
+    assert.equal(report.cleanReportPhone("+44 7700 900123"), "+447700900123");
+    assert.equal(report.cleanReportPhone("n/d"), "");
+    assert.equal(report.cleanReportPhone("06 1234567"), "+39061234567", "un fisso nazionale riceve +39, non diventa +06...");
+    assert.equal(report.cleanReportPhone("393331234567"), "+393331234567", "id WhatsApp (39 + numero) riceve solo il +");
+    assert.equal(report.cleanReportPhone("12345"), "12345", "forma sconosciuta: solo cifre, nessun prefisso inventato");
+  });
+
+  runCase("valori mancanti (null/undefined) non fanno fallire il report", () => {
+    const rows = report.buildBookingActivityRows(
+      [buildCallLog({ note: null, actor: undefined, startedAt: null, outcome: null })],
+      new Map([["lead_1", buildLead({ fullName: null, phone: undefined, status: null })]]),
+      new Map()
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].data, "");
+    assert.equal(rows[0].note, "");
+  });
+
   runCase("costruisce una riga per ogni call log con i dati del lead collegato", () => {
     const rows = report.buildBookingActivityRows([buildCallLog()], new Map([["lead_1", buildLead()]]), new Map());
     assert.equal(rows.length, 1);
     assert.equal(rows[0].operatore, "operatore1");
     assert.equal(rows[0].cliente, "Mario Rossi");
-    assert.equal(rows[0].numeroContatto, "+39 333 1234567");
+    assert.equal(rows[0].numeroContatto, "+393331234567");
     assert.equal(rows[0].data, "2026-03-01");
-    assert.equal(rows[0].ora, "10:30");
+    assert.equal(rows[0].ora, "11:30", "l'ora deve essere in ora italiana (10:30 UTC = 11:30 a Roma in inverno)");
     assert.equal(rows[0].esito, "Interessato");
     assert.equal(rows[0].campagna, "camp_estate");
   });
@@ -69,7 +102,7 @@ function main() {
 
   runCase("popola 'appuntamento' solo per l'esito appointment_set, usando nextActionAt del lead", () => {
     const rows = report.buildBookingActivityRows([buildCallLog({ outcome: "appointment_set" })], new Map([["lead_1", buildLead()]]), new Map());
-    assert.equal(rows[0].appuntamento, "2026-03-10T09:00:00.000Z");
+    assert.equal(rows[0].appuntamento, "10/03/2026 10:00");
   });
 
   runCase("recupera 'prodotto' dall'acquisto piu recente collegato al lead", () => {
@@ -164,6 +197,13 @@ function main() {
     const filtered = report.filterBookingActivityRows(rows, { statoLead: "Persa" });
     assert.equal(filtered.length, 1);
     assert.equal(filtered[0].leadId, "lead_1");
+  });
+
+  runCase("CSV con \";\" (Excel italiano): un campo con \";\" resta in una colonna, la virgola non va quotata", () => {
+    const { rowsToCsv } = require("../common/csv") as typeof import("../common/csv");
+    const csv = rowsToCsv(["A", "B"], [["uno; due", "tre, quattro"]], ";");
+    assert.equal(csv.split("\r\n")[1], "\"uno; due\";tre, quattro");
+    assert.equal(rowsToCsv(["A"], [["x, y"]]).split("\r\n")[1], "\"x, y\"", "il separatore di default resta la virgola per gli altri export");
   });
 
   runCase("le righe CSV rispettano l'ordine degli header dichiarati (nessuna colonna scambiata)", () => {
