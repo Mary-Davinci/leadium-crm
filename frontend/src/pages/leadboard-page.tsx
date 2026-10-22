@@ -23,6 +23,7 @@ type Lead = {
   source?: string;
   assignedTo?: string;
   status: string;
+  closingOutcome?: "open" | "won" | "lost" | "disqualified";
   createdAt?: string;
   updatedAt?: string;
 };
@@ -36,8 +37,11 @@ type OperatorOption = {
   key: string;
   username: string;
   label: string;
+  // Open TASKS (an assigned lead spawns several: SLA, next action, documents, payments)...
   openCount: number;
   overdueCount: number;
+  // ...versus open PRACTICES owned, which is what "N lead assigned" means to an operator.
+  leadCount: number;
 };
 
 type DataFilter = "all" | "complete" | "missing-phone" | "missing-email";
@@ -195,6 +199,13 @@ export function LeadBoardPage() {
   const operatorChoices = useMemo<OperatorOption[]>(() => {
     const openByAssignee = new Map<string, number>();
     const overdueByAssignee = new Map<string, number>();
+    const leadsByAssignee = new Map<string, number>();
+
+    leads.forEach((lead) => {
+      const assignedKey = normalizeKey(lead.assignedTo);
+      if (!assignedKey || (lead.closingOutcome || "open") !== "open") return;
+      leadsByAssignee.set(assignedKey, (leadsByAssignee.get(assignedKey) || 0) + 1);
+    });
 
     tasks.forEach((task) => {
       if (task.status !== "open") return;
@@ -212,16 +223,19 @@ export function LeadBoardPage() {
         const openCount = (openByAssignee.get(usernameKey) || 0) + (displayKey && displayKey !== usernameKey ? openByAssignee.get(displayKey) || 0 : 0);
         const overdueCount =
           (overdueByAssignee.get(usernameKey) || 0) + (displayKey && displayKey !== usernameKey ? overdueByAssignee.get(displayKey) || 0 : 0);
+        const leadCount =
+          (leadsByAssignee.get(usernameKey) || 0) + (displayKey && displayKey !== usernameKey ? leadsByAssignee.get(displayKey) || 0 : 0);
         return {
           key: usernameKey,
           username: user.username,
           label: displayName,
           openCount,
-          overdueCount
+          overdueCount,
+          leadCount
         };
       })
       .sort((a, b) => a.openCount - b.openCount || a.label.localeCompare(b.label, "it"));
-  }, [operatorUsers, tasks]);
+  }, [leads, operatorUsers, tasks]);
 
   useEffect(() => {
     if (defaultOperatorUsername || !operatorChoices.length) return;
@@ -280,6 +294,8 @@ export function LeadBoardPage() {
   );
   const selectedLeadSet = useMemo(() => new Set(selectedLeadIds), [selectedLeadIds]);
   const allVisibleSelected = Boolean(filteredLeads.length) && filteredLeads.every((lead) => selectedLeadSet.has(lead.id));
+  // Only selected leads still visible in the queue are assigned, so the button counts those.
+  const batchTargetIds = filteredLeads.filter((lead) => selectedLeadSet.has(lead.id)).map((lead) => lead.id);
 
   function getLeadAssigneeDraft(leadId: string) {
     return assignmentDrafts[leadId] ?? defaultOperatorUsername;
@@ -348,7 +364,7 @@ export function LeadBoardPage() {
       setError("Seleziona un operatore predefinito per l'assegnazione batch.");
       return;
     }
-    const targetLeadIds = selectedLeadIds.filter((leadId) => filteredLeads.some((lead) => lead.id === leadId));
+    const targetLeadIds = batchTargetIds;
     if (!targetLeadIds.length) return;
 
     setBatchAssigning(true);
@@ -479,7 +495,7 @@ export function LeadBoardPage() {
                     <strong>{suggestedOperator?.label || "Nessun owner"}</strong>
                     <small>
                       {suggestedOperator
-                        ? `${suggestedOperator.openCount} aperte${suggestedOperator.overdueCount ? ` - ${suggestedOperator.overdueCount} SLA` : ""}`
+                        ? formatOperatorLoad(suggestedOperator)
                         : "Assegna dal pannello"}
                     </small>
                   </div>
@@ -505,7 +521,7 @@ export function LeadBoardPage() {
           <div className="ops-side-block">
             <div className="ops-side-head">
               <strong>Assegnazione bulk</strong>
-              <span>{selectedLeadIds.length} selezionate</span>
+              <span>{batchTargetIds.length} selezionate</span>
             </div>
 
             <label className="ops-field">
@@ -518,7 +534,7 @@ export function LeadBoardPage() {
                 <option value="">Seleziona operatore</option>
                 {operatorChoices.map((operator) => (
                   <option key={operator.username} value={operator.username}>
-                    {operator.label} - {operator.openCount} aperte{operator.overdueCount ? ` - ${operator.overdueCount} SLA` : ""}
+                    {operator.label} - {formatOperatorLoad(operator)}
                   </option>
                 ))}
               </select>
@@ -528,9 +544,9 @@ export function LeadBoardPage() {
               type="button"
               className="ops-assign-btn secondary"
               onClick={handleAssignVisibleBatch}
-              disabled={!selectedDefaultOperator || !selectedLeadIds.length || batchAssigning}
+              disabled={!selectedDefaultOperator || !batchTargetIds.length || batchAssigning}
             >
-              {batchAssigning ? "Assegno..." : `Assegna ${selectedLeadIds.length} lead`}
+              {batchAssigning ? "Assegno..." : `Assegna ${batchTargetIds.length} lead`}
             </button>
 
             <p className="ops-side-note">
@@ -556,9 +572,9 @@ export function LeadBoardPage() {
                 >
                   <div>
                     <strong>{operator.label}</strong>
-                    <small>{operator.overdueCount ? `${operator.overdueCount} SLA aperte` : "Nessuna SLA aperta"}</small>
+                    <small>{formatOperatorLoad(operator)}</small>
                   </div>
-                  <span>{operator.openCount}</span>
+                  <span title="Pratiche aperte assegnate">{operator.leadCount}</span>
                 </button>
               ))}
             </div>
@@ -567,6 +583,12 @@ export function LeadBoardPage() {
       </div>
     </div>
   );
+}
+
+function formatOperatorLoad(operator: OperatorOption) {
+  const practices = `${operator.leadCount} ${operator.leadCount === 1 ? "pratica" : "pratiche"}`;
+  const tasks = `${operator.openCount} ${operator.openCount === 1 ? "attività aperta" : "attività aperte"}`;
+  return `${practices} · ${tasks}${operator.overdueCount ? ` · ${operator.overdueCount} SLA` : ""}`;
 }
 
 export function LegacyLeadBoardRedirect() {
