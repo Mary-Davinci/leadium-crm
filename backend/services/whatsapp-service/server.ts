@@ -73,14 +73,6 @@ const WA_TEMPLATE_CONFIG_PATH = [
 
 const DEFAULT_TEMPLATE_CONFIG = [
   {
-    key: "reopen_contact",
-    name: "reopen_contact",
-    label: "Ricontatto pratica",
-    body: "Ciao, ti ricontattiamo per aggiornarti sulla tua pratica.",
-    category: "followup",
-    suggestionTag: "task"
-  },
-  {
     key: "request_documents",
     name: "request_documents",
     label: "Richiesta documenti",
@@ -790,7 +782,10 @@ async function sendTemplateViaMeta(to, template, components = []) {
 
   if (!response.ok) {
     const errText = await response.text();
-    throw createMetaSendError(response.status, errText, "Invio template");
+    const error = createMetaSendError(response.status, errText, "Invio template");
+    // Which template failed, for the admin diagnostics (e.g. one deleted on WhatsApp Manager).
+    error.templateName = templateName;
+    throw error;
   }
   const payload = await response.json();
   const providerMessageId =
@@ -1358,7 +1353,7 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 404, { error: "Endpoint non trovato." });
   } catch (error) {
     if (error && error.isMetaSendError) {
-      await recordWhatsappDiagnostic({ lastMetaError: { at: new Date().toISOString(), stage: "send", code: error.code, httpStatus: error.httpStatus, metaCode: error.metaCode } });
+      await recordWhatsappDiagnostic({ lastMetaError: { at: new Date().toISOString(), stage: "send", code: error.code, httpStatus: error.httpStatus, metaCode: error.metaCode, ...(error.templateName ? { templateName: error.templateName } : {}) } });
       sendJson(res, 502, { error: error.message, code: error.code });
       return;
     }

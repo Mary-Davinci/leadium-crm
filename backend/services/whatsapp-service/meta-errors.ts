@@ -13,6 +13,7 @@ export type MetaErrorCode =
   | "auth"
   | "media"
   | "template"
+  | "template_missing"
   | "rate_limit"
   | "unsupported"
   | "provider_error";
@@ -27,6 +28,7 @@ const FRIENDLY_MESSAGES: Record<MetaErrorCode, string> = {
   auth: "Connessione a WhatsApp non valida o scaduta. Avvisa un amministratore.",
   media: "WhatsApp non ha accettato l'allegato. Controlla formato e dimensione del file.",
   template: "Template non disponibile o non approvato su WhatsApp.",
+  template_missing: "Questo modello non esiste su WhatsApp Manager con questo nome e lingua (forse e stato eliminato): avvisa un amministratore.",
   rate_limit: "Troppi messaggi in poco tempo. Riprova tra qualche minuto.",
   unsupported: "Tipo di messaggio non supportato da WhatsApp.",
   provider_error: "WhatsApp non ha accettato il messaggio. Riprova; se il problema continua avvisa un amministratore."
@@ -46,6 +48,7 @@ export function classifyMetaError(httpStatus: number, metaCode?: number | null):
   if (code === 131031 || code === 131037 || code === 131045 || code === 368) return "account";
   if (code === 131052 || code === 131053) return "media";
   if (code === 131051) return "unsupported";
+  if (code === 132001) return "template_missing";
   if (code >= 132000 && code < 133000) return "template";
   if (RATE_LIMIT_CODES.has(code)) return "rate_limit";
   if (AUTH_CODES.has(code) || httpStatus === 401) return "auth";
@@ -58,6 +61,8 @@ export class MetaSendError extends Error {
   readonly httpStatus: number;
   readonly metaCode: number | null;
   readonly isMetaSendError = true;
+  /** Set by the template send: the WhatsApp Manager template name that failed. */
+  templateName?: string;
 
   constructor(httpStatus: number, metaCode: number | null, code: MetaErrorCode) {
     super(FRIENDLY_MESSAGES[code]);

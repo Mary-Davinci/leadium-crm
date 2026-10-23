@@ -132,7 +132,8 @@ async function main() {
   await runCase("errori Meta tradotti in codici e messaggi per l'operatore, senza payload grezzo", async () => {
     assert.equal(classifyMetaError(400, 131047), "window_closed");
     assert.equal(classifyMetaError(401, 190), "auth");
-    assert.equal(classifyMetaError(400, 132001), "template");
+    assert.equal(classifyMetaError(400, 132001), "template_missing", "template deleted or wrong name/language on WhatsApp Manager");
+    assert.equal(classifyMetaError(400, 132000), "template", "other template errors keep the generic message");
     assert.equal(classifyMetaError(400, 131053), "media");
     assert.equal(classifyMetaError(429, 130429), "rate_limit");
     assert.equal(classifyMetaError(400, 131026), "undeliverable");
