@@ -3,6 +3,9 @@ import path from "path";
 import { createRequire } from "module";
 import XLSX from "xlsx";
 
+// SheetJS 0.20 (ESM build) has no file access of its own: readFile needs the fs module.
+XLSX.set_fs(fs);
+
 const require = createRequire(import.meta.url);
 const { MongoClient } = require("../backend/node_modules/mongodb");
 
