@@ -112,7 +112,7 @@ async function main() {
     const activeTask = tasks.find((task) => task.status !== "dismissed");
     assert.ok(activeTask);
     assert.deepEqual(activeTask.meta?.missingKeys, ["signed_contract"]);
-    assert.match(activeTask.description || "", /Contratto firmato/);
+    assert.match(activeTask.description || "", /Contratti/);
   });
 
   await runCase("chiude il task documenti quando tutto e completo", async () => {

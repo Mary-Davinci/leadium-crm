@@ -411,11 +411,13 @@ const DETAIL_CALL_LOG_LIMIT = 20;
 
 function compactLeadDocumentsForResponse(documents: any, options?: { stripAttachmentDataUrls?: boolean }) {
   if (!documents || !Array.isArray(documents.items)) return documents || { items: [] };
-  if (!options?.stripAttachmentDataUrls) return documents;
+  // Current category names also for practices saved with the old labels.
+  const relabel = (item: any) => DOCUMENT_LABEL_BY_KEY.has(item?.key) ? { ...item, label: DOCUMENT_LABEL_BY_KEY.get(item.key) } : item;
+  if (!options?.stripAttachmentDataUrls) return { ...documents, items: documents.items.map(relabel) };
   return {
     ...documents,
     items: documents.items.map((item: any) => ({
-      ...item,
+      ...relabel(item),
       attachments: Array.isArray(item?.attachments)
         ? item.attachments.map((attachment: any) => ({
             ...attachment,
@@ -467,12 +469,15 @@ function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
   };
 }
 
+// Categories shown on the practice card. Keys stay stable (stored attachments, tasks, chat
+// requests refer to them); labels always come from here, never from the stored copy.
 const DEFAULT_DOCUMENT_ITEMS = [
-  { key: "identity_document", label: "Documento identitÃ  / Passaporto" },
-  { key: "passenger_data", label: "Dati passeggeri" },
-  { key: "signed_contract", label: "Contratto firmato" },
-  { key: "deposit_payment", label: "Conferma pagamento acconto" }
+  { key: "identity_document", label: "Documenti cliente" },
+  { key: "signed_contract", label: "Contratti" },
+  { key: "passenger_data", label: "Preventivi" },
+  { key: "deposit_payment", label: "Ricevute o pagamenti acconto" }
 ];
+const DOCUMENT_LABEL_BY_KEY = new Map(DEFAULT_DOCUMENT_ITEMS.map((item) => [item.key, item.label]));
 
 // Amounts start at 0 ("da definire"): the operator sets the practice total and deposit from the
 // practice page. A placeholder price would read as a real quote.
@@ -495,7 +500,7 @@ export function normalizePracticeDocuments(input: any) {
       const existing = byKey.get(base.key) || {};
       return {
         key: base.key,
-        label: String(existing.label || base.label),
+        label: base.label,
         required: existing.required !== undefined ? Boolean(existing.required) : true,
         received: Boolean(existing.received),
         verified: Boolean(existing.verified),

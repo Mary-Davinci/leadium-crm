@@ -2286,6 +2286,88 @@
   flex-wrap: wrap;
 }
 
+/* Every file of a category: open, move to another category, remove. */
+.pd-doc-files {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+/* Name on its own line, controls below: the documents column is narrow on desktop too. */
+.pd-doc-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #fbfdff;
+  font-size: 12px;
+}
+
+.pd-doc-file-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #225fb6;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pd-doc-file-name:hover,
+.pd-doc-file-name:focus-visible {
+  text-decoration: underline;
+}
+
+.pd-doc-file-meta {
+  flex: none;
+  color: #6d83a3;
+}
+
+.pd-doc-file-move {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 220px;
+  height: 26px;
+  padding: 0 4px;
+  border: 1px solid #d5deea;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #244061;
+  font: inherit;
+}
+
+.pd-doc-file-remove {
+  flex: none;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #f0c9c9;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #b42318;
+  font: inherit;
+  cursor: pointer;
+}
+
+.pd-doc-file-remove:disabled,
+.pd-doc-file-move:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .pd-doc-note-toggle {
   min-width: 28px;
   min-height: 26px;

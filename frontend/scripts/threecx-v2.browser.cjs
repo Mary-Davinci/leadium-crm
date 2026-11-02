@@ -250,6 +250,34 @@ async function geometry(page) {
       assert.deepEqual(errors,[]);await page.close();
       console.log('PASS shared customer: explicit choice shown with impact, lead-only correction applied and flagged as partial for WhatsApp');
     }
+    for(const width of [1440,390]){
+      // Document categories: renamed, several files in one pick, a quote moved out of the deposit receipts.
+      const page=await browser.newPage({viewport:{width,height:900}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+      await page.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-admin');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.admin);
+      await page.goto(fixture.frontUrl+'/pratiche/native-fixture');
+      const docs=page.locator('.pd-card-documents');await docs.waitFor();
+      for(const label of ['Documenti cliente','Contratti','Preventivi','Ricevute o pagamenti acconto'])await docs.locator('.pd-doc-row-title strong',{hasText:label}).first().waitFor();
+      const suffix=String(width);
+      await docs.getByLabel('Carica file in Ricevute o pagamenti acconto').setInputFiles([
+        {name:'preventivo-msc-'+suffix+'.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 preventivo')},
+        {name:'ricevuta-bonifico-'+suffix+'.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 ricevuta')}
+      ]);
+      const deposit=page.getByRole('list',{name:'File in Ricevute o pagamenti acconto'});
+      await deposit.getByRole('button',{name:'preventivo-msc-'+suffix+'.pdf',exact:true}).waitFor();await deposit.getByRole('button',{name:'ricevuta-bonifico-'+suffix+'.pdf',exact:true}).waitFor();
+      await page.screenshot({path:path.join(os.tmpdir(),'leadium-docs-multi-'+width+'.png'),fullPage:false});
+      await deposit.getByLabel('Sposta preventivo-msc-'+suffix+'.pdf in un\'altra sezione').selectOption({label:'Preventivi'});
+      const quotes=page.getByRole('list',{name:'File in Preventivi'});
+      await quotes.getByRole('button',{name:'preventivo-msc-'+suffix+'.pdf',exact:true}).waitFor();
+      await deposit.getByRole('button',{name:'preventivo-msc-'+suffix+'.pdf',exact:true}).waitFor({state:'detached'});
+      await deposit.getByRole('button',{name:'ricevuta-bonifico-'+suffix+'.pdf',exact:true}).waitFor();
+      await page.reload();await page.getByRole('list',{name:'File in Preventivi'}).getByRole('button',{name:'preventivo-msc-'+suffix+'.pdf',exact:true}).waitFor();
+      await docs.locator('.pd-doc-file').first().scrollIntoViewIfNeeded();
+      await page.screenshot({path:path.join(os.tmpdir(),'leadium-docs-moved-'+width+'.png'),fullPage:false});
+      const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth);
+      assert.ok(overflow<=1,'no horizontal page scroll at '+width+'px ('+overflow+')');
+      assert.deepEqual(errors,[]);await page.close();
+      console.log('PASS '+width+'px: document categories renamed, two files uploaded at once, quote moved from deposit receipts to Preventivi and kept after reload');
+    }
     {
       // Operator: create -> practice opens -> back to Pratiche (fresh list, own scope) -> visible.
       const page=await browser.newPage({viewport:{width:1100,height:900}});const errors=[];page.on('pageerror',error=>errors.push(error.message));

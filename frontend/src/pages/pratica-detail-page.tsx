@@ -183,10 +183,10 @@ type NoteEntry = {
 };
 
 const DEFAULT_DOCUMENTS: PracticeDocumentItem[] = [
-  { key: "identity_document", label: "Documento identita / passaporto", required: true, received: false, verified: false, note: "", attachments: [] },
-  { key: "passenger_data", label: "Dati passeggeri", required: true, received: false, verified: false, note: "", attachments: [] },
-  { key: "signed_contract", label: "Contratto firmato", required: true, received: false, verified: false, note: "", attachments: [] },
-  { key: "deposit_payment", label: "Conferma pagamento acconto", required: true, received: false, verified: false, note: "", attachments: [] }
+  { key: "identity_document", label: "Documenti cliente", required: true, received: false, verified: false, note: "", attachments: [] },
+  { key: "signed_contract", label: "Contratti", required: true, received: false, verified: false, note: "", attachments: [] },
+  { key: "passenger_data", label: "Preventivi", required: true, received: false, verified: false, note: "", attachments: [] },
+  { key: "deposit_payment", label: "Ricevute o pagamenti acconto", required: true, received: false, verified: false, note: "", attachments: [] }
 ];
 
 const DEFAULT_PAYMENTS: PracticePaymentItem[] = [
@@ -224,7 +224,7 @@ function normalizeDocuments(input?: PracticeDocumentsState | null): PracticeDocu
         ...base,
         ...(existing || {}),
         key: base.key,
-        label: existing?.label || base.label,
+        label: base.label,
         required: existing?.required !== undefined ? Boolean(existing.required) : base.required,
         received: Boolean(existing?.received),
         verified: Boolean(existing?.verified),
@@ -465,6 +465,11 @@ function readFileAsAttachment(file: File): Promise<PracticeDocumentAttachment> {
     reader.onerror = () => reject(new Error("Errore lettura file."));
     reader.readAsDataURL(file);
   });
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} MB`;
 }
 
 async function uploadDocumentToStorage(leadId: string, documentKey: PracticeDocumentKey, file: File) {
@@ -1701,47 +1706,82 @@ export function PraticaDetailPage() {
     }, 900);
   }
 
-  async function handleDocumentUpload(key: PracticeDocumentKey, file?: File | null) {
-    if (!file) return;
+  async function handleDocumentUpload(key: PracticeDocumentKey, files: File[]) {
+    if (!files.length) return;
     if (detail?.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
       setError("Solo admin e super admin possono caricare documenti su una pratica chiusa.");
       return;
     }
-    if (file.size > 4 * 1024 * 1024) {
-      setError("Il file supera 4MB. Riduci la dimensione prima di caricarlo.");
+    const tooLarge = files.filter((file) => file.size > 4 * 1024 * 1024);
+    const accepted = files.filter((file) => file.size <= 4 * 1024 * 1024);
+    // One upload at a time, then a single save: a failed file never drops the ones already stored.
+    const uploaded: PracticeDocumentAttachment[] = [];
+    let failure = "";
+    for (const file of accepted) {
+      try {
+        const rawAttachment = detail?.lead.id
+          ? await uploadDocumentToStorage(detail.lead.id, key, file).catch(async (error) => {
+              if (error instanceof Error && error.message.toLowerCase().includes("storage documenti non configurato")) {
+                return readFileAsAttachment(file);
+              }
+              throw error;
+            })
+          : await readFileAsAttachment(file);
+        uploaded.push({ ...rawAttachment, uploadedBy: rawAttachment.uploadedBy || authUser?.name || authUser?.username || "" });
+      } catch (e) {
+        failure = `${file.name}: ${e instanceof Error ? e.message : "caricamento non riuscito."}`;
+      }
+    }
+    const problems = [
+      tooLarge.length ? `${tooLarge.map((file) => file.name).join(", ")} ${tooLarge.length === 1 ? "supera" : "superano"} 4MB: riduci la dimensione prima di caricarli.` : "",
+      failure
+    ].filter(Boolean).join(" ");
+    if (!uploaded.length) {
+      setError(problems || "Errore caricamento documento.");
       return;
     }
-    try {
-      const rawAttachment = detail?.lead.id
-        ? await uploadDocumentToStorage(detail.lead.id, key, file).catch(async (error) => {
-            if (error instanceof Error && error.message.toLowerCase().includes("storage documenti non configurato")) {
-              return readFileAsAttachment(file);
-            }
-            throw error;
-          })
-        : await readFileAsAttachment(file);
-      const attachment: PracticeDocumentAttachment = {
-        ...rawAttachment,
-        uploadedBy: rawAttachment.uploadedBy || authUser?.name || authUser?.username || ""
-      };
-      const nextDocuments = {
-        items: documentsDraft.items.map((item) =>
-          item.key === key
-            ? {
-              ...item,
-              received: true,
-              verified: true,
-              attachments: [...(item.attachments || []), attachment],
-              updatedAt: new Date().toISOString()
-            }
-            : item
-        )
-      };
-      setDocumentsDraft(nextDocuments);
-      await saveDocuments(nextDocuments);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore caricamento documento.");
+    const nextDocuments = {
+      items: documentsDraft.items.map((item) =>
+        item.key === key
+          ? {
+            ...item,
+            received: true,
+            verified: true,
+            attachments: [...(item.attachments || []), ...uploaded],
+            updatedAt: new Date().toISOString()
+          }
+          : item
+      )
+    };
+    setDocumentsDraft(nextDocuments);
+    await saveDocuments(nextDocuments);
+    if (problems) setError(problems);
+  }
+
+  /** Moves a file to another category (e.g. a quote uploaded under the deposit receipts). */
+  async function moveDocumentAttachment(fromKey: PracticeDocumentKey, attachmentId: string, toKey: PracticeDocumentKey) {
+    if (fromKey === toKey) return;
+    if (detail?.lead.status === PRACTICE_CLOSED_STATUS && !isAdmin) {
+      setError("Solo admin e super admin possono modificare documenti su una pratica chiusa.");
+      return;
     }
+    const moving = documentsDraft.items.find((item) => item.key === fromKey)?.attachments?.find((attachment) => attachment.id === attachmentId);
+    if (!moving) return;
+    const now = new Date().toISOString();
+    const nextDocuments = {
+      items: documentsDraft.items.map((item) => {
+        if (item.key === fromKey) {
+          const remaining = (item.attachments || []).filter((attachment) => attachment.id !== attachmentId);
+          return { ...item, attachments: remaining, received: remaining.length > 0, verified: remaining.length > 0 && item.verified, updatedAt: now };
+        }
+        if (item.key === toKey) {
+          return { ...item, attachments: [...(item.attachments || []), moving], received: true, verified: true, updatedAt: now };
+        }
+        return item;
+      })
+    };
+    setDocumentsDraft(nextDocuments);
+    await saveDocuments(nextDocuments);
   }
 
   async function openDocumentAttachment(attachment: PracticeDocumentAttachment) {
@@ -2519,40 +2559,7 @@ export function PraticaDetailPage() {
                       </div>
                     </div>
                     <div className="pd-doc-row-actions">
-                      {item.attachments?.length ? (
-                        <button type="button" className="pd-doc-attachment-link" onClick={() => void openDocumentAttachment(item.attachments![0])}>
-                          <span className="pd-doc-download-button">
-                            <span className="pd-doc-download-surface pd-doc-download-docs" aria-hidden="true">
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M3 7.5a1.5 1.5 0 0 1 1.5-1.5h4.1l1.3 1.7H19.5A1.5 1.5 0 0 1 21 9.2v7.3A1.5 1.5 0 0 1 19.5 18H4.5A1.5 1.5 0 0 1 3 16.5z" />
-                                <path d="M3.8 9.5h16.4" />
-                              </svg>
-                            </span>
-                            <span className="pd-doc-download-surface pd-doc-download-action" aria-hidden="true">
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="7 10 12 15 17 10" />
-                                <line x1="12" y1="4" x2="12" y2="15" />
-                              </svg>
-                            </span>
-                          </span>
-                        </button>
-                      ) : null}
-                      {item.attachments?.length ? (
-                        <button
-                          type="button"
-                          className="pd-doc-delete-button"
-                          disabled={isClosedReadOnly}
-                          onClick={() => void removeDocumentAttachment(item.key, item.attachments![0].id)}
-                          aria-label="Rimuovi documento"
-                          title="Rimuovi documento"
-                        >
-                          <span className="pd-doc-bin-top" aria-hidden="true" />
-                          <span className="pd-doc-bin-bottom" aria-hidden="true" />
-                          <span className="pd-doc-bin-garbage" aria-hidden="true" />
-                        </button>
-                      ) : null}
-                      {!item.attachments?.length ? (
-                        <label className="pd-doc-upload" title="Carica documento">
+                        <label className="pd-doc-upload" title="Carica uno o più file">
                         <span className="pd-doc-upload-shine" aria-hidden="true" />
                         <span className="pd-doc-upload-icons" aria-hidden="true">
                           <span className="pd-doc-upload-icon pd-doc-upload-icon-default">
@@ -2574,15 +2581,16 @@ export function PraticaDetailPage() {
                         </span>
                         <input
                            type="file"
+                           multiple
+                           aria-label={`Carica file in ${item.label}`}
                            accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
                            disabled={busy || isClosedReadOnly}
                           onChange={(event) => {
-                            void handleDocumentUpload(item.key, event.currentTarget.files?.[0] || null);
+                            void handleDocumentUpload(item.key, Array.from(event.currentTarget.files || []));
                             event.currentTarget.value = "";
                           }}
                         />
                         </label>
-                      ) : null}
                       <button
                         type="button"
                         className="pd-doc-note-toggle"
@@ -2599,18 +2607,41 @@ export function PraticaDetailPage() {
                      </button>
                     </div>
                     {item.attachments?.length ? (
-                      <div className="pd-doc-attachments">
+                      <ul className="pd-doc-files" aria-label={`File in ${item.label}`}>
                         {item.attachments.map((attachment) => (
-                          <div key={attachment.id} className="pd-doc-attachment">
-                            <span className="pd-doc-attachment-icon" aria-hidden="true">
-                              ✓
-                            </span>
-                             <button type="button" disabled={isClosedReadOnly} onClick={() => void removeDocumentAttachment(item.key, attachment.id)}>
-                               x
-                             </button>
-                          </div>
+                          <li key={attachment.id} className="pd-doc-file">
+                            <button type="button" className="pd-doc-file-name" title="Apri il file" onClick={() => void openDocumentAttachment(attachment)}>
+                              {attachment.name}
+                            </button>
+                            {attachment.size ? <span className="pd-doc-file-meta">{formatFileSize(attachment.size)}</span> : null}
+                            <select
+                              className="pd-doc-file-move"
+                              value=""
+                              disabled={busy || isClosedReadOnly}
+                              aria-label={`Sposta ${attachment.name} in un'altra sezione`}
+                              onChange={(event) => {
+                                const target = event.currentTarget.value as PracticeDocumentKey;
+                                if (target) void moveDocumentAttachment(item.key, attachment.id, target);
+                              }}
+                            >
+                              <option value="">Sposta in…</option>
+                              {documentsDraft.items.filter((other) => other.key !== item.key).map((other) => (
+                                <option key={other.key} value={other.key}>{other.label}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="pd-doc-file-remove"
+                              disabled={busy || isClosedReadOnly}
+                              onClick={() => void removeDocumentAttachment(item.key, attachment.id)}
+                              aria-label={`Rimuovi ${attachment.name}`}
+                              title="Rimuovi file"
+                            >
+                              Rimuovi
+                            </button>
+                          </li>
                         ))}
-                      </div>
+                      </ul>
                     ) : null}
                     {item.note?.trim() && !expandedDocumentNotes[item.key] ? <p className="pd-doc-note-preview">{item.note}</p> : null}
                     {expandedDocumentNotes[item.key] ? (

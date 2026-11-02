@@ -68,10 +68,10 @@ export function getPracticeUrlOptionsFromTask(task: PracticeLinkTaskLike): Build
   if (focus === "documents") {
     const missingKey = firstString((meta as Record<string, unknown>).missingKeys);
     if (missingKey) return { document: missingKey };
-    if (includesAny(description, ["identit", "passaporto"])) return { document: "identity_document" };
-    if (includesAny(description, ["passegger"])) return { document: "passenger_data" };
-    if (includesAny(description, ["contratto"])) return { document: "signed_contract" };
-    if (includesAny(description, ["acconto", "pagamento"])) return { document: "deposit_payment" };
+    if (includesAny(description, ["identit", "passaporto", "documenti cliente"])) return { document: "identity_document" };
+    if (includesAny(description, ["passegger", "preventiv"])) return { document: "passenger_data" };
+    if (includesAny(description, ["contratt"])) return { document: "signed_contract" };
+    if (includesAny(description, ["acconto", "pagamento", "ricevut"])) return { document: "deposit_payment" };
   }
 
   return {};
