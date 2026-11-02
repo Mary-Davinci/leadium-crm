@@ -84,7 +84,7 @@ export const server = http.createServer(async (req, res) => {
         // Own DN only (the gateway passes the persisted mapping); pseudonyms + readable labels.
         const dn = validateThreeCxDn(url.searchParams.get("dn"));
         if (!dn) return sendJson(res, 403, { error: "Interno 3CX non configurato" });
-        return sendJson(res, 200, { available: config.enabled && monitor.diagnostics().connected, devices: monitor.deviceOptionsForDn(dn) });
+        return sendJson(res, 200, { available: config.enabled && monitor.diagnostics().connected, devices: monitor.deviceOptionsForDn(dn), dnUnreadable: monitor.isDnUnreadable(dn) });
       }
       if (pathname === "/3cx/control" && method === "POST") {
         if (!monitor.diagnostics().connected) return sendJson(res, 503, { error: "3CX momentaneamente non disponibile" });

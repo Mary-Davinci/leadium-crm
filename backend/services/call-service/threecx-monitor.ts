@@ -35,7 +35,12 @@ type Dependencies = {
   retryMs?: number; tickMs?: number; timeoutMs?: number;
 };
 // Only locally constructed messages can reach diagnostics; never a provider response body.
-class MonitorReadError extends Error {}
+class MonitorReadError extends Error {
+  /** HTTP status of the refused read; 404 also when the DN no longer exists on the PBX. */
+  constructor(message: string, readonly httpStatus?: number) { super(message); }
+}
+/** The PBX refuses or no longer has this DN (removed from the API application, deleted extension). */
+const isDnRefused = (error: unknown): error is MonitorReadError => error instanceof MonitorReadError && (error.httpStatus === 403 || error.httpStatus === 404);
 const failureMessages = {
   checkpoint_claim_failed: "3CX checkpoint unavailable",
   authentication_failed: "3CX authentication failed",
@@ -73,6 +78,8 @@ export class ThreeCxMonitor {
   private expiresAt = 0;
   private sequence: number | null = null;
   private dnTypes = new Map<string, string>();
+  /** Configured DNs the PBX currently refuses: skipped, so one removed extension never stops the others. */
+  private unreadableDns = new Map<string, string>();
   private deviceDiagnostics = new ThreeCxDeviceDiagnostics();
   // Raw device IDs stay server-side, separate from the sanitized admin projection.
   private controlDevices = new Map<string, { ids: string[]; agents: Map<string, string>; observedAt: number }>();
@@ -90,7 +97,8 @@ export class ThreeCxMonitor {
     const observedDnTypes = Object.fromEntries(monitoredDns()
       .filter(dn => this.dnTypes.has(dn))
       .map(dn => [dn, this.dnTypes.get(dn)!]));
-    return { enabled: this.config.enabled, configured: this.config.configured, ...this.status, observedDnTypes,
+    const unreadableDns = Object.fromEntries(monitoredDns().filter(dn => this.unreadableDns.has(dn)).map(dn => [dn, this.unreadableDns.get(dn)!]));
+    return { enabled: this.config.enabled, configured: this.config.configured, ...this.status, observedDnTypes, unreadableDns,
       ...this.deviceDiagnostics.diagnostics(this.config.enabled) };
   }
   start() {
@@ -98,6 +106,8 @@ export class ThreeCxMonitor {
     if (!this.config.configured) { this.status.lastError = "3CX configuration missing or invalid"; return; }
     this.task = this.run();
   }
+  /** True when the PBX refuses this configured DN (e.g. removed from the 3CX API application). */
+  isDnUnreadable(dn: string) { return this.unreadableDns.has(dn); }
   devicesForDn(dn: string): readonly string[] | null {
     if (!this.config.enabled || !this.status.connected || this.socket?.readyState !== WebSocket.OPEN || !isAgentDn(dn)) return null;
     const snapshot = this.controlDevices.get(dn);
@@ -253,7 +263,7 @@ export class ThreeCxMonitor {
       });
       if (!auth && response.status === 404) return null;
       if (!response.ok) {
-        if (!auth) throw new MonitorReadError(`3CX monitoring read unavailable for DN ${entity[1]} (HTTP ${response.status})`);
+        if (!auth) throw new MonitorReadError(`3CX monitoring read unavailable for DN ${entity[1]} (HTTP ${response.status})`, response.status);
         throw new Error("3CX authentication failed");
       }
       return await response.json();
@@ -270,10 +280,22 @@ export class ThreeCxMonitor {
   }
   private async reconcile(recovery: boolean) {
     const seen = new Set<string>();
+    let readable = 0;
     // Never enumerate or read any DN outside the fixed allowlist, even if the SP sees more.
     for (const dn of monitoredDns()) {
-      const info = await this.request("/callcontrol/" + dn);
-      if (!info) throw new MonitorReadError(`3CX monitoring read unavailable for DN ${dn} (not found)`);
+      let info: any;
+      try {
+        info = await this.request("/callcontrol/" + dn);
+        if (!info) throw new MonitorReadError(`3CX monitoring read unavailable for DN ${dn} (not found)`, 404);
+      } catch (error) {
+        // A DN the PBX refuses or no longer has is skipped (its legs end below as unobserved);
+        // auth, transport and malformed answers still stop the cycle.
+        if (!isDnRefused(error)) throw error;
+        this.markDnUnreadable(dn, error.httpStatus === 404 ? "not found" : "HTTP " + error.httpStatus);
+        continue;
+      }
+      readable++;
+      this.unreadableDns.delete(dn);
       if (info.dn !== dn || !Array.isArray(info.participants) || typeof info.type !== "string") throw new MonitorReadError(`3CX monitoring snapshot invalid for DN ${dn}`);
       this.dnTypes.set(dn, info.type);
       // Diagnostic failures must never interrupt participant processing or startup.
@@ -292,6 +314,8 @@ export class ThreeCxMonitor {
         }
       }
     }
+    // Nothing readable at all is a permission problem of the whole application, not of one DN.
+    if (!readable) throw new MonitorReadError("3CX monitoring read unavailable for every configured DN");
     for (const call of Object.values(this.state.calls)) for (const [key, leg] of Object.entries(call.legs)) {
       if (leg.active && !seen.has(key)) removeParticipant(this.state, leg.dn, Number(key.split("/")[1]), this.iso(), true);
     }
@@ -300,6 +324,10 @@ export class ThreeCxMonitor {
       this.liveParticipants.delete(key);
     }
     await this.save();
+  }
+  private markDnUnreadable(dn: string, reason: string) {
+    this.unreadableDns.set(dn, reason);
+    this.controlDevices.delete(dn); this.deviceDiagnostics.forget(dn);
   }
   private save() { return atStage("checkpoint_save_failed", () => this.deps.store.save(this.state)); }
   private message(raw: unknown) {
@@ -322,6 +350,7 @@ export class ThreeCxMonitor {
     this.status.lastEventAt = this.iso();
     this.enqueue(async () => {
       const [, dn, id] = match;
+      if (this.unreadableDns.has(dn)) return; // Rechecked by the periodic reconcile.
       if (!id) { await this.reconcile(false); return; }
       if (event.event_type === 1) {
         const known = this.liveParticipants.get(legKey(dn, Number(id)));
@@ -329,7 +358,13 @@ export class ThreeCxMonitor {
         this.liveParticipants.delete(legKey(dn, Number(id))); removeParticipant(this.state, dn, Number(id), this.iso());
       }
       else {
-        const participant = await this.request(`/callcontrol/${dn}/participants/${id}`);
+        let participant: any;
+        try { participant = await this.request(`/callcontrol/${dn}/participants/${id}`); }
+        catch (error) {
+          if (!isDnRefused(error) || error.httpStatus !== 403) throw error;
+          // Access revoked while connected: stop reading this DN instead of dropping the stream.
+          this.markDnUnreadable(dn, "HTTP 403"); removeParticipant(this.state, dn, Number(id), this.iso(), true); await this.save(); return;
+        }
         if (participant && participant.dn === dn && participant.id === Number(id) && Number.isSafeInteger(participant.callid) && participant.callid > 0) {
           this.rememberParticipant(participant);
           if (!(await this.deps.store.hasFinal(String(participant.callid)))) observeParticipant(this.state, participant, this.iso(), false, this.dnTypes.get(dn) || "Unknown");

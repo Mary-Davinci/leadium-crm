@@ -84,7 +84,7 @@ export async function handleThreeCxV2(req: http.IncomingMessage, res: http.Serve
       const devices = Array.isArray(state.devices) ? state.devices
         .filter((row: any) => row && typeof row.device === "string" && /^device-[a-f0-9]{12}$/.test(row.device))
         .map((row: any) => ({ device: row.device, label: String(row.label || "Dispositivo 3CX").slice(0, 40), userAgent: String(row.userAgent || "").slice(0, 160) })) : null;
-      json(res, 200, { threeCxDn: dn, available: state.available === true, devices });
+      json(res, 200, { threeCxDn: dn, available: state.available === true, devices, dnUnreadable: state.dnUnreadable === true });
       return;
     }
     if (pathname === "/api/3cx/session" && req.method === "GET") {

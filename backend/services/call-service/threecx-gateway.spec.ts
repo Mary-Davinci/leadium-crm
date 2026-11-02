@@ -32,7 +32,7 @@ async function main() {
     const admin = await fetch(base + "/api/3cx/diagnostics", { headers: { Authorization: "Bearer 3cx-admin" } }); assert.equal(admin.status, 200);
     const body = await admin.json() as any;
     assert.equal(body.enabled, false); assert.equal(body.connected, false);
-    assert.deepEqual(Object.keys(body).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes", "observedDevices", "deviceCount", "recentCallAttempts"].sort());
+    assert.deepEqual(Object.keys(body).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes", "unreadableDns", "observedDevices", "deviceCount", "recentCallAttempts"].sort());
     assert.deepEqual(body.observedDnTypes, {}, "disabled monitoring has no observed types");
     assert.deepEqual(body.recentCallAttempts, [], "no attempt is listed before any makecall");
     assert.deepEqual(body.observedDevices, {}); assert.deepEqual(body.deviceCount, {});

@@ -40,7 +40,7 @@ class FakeSocket extends EventEmitter {
   terminate() { if (!this.terminated) { this.terminated = true; this.readyState = 3; this.emit("close"); } }
   ping() { this.pings++; this.emit("pong"); }
 }
-function fixture(options: { socketFailure?: boolean; authStatus?: number; deniedDn?: string; reportedDnTypes?: Record<string, unknown>; reportedDevices?: Record<string, unknown>; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
+function fixture(options: { socketFailure?: boolean; authStatus?: number; deniedDn?: string; missingDn?: string; reportedDnTypes?: Record<string, unknown>; reportedDevices?: Record<string, unknown>; enabled?: boolean; store?: MemoryStore; deliver?: (event: any) => Promise<void> } = {}) {
   let time = Date.parse("2026-10-16T10:00:00Z"), sequence = 0;
   const requests: Array<{ path: string; method: string }> = [];
   const sockets: FakeSocket[] = [], deliveries: any[] = [];
@@ -64,7 +64,9 @@ function fixture(options: { socketFailure?: boolean; authStatus?: number; denied
       const m = pathname.match(/^\/callcontrol\/(901|913|910|911|912|920|921|922)(?:\/participants\/(\d+))?$/);
       assert.ok(m, "Only allowlisted read endpoints may be requested");
       const [, dn, id] = m;
-      if (dn === options.deniedDn) return new Response(JSON.stringify({ error: SECRET }), { status: 403 });
+      // Comma list; may change during a test (access revoked or restored on the PBX).
+      if ((options.deniedDn || "").split(",").includes(dn)) return new Response(JSON.stringify({ error: SECRET }), { status: 403 });
+      if (dn === options.missingDn) return new Response(JSON.stringify({ error: SECRET }), { status: 404 });
       if (id) return new Response(JSON.stringify(participants.get(dn + "/" + id) || null), { status: participants.has(dn + "/" + id) ? 200 : 404 });
       const type = options.reportedDnTypes?.[dn] ?? ({ "910": "Queue", "911": "Queue", "912": "Queue", "920": "RoutePoint", "921": "DigitalReceptionist", "922": "IVR" } as Record<string, string>)[dn] ?? "Extension";
       return new Response(JSON.stringify({ dn, type, devices: options.reportedDevices?.[dn], participants: [...participants.values()].filter(p => p.dn === dn), api_key: SECRET, access_token: TOKEN }));
@@ -76,7 +78,7 @@ function fixture(options: { socketFailure?: boolean; authStatus?: number; denied
     deliver: async event => { deliveries.push(clone(event)); await options.deliver?.(event); }
   });
   const packet = (dn: string, id: number, type: number) => sockets[sockets.length - 1]!.emit("message", JSON.stringify({ sequence: ++sequence, event: { event_type: type, entity: `/callcontrol/${dn}/participants/${id}` } }));
-  return { monitor, store, sockets, requests, deliveries, participants,
+  return { monitor, store, sockets, requests, deliveries, participants, options, packet,
     advance: (ms: number) => { time += ms; },
     async start() { monitor.start(); if (options.enabled !== false && !options.authStatus) await until(() => requests.filter(r => /^\/callcontrol\/\d+$/.test(r.path)).length >= monitoredDns().length && store.saves > 0, "initial snapshots"); },
     async upsert(dn: string, id: number, callid: number, status: string, extra: any = {}) {
@@ -217,18 +219,72 @@ async function main() {
       assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
     } finally { await f.monitor.stop(); }
   });
-  await test("IVR outside Service Principal permissions fails closed with a safe initial reconcile error", async () => {
-    const f = fixture({ deniedDn: "920" }); f.monitor.start();
+  await test("IVR removed from the Service Principal is skipped: the operators keep working", async () => {
+    const f = fixture({ deniedDn: "920" }); await f.start();
+    try {
+      const diagnostics = f.monitor.diagnostics();
+      assert.equal(diagnostics.connected, true); assert.equal(diagnostics.lastError, null);
+      assert.deepEqual(diagnostics.unreadableDns, { "920": "HTTP 403" });
+      assert.ok(!JSON.stringify(diagnostics).includes(SECRET));
+      await f.upsert("901", 1, 22001, "Ringing");
+      await f.upsert("901", 1, 22001, "Connected");
+      assert.equal(f.monitor.liveCalls()[0].callId, "22001");
+      assert.equal(f.monitor.isDnUnreadable("901"), false);
+      assert.ok(f.requests.every(request => request.path === "/connect/token" || request.method === "GET"));
+    } finally { await f.monitor.stop(); }
+  });
+  await test("operator extension removed from the PBX or the API app stops only that operator", async () => {
+    for (const [options, reason] of [[{ deniedDn: "913" }, "HTTP 403"], [{ missingDn: "913" }, "not found"]] as const) {
+      const f = fixture({ ...options, reportedDevices: { "901": [{ device_id: "dev-901", user_agent: "3CX Web" }], "913": [{ device_id: "dev-913", user_agent: "3CX Web" }] } });
+      await f.start();
+      try {
+        assert.equal(f.monitor.diagnostics().connected, true); assert.equal(f.monitor.diagnostics().lastError, null);
+        assert.deepEqual(f.monitor.diagnostics().unreadableDns, { "913": reason });
+        assert.equal(f.monitor.isDnUnreadable("913"), true);
+        assert.equal(f.monitor.devicesForDn("913"), null, "no device of a refused DN is offered");
+        assert.deepEqual(f.monitor.devicesForDn("901"), ["dev-901"]);
+        await f.upsert("901", 1, 22002, "Ringing");
+        await f.upsert("901", 1, 22002, "Connected");
+        assert.equal(f.monitor.liveCalls()[0].callId, "22002");
+      } finally { await f.monitor.stop(); }
+    }
+  });
+  await test("access restored on the PBX: the DN is read again at the next periodic reconcile", async () => {
+    const f = fixture({ deniedDn: "913" }); await f.start();
+    try {
+      assert.equal(f.monitor.isDnUnreadable("913"), true);
+      f.options.deniedDn = ""; f.advance(11000);
+      await until(() => !f.monitor.isDnUnreadable("913"), "913 readable again");
+      assert.deepEqual(f.monitor.diagnostics().unreadableDns, {});
+      assert.equal(f.sockets.length, 1, "no reconnect needed");
+    } finally { await f.monitor.stop(); }
+  });
+  await test("access revoked while connected: the stream stays up and only that DN stops", async () => {
+    const f = fixture(); await f.start();
+    try {
+      await f.upsert("913", 1, 22003, "Ringing");
+      f.options.deniedDn = "913";
+      f.participants.set("913/1", { ...f.participants.get("913/1"), status: "Connected" });
+      f.packet("913", 1, 0);
+      await until(() => f.monitor.isDnUnreadable("913"), "913 marked unreadable");
+      await until(() => !Object.values(f.store.state.calls).some(call => call.legs["913/1"]?.active), "913 leg ended as unobserved");
+      assert.equal(f.sockets.length, 1); assert.equal(f.sockets[0].terminated, false);
+      assert.equal(f.monitor.diagnostics().connected, true); assert.equal(f.monitor.diagnostics().lastError, null);
+      await f.upsert("901", 2, 22004, "Ringing");
+    } finally { await f.monitor.stop(); }
+  });
+  await test("every configured DN refused fails closed with a safe initial reconcile error", async () => {
+    const f = fixture({ deniedDn: monitoredDns().join(",") }); f.monitor.start();
     try {
       await until(() => Boolean(f.monitor.diagnostics().lastError?.includes("initial_reconcile_failed")), "permission diagnostic");
-      assert.match(f.monitor.diagnostics().lastError!, /DN 920 \(HTTP \d{3}\)$/, "the admin sees which DN the PBX refuses");
+      assert.match(f.monitor.diagnostics().lastError!, /every configured DN$/);
+      assert.equal(f.monitor.diagnostics().connected, false);
       assert.equal(f.deliveries.length, 0); assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
-      assert.ok(f.requests.every(request => request.path === "/connect/token" || request.method === "GET"));
     } finally { await f.monitor.stop(); }
   });
   await test("OAuth success and exact read allowlist; diagnostics schema and graceful shutdown", async () => {
     const f = fixture(); await f.start(); assert.equal(f.monitor.diagnostics().connected, true);
-    assert.deepEqual(Object.keys(f.monitor.diagnostics()).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes", "observedDevices", "deviceCount"].sort());
+    assert.deepEqual(Object.keys(f.monitor.diagnostics()).sort(), ["enabled", "configured", "connected", "lastConnectedAt", "lastEventAt", "lastCallId", "lastError", "observedDnTypes", "unreadableDns", "observedDevices", "deviceCount"].sort());
     assert.equal(new Set(f.requests.filter(r => r.method === "GET").map(r => r.path)).size, 8);
     const socket = f.sockets[0]; socket.emit("message", JSON.stringify({ sequence: 1, event: { event_type: 0, entity: "/callcontrol/999/participants/1" } }));
     await wait(10); assert.ok(f.requests.every(r => r.path === "/connect/token" || monitoredDns().some(dn => r.path.startsWith("/callcontrol/" + dn))));

@@ -37,6 +37,7 @@ type ThreeCxDiagnostics = {
   lastCallId: string | null;
   lastError: string | null;
   observedDnTypes?: Record<string, string>;
+  unreadableDns?: Record<string, string>;
   observedDevices?: Record<string, Array<{ deviceIdMasked: string; userAgent: string }>>;
   deviceCount?: Record<string, number>;
   recentCallAttempts?: ThreeCxCallAttempt[];
@@ -300,6 +301,7 @@ export function CallsPage() {
               <div><dt>lastEventAt</dt><dd>{diagnostics.lastEventAt ? new Date(diagnostics.lastEventAt).toLocaleString("it-IT") : "—"}</dd></div>
               <div><dt>lastCallId</dt><dd>{diagnostics.lastCallId || "—"}</dd></div>
               <div><dt>lastError</dt><dd>{diagnostics.lastError || "—"}</dd></div>
+              <div><dt>interni non abilitati</dt><dd>{Object.entries(diagnostics.unreadableDns || {}).map(([dn, reason]) => `${dn} (${reason})`).join(", ") || "—"}</dd></div>
               <ThreeCxObservedDnTypes types={diagnostics.observedDnTypes} agents={agentDns} />
               <ThreeCxObservedDevices devices={diagnostics.observedDevices} agents={agentDns} />
               <ThreeCxRecentAttempts attempts={diagnostics.recentCallAttempts} />

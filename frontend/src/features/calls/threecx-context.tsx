@@ -338,7 +338,10 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
     try {
       // Fresh list for every attempt: one device is used directly, several need an explicit
       // choice (never the first one), none or unknown stop before any PBX request.
-      const options = await api<{ devices: DeviceOption[] | null }>("/api/3cx/devices");
+      const options = await api<{ devices: DeviceOption[] | null; dnUnreadable?: boolean }>("/api/3cx/devices");
+      if (options.dnUnreadable) {
+        update({ stage: "error", error: `L'interno ${ownDn} non e abilitato nell'app API del centralino 3CX: avvisa un amministratore.` }); return false;
+      }
       if (options.devices === null) {
         update({ stage: "error", error: "Dispositivi 3CX non ancora disponibili: il collegamento al centralino non e pronto. Riprova tra poco." }); return false;
       }
