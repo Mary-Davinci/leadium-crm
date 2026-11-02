@@ -436,12 +436,6 @@ function isPaymentsComplete(payments: PracticePaymentsState) {
   return payments.items.some(item => item.amount > 0) && payments.items.every((item) => !item.required || item.status === "verified");
 }
 
-function getDocumentRowIcon(item: PracticeDocumentItem) {
-  if (item.required && (!item.received || !item.verified)) return "Mancante";
-  if (item.verified) return "OK";
-  return "Doc";
-}
-
 function getDocumentRowState(item: PracticeDocumentItem) {
   if (item.required && item.received && item.verified) return "complete";
   if (item.received || item.verified) return "progress";
@@ -2489,7 +2483,7 @@ export function PraticaDetailPage() {
                   <h5>Documenti</h5>
                   <p className="pd-docs-subtitle">
                     {missingDocumentsCount > 0
-                      ? `${missingDocumentsCount} mancanti`
+                      ? `${missingDocumentsCount} sezioni da completare`
                       : "Documenti completi"}
                   </p>
                 </div>
@@ -2499,19 +2493,19 @@ export function PraticaDetailPage() {
                     className={`pd-docs-badge pd-docs-badge-button ${documentsBadge.className} ${showOnlyMissingDocuments ? "is-active" : ""}`}
                     onClick={() => setShowOnlyMissingDocuments((prev) => !prev)}
                   >
-                    {showOnlyMissingDocuments ? "Mostra tutti" : "Solo mancanti"}
+                    {showOnlyMissingDocuments ? "Mostra tutti" : "Da completare"}
                   </button>
                 ) : null}
               </div>
               <div className={`pd-docs-alert ${documentsBadge.className} ${showOnlyMissingDocuments ? "is-active" : ""}`}>
                 <strong>
-                  {missingDocumentsCount > 0 ? `Documenti mancanti (${missingDocumentsCount})` : "Documenti completi"}
+                  {missingDocumentsCount > 0 ? `Documenti da completare (${missingDocumentsCount})` : "Documenti completi"}
                 </strong>
                 <span>
                   {missingDocumentsCount > 0
                     ? showOnlyMissingDocuments
                       ? "Stai vedendo solo i documenti ancora da completare."
-                      : "Completa ricezione e verifica dei documenti richiesti per sbloccare la pratica."
+                      : "Carica i file nelle rispettive sezioni, poi conferma ricezione e verifica."
                     : "Tutti i documenti richiesti risultano ricevuti e verificati."}
                 </span>
               </div>
@@ -2524,9 +2518,6 @@ export function PraticaDetailPage() {
                     <div className="pd-doc-row-main">
                       <div className="pd-doc-row-title">
                         <strong>
-                          <span className="pd-doc-row-icon" aria-hidden="true">
-                            {getDocumentRowIcon(item)}
-                          </span>{" "}
                           {item.label}
                         </strong>
                         {item.attachments?.length ? (
@@ -2599,6 +2590,7 @@ export function PraticaDetailPage() {
                             </svg>
                           </span>
                         </span>
+                        <span className="pd-doc-upload-label">Carica file</span>
                         <input
                            type="file"
                            multiple

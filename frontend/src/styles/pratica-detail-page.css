@@ -2383,7 +2383,9 @@
 
 .pd-doc-upload {
   position: relative;
-  width: 38px;
+  min-width: 38px;
+  padding: 0 10px;
+  gap: 6px;
   height: 38px;
   display: inline-flex;
   align-items: center;
@@ -2475,8 +2477,17 @@
 }
 
 .pd-doc-upload input {
-  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
+
+.pd-doc-upload-label { font-size: 11px; font-weight: 700; white-space: nowrap; }
+.pd-doc-upload:focus-within { outline: 2px solid #225fb6; outline-offset: 3px; }
+.pd-doc-upload:has(input:disabled) { opacity: .55; cursor: not-allowed; }
 
 .pd-doc-attachments {
   display: none;
