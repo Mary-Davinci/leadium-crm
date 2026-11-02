@@ -16,7 +16,7 @@ export function PracticeNotesCard({ noteDraft, busy, onChange, onSave }: Props) 
         rows={5}
         placeholder="Scrivi qualcosa sui dettagli di questa pratica..."
       />
-      <p className="pd-note-meta">Autore: operatore · {new Date().toLocaleString("it-IT")}</p>
+      <p className="pd-note-meta">Autore: operatore · {new Date().toLocaleString("it-IT", { timeZone: "Europe/Rome" })}</p>
       <div className="pd-actions">
         <button type="button" disabled={busy} onClick={onSave}>
           Salva nota

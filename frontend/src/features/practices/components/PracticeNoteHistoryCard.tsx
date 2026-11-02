@@ -12,7 +12,7 @@ export function PracticeNoteHistoryCard({ notes }: Props) {
         {notes.length ? (
           notes.slice(0, 5).map((note) => (
             <article key={note.id}>
-              <strong>{new Date(note.createdAt).toLocaleString("it-IT")}</strong>
+              <strong>{new Date(note.createdAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}</strong>
               <span>{note.actor}</span>
               <p>{note.text || "(vuota)"}</p>
             </article>

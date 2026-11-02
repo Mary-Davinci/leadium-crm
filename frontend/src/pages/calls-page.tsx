@@ -1,3 +1,5 @@
+import { useClock } from "../lib/use-clock";
+import { romeDayStamp } from "../lib/business-time";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { buildPracticeUrl } from "../features/practices/practice-links";
@@ -65,7 +67,7 @@ export function ThreeCxRecentAttempts({ attempts }: { attempts?: ThreeCxCallAtte
   return <div>
     <dt>recentCallAttempts</dt>
     <dd>{attempts?.length ? attempts.map(row => <div key={row.attemptId}>
-      <strong>{new Date(row.at).toLocaleTimeString("it-IT")} · rif. {row.attemptId} · {row.dn}</strong> → {row.outcome} ({row.code})
+      <strong>{new Date(row.at).toLocaleTimeString("it-IT", { timeZone: "Europe/Rome" })} · rif. {row.attemptId} · {row.dn}</strong> → {row.outcome} ({row.code})
       {row.httpStatus !== undefined ? ` · HTTP ${row.httpStatus}` : ""}{row.finalStatus ? ` · ${row.finalStatus}` : ""}
       {row.deviceCount !== undefined ? ` · ${row.deviceCount} device` : ""}{row.deviceMasked ? ` (${row.deviceMasked})` : ""}
       {row.destination ? ` · ${row.destination.format} ${row.destination.digits} cifre …${row.destination.lastDigits}` : ""}
@@ -128,7 +130,7 @@ const TEST_PAYLOAD = `{
 
 function formatDate(value?: string) {
   if (!value) return "-";
-  return new Date(value).toLocaleString("it-IT", {
+  return new Date(value).toLocaleString("it-IT", { timeZone: "Europe/Rome",
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -140,7 +142,7 @@ function isToday(value?: string) {
   if (!value) return false;
   const date = new Date(value);
   const now = new Date();
-  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  return romeDayStamp(date) === romeDayStamp(now);
 }
 
 function getDuration(startedAt?: string, endedAt?: string) {
@@ -153,6 +155,7 @@ function getDuration(startedAt?: string, endedAt?: string) {
 }
 
 export function CallsPage() {
+  const clockTick = useClock();
   const navigate = useNavigate();
   const user = getAuthUser();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
@@ -260,7 +263,7 @@ export function CallsPage() {
       { label: "Da richiamare", value: calls.filter((call) => call.outcome === "call_back" || call.outcome === "no_answer").length },
       { label: "Clienti collegati", value: calls.filter((call) => call.lead).length }
     ];
-  }, [calls]);
+  }, [calls, clockTick]);
 
   return (
     <div className="calls-page">
@@ -297,8 +300,8 @@ export function CallsPage() {
               <div><dt>enabled</dt><dd>{String(diagnostics.enabled)}</dd></div>
               <div><dt>configured</dt><dd>{String(diagnostics.configured)}</dd></div>
               <div><dt>connected</dt><dd>{String(diagnostics.connected)}</dd></div>
-              <div><dt>lastConnectedAt</dt><dd>{diagnostics.lastConnectedAt ? new Date(diagnostics.lastConnectedAt).toLocaleString("it-IT") : "—"}</dd></div>
-              <div><dt>lastEventAt</dt><dd>{diagnostics.lastEventAt ? new Date(diagnostics.lastEventAt).toLocaleString("it-IT") : "—"}</dd></div>
+              <div><dt>lastConnectedAt</dt><dd>{diagnostics.lastConnectedAt ? new Date(diagnostics.lastConnectedAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" }) : "—"}</dd></div>
+              <div><dt>lastEventAt</dt><dd>{diagnostics.lastEventAt ? new Date(diagnostics.lastEventAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" }) : "—"}</dd></div>
               <div><dt>lastCallId</dt><dd>{diagnostics.lastCallId || "—"}</dd></div>
               <div><dt>lastError</dt><dd>{diagnostics.lastError || "—"}</dd></div>
               <div><dt>interni non abilitati</dt><dd>{Object.entries(diagnostics.unreadableDns || {}).map(([dn, reason]) => `${dn} (${reason})`).join(", ") || "—"}</dd></div>

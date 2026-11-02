@@ -1,3 +1,6 @@
+import { useAutoRefresh } from "../lib/use-auto-refresh";
+import { useClock } from "../lib/use-clock";
+import { romeDateTimeInput, romeInputToIso, romeDayStamp } from "../lib/business-time";
 import { isWorkedLead } from "../features/practices/worked";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -175,7 +178,8 @@ function writePracticeDetailCacheStorage(leadId: string, data: LeadDetail) {
 }
 
 export function PratichePage() {
-  const defaultFollowUpAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  const clockTick = useClock();
+  const defaultFollowUpAt = romeDateTimeInput(Date.now() + 24 * 60 * 60 * 1000);
   const navigate = useNavigate();
   const authUser = getAuthUser();
   const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
@@ -250,8 +254,8 @@ export function PratichePage() {
       if (!task.dueAt) return 2;
       const due = new Date(task.dueAt);
       const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+      const today = new Date(romeDayStamp(now)).getTime();
+      const dueDay = new Date(romeDayStamp(due)).getTime();
       if (due.getTime() < now.getTime()) return 0;
       if (dueDay === today) return 1;
       return 2;
@@ -297,7 +301,7 @@ export function PratichePage() {
   }
 
   function toIsoDateTime(value: string) {
-    return new Date(value).toISOString();
+    return romeInputToIso(value);
   }
 
   function getTomorrowIso() {
@@ -305,7 +309,7 @@ export function PratichePage() {
   }
 
   function getBusyFollowUpAt() {
-    return new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString().slice(0, 16);
+    return romeDateTimeInput(Date.now() + 2 * 60 * 60 * 1000);
   }
 
   async function createAutoFollowUp(lead: Lead, dueAt: string, description: string) {
@@ -798,7 +802,7 @@ export function PratichePage() {
       if (ordered[0]) result.set(leadId, ordered[0]);
     });
     return result;
-  }, [taskBoardTasks]);
+  }, [taskBoardTasks, clockTick]);
 
   const getOperationalBucket = (lead: Lead) => {
     const task = primaryTaskByLeadId.get(lead.id);
@@ -806,8 +810,8 @@ export function PratichePage() {
     if (!task.dueAt) return "new" as const;
     const due = new Date(task.dueAt);
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+    const today = new Date(romeDayStamp(now)).getTime();
+    const dueDay = new Date(romeDayStamp(due)).getTime();
     if (due.getTime() < now.getTime()) return "overdue" as const;
     if (dueDay === today) return "today" as const;
     return "planned" as const;
@@ -862,7 +866,7 @@ export function PratichePage() {
         if (paymentFilter && !includesAny(stack, ["saldo", "pagament", "rata", "scaden"])) return false;
         return true;
       }),
-    [viewScopedRows, priorityFilter, callOutcomeFilter, documentFilter, paymentFilter, primaryTaskByLeadId]
+    [viewScopedRows, priorityFilter, callOutcomeFilter, documentFilter, paymentFilter, primaryTaskByLeadId, clockTick]
   );
 
   const sortedRows = useMemo(() => {
@@ -871,8 +875,8 @@ export function PratichePage() {
       if (!task.dueAt) return 2;
       const due = new Date(task.dueAt);
       const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+      const today = new Date(romeDayStamp(now)).getTime();
+      const dueDay = new Date(romeDayStamp(due)).getTime();
       if (due.getTime() < now.getTime()) return 0;
       if (dueDay === today) return 1;
       return 2;
@@ -906,12 +910,12 @@ export function PratichePage() {
       const bTs = b.nextActionAt ? new Date(b.nextActionAt).getTime() : Number.MAX_SAFE_INTEGER;
       return aTs - bTs;
     });
-  }, [rows, primaryTaskByLeadId, practiceView]);
+  }, [rows, primaryTaskByLeadId, practiceView, clockTick]);
 
   const scopeCounts = useMemo(() => {
     const mine = leads.filter((lead) => isLeadAssignedToCurrentUser(lead)).length;
     return { mine, all: leads.length };
-  }, [leads, currentUserKeys]);
+  }, [leads, currentUserKeys, clockTick]);
 
 
   useEffect(() => {
@@ -980,6 +984,16 @@ export function PratichePage() {
     }
     navigate(buildPracticeUrl(lead.id));
   }
+
+  useAutoRefresh(async () => {
+    invalidatePracticeListCaches();
+    await loadPratiche();
+    try {
+      const board = await api<{ tasks: CrmTask[]; leads: Lead[] }>("/api/tasks/board");
+      setTaskBoardCache(board.tasks, board.leads);
+      setTaskBoardTasks(board.tasks);
+    } catch (e) { setError(e instanceof Error ? e.message : "Aggiornamento attivita non riuscito."); }
+  }, !loading && !callModalLead && !newLeadModalOpen && !selectedLeadId && !assignLead);
 
   const modalAutoFollowUp = resolvedCallOutcome === "call_back" || resolvedCallOutcome === "no_answer";
   const modalClosedOutcome = resolvedCallOutcome === "not_interested";
@@ -1268,7 +1282,7 @@ export function PratichePage() {
                   {resolvedCallOutcome === "call_back" ? (
                     <label>
                       Data richiamo
-                      <input type="datetime-local" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
+                      <input type="datetime-local" title="Ora italiana (Europe/Rome), con cambio automatico ora solare e legale" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
                     </label>
                   ) : null}
                 </>
@@ -1286,7 +1300,7 @@ export function PratichePage() {
                   <label>
                     Data follow-up
                     <input
-                      type="datetime-local"
+                      type="datetime-local" title="Ora italiana (Europe/Rome), con cambio automatico ora solare e legale"
                       value={callFollowUpAt}
                       onChange={(event) => setCallFollowUpAt(event.target.value)}
                       disabled={!callCreateFollowUp}

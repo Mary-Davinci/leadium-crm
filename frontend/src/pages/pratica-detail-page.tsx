@@ -1,3 +1,5 @@
+import { useClock } from "../lib/use-clock";
+import { romeDateTimeInput, romeInputToIso, romeDayStamp, romeCalendarDate } from "../lib/business-time";
 import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
 import { isWorkedLead } from "../features/practices/worked";
 import type { WhatsappAutomationInfo } from "../features/chat/chat.types";
@@ -266,9 +268,7 @@ function normalizePayments(input?: PracticePaymentsState | null): PracticePaymen
     version: input?.version || 0,
     items: DEFAULT_PAYMENTS.map((base, index) => {
       const existing = byId.get(base.id);
-      const fallbackDueAt = new Date(now);
-      fallbackDueAt.setDate(fallbackDueAt.getDate() + index * 30);
-      fallbackDueAt.setHours(12, 0, 0, 0);
+      const fallbackDueAt = romeCalendarDate(now, index * 30, 12);
       return {
         ...base,
         ...(existing || {}),
@@ -364,14 +364,12 @@ function parseEuroAmount(value: string) {
 function toDateInputValue(iso?: string) {
   const date = iso ? new Date(iso) : null;
   if (!date || !Number.isFinite(date.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return romeDateTimeInput(date).slice(0, 10);
 }
 
 function fromDateInputValue(value: string, fallback?: string) {
   if (!value) return fallback;
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, month - 1, day, 12, 0, 0, 0).toISOString();
+  return romeInputToIso(`${value}T12:00`);
 }
 
 function formatAmountsEditorBalance(editor: AmountsEditorState) {
@@ -398,9 +396,9 @@ function getPaymentUrgencyMeta(item: PracticePaymentItem) {
   }
   const due = new Date(item.dueAt);
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
-  const dateText = due.toLocaleString("it-IT");
+  const today = new Date(romeDayStamp(now)).getTime();
+  const dueDay = new Date(romeDayStamp(due)).getTime();
+  const dateText = due.toLocaleString("it-IT", { timeZone: "Europe/Rome" });
 
   if (due.getTime() < now.getTime()) {
     return {
@@ -673,9 +671,9 @@ function getNextActionMeta(value?: string) {
   }
   const date = new Date(value);
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const dateText = date.toLocaleString("it-IT");
+  const today = new Date(romeDayStamp(now));
+  const target = new Date(romeDayStamp(date));
+  const dateText = date.toLocaleString("it-IT", { timeZone: "Europe/Rome" });
 
   if (date.getTime() < now.getTime()) {
     return {
@@ -700,29 +698,24 @@ function getNextActionMeta(value?: string) {
 
 function formatDateDisplay(value?: string) {
   if (!value) return "Da pianificare";
-  return new Date(value).toLocaleString("it-IT");
+  return new Date(value).toLocaleString("it-IT", { timeZone: "Europe/Rome" });
 }
 
 function formatDateParts(value?: string) {
   if (!value) return { date: "Da definire", time: "" };
   const date = new Date(value);
   return {
-    date: date.toLocaleDateString("it-IT"),
-    time: date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })
+    date: date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome" }),
+    time: date.toLocaleTimeString("it-IT", { timeZone: "Europe/Rome", hour: "2-digit", minute: "2-digit" })
   };
 }
 
 function toDateTimeLocalValue(value?: string | Date) {
-  const date = value ? new Date(value) : new Date();
-  const offset = date.getTimezoneOffset();
-  const local = new Date(date.getTime() - offset * 60_000);
-  return local.toISOString().slice(0, 16);
+  return romeDateTimeInput(value || new Date());
 }
 
 function buildDefaultTaskDraft(lead: Lead): TaskDraft {
-  const due = new Date();
-  due.setDate(due.getDate() + 1);
-  due.setHours(9, 0, 0, 0);
+  const due = romeCalendarDate(new Date(), 1, 9);
   return {
     kind: "follow_up",
     title: `Follow-up ${lead.fullName}`,
@@ -736,12 +729,12 @@ function buildDefaultTaskDraft(lead: Lead): TaskDraft {
 function getTimelineDayLabel(value: string) {
   const date = new Date(value);
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const today = new Date(romeDayStamp(now)).getTime();
+  const target = new Date(romeDayStamp(date)).getTime();
   const diffDays = Math.floor((today - target) / (24 * 60 * 60 * 1000));
   if (diffDays === 0) return "Oggi";
   if (diffDays === 1) return "Ieri";
-  return date.toLocaleDateString("it-IT");
+  return date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome" });
 }
 
 function getPracticeLabel(lead: Lead) {
@@ -768,7 +761,7 @@ function getCallOutcomeClass(outcome: CallLog["outcome"]) {
 }
 
 function toIsoDateTime(value: string) {
-  return new Date(value).toISOString();
+  return romeInputToIso(value);
 }
 
 function getTomorrowIso() {
@@ -776,7 +769,7 @@ function getTomorrowIso() {
 }
 
 function getDefaultFollowUpAt() {
-  return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  return romeDateTimeInput(Date.now() + 24 * 60 * 60 * 1000);
 }
 
 function compareTasks(a: CrmTask, b: CrmTask) {
@@ -785,8 +778,8 @@ function compareTasks(a: CrmTask, b: CrmTask) {
     if (!task.dueAt) return 2;
     const due = new Date(task.dueAt);
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+    const today = new Date(romeDayStamp(now)).getTime();
+    const dueDay = new Date(romeDayStamp(due)).getTime();
     if (due.getTime() < now.getTime()) return 0;
     if (dueDay === today) return 1;
     return 2;
@@ -829,9 +822,9 @@ function getTaskUrgencyMeta(task: CrmTask) {
   }
   const due = new Date(task.dueAt);
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
-  const dateText = due.toLocaleString("it-IT");
+  const today = new Date(romeDayStamp(now)).getTime();
+  const dueDay = new Date(romeDayStamp(due)).getTime();
+  const dateText = due.toLocaleString("it-IT", { timeZone: "Europe/Rome" });
 
   if (due.getTime() < now.getTime()) {
     return {
@@ -855,6 +848,7 @@ function getTaskUrgencyMeta(task: CrmTask) {
 }
 
 export function PraticaDetailPage() {
+  const clockTick = useClock();
   const [leadAction, setLeadAction] = useState<LeadAction | null>(null);
   const [actionNotice, setActionNotice] = useState("");
   const { id } = useParams();
@@ -1049,7 +1043,7 @@ export function PraticaDetailPage() {
   }
 
   function getBusyFollowUpAt() {
-    return new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString().slice(0, 16);
+    return romeDateTimeInput(Date.now() + 2 * 60 * 60 * 1000);
   }
 
   function selectCallConnection(nextConnection: CallConnection) {
@@ -1181,7 +1175,7 @@ export function PraticaDetailPage() {
           assignedTo: taskDraft.assignedTo.trim(),
           source: "pratica_detail",
           priority: Number(taskDraft.priority || 50),
-          dueAt: taskDraft.dueAt ? new Date(taskDraft.dueAt).toISOString() : null
+          dueAt: taskDraft.dueAt ? romeInputToIso(taskDraft.dueAt) : null
         })
       });
       upsertPracticeTask(created);
@@ -1944,16 +1938,12 @@ export function PraticaDetailPage() {
   }
 
   function postponePayment(item: PracticePaymentItem, days: number) {
-    const nextDue = item.dueAt ? new Date(item.dueAt) : new Date();
-    nextDue.setDate(nextDue.getDate() + days);
-    if (!item.dueAt) nextDue.setHours(12, 0, 0, 0);
+    const nextDue = romeCalendarDate(item.dueAt || new Date(), days, item.dueAt ? undefined : 12);
     updatePaymentItem(item.id, { dueAt: nextDue.toISOString() });
   }
 
   function buildTaskSnoozeDate(task: CrmTask, days: number) {
-    const due = task.dueAt ? new Date(task.dueAt) : new Date();
-    if (!task.dueAt) due.setHours(9, 0, 0, 0);
-    due.setDate(due.getDate() + days);
+    const due = romeCalendarDate(task.dueAt || new Date(), days, task.dueAt ? undefined : 9);
     return due.toISOString();
   }
 
@@ -2139,11 +2129,11 @@ export function PraticaDetailPage() {
     () => (detail?.lead.id ? taskBoardTasks.filter((task) => task.leadId === detail.lead.id) : []),
     [detail?.lead.id, taskBoardTasks]
   );
-  const sortedPracticeTasks = useMemo(() => [...practiceTasks].sort(compareTasks), [practiceTasks]);
+  const sortedPracticeTasks = useMemo(() => [...practiceTasks].sort(compareTasks), [practiceTasks, clockTick]);
   const openPracticeTasks = useMemo(() => sortedPracticeTasks.filter((task) => task.status === "open"), [sortedPracticeTasks]);
   const completedPracticeTasks = useMemo(() => sortedPracticeTasks.filter((task) => task.status === "done").slice(0, 4), [sortedPracticeTasks]);
   const dismissedPracticeTasks = useMemo(() => sortedPracticeTasks.filter((task) => task.status === "dismissed").slice(0, 3), [sortedPracticeTasks]);
-  const nextTaskMeta = useMemo(() => (openPracticeTasks[0] ? getTaskUrgencyMeta(openPracticeTasks[0]) : null), [openPracticeTasks]);
+  const nextTaskMeta = useMemo(() => (openPracticeTasks[0] ? getTaskUrgencyMeta(openPracticeTasks[0]) : null), [openPracticeTasks, clockTick]);
   const modalRequiresCallbackOperator = Boolean(detail?.lead.assignedTo) || callbackOperator.trim().length > 0;
   const canSubmitCallOutcome =
     (resolvedCallOutcome !== "call_back" ||
@@ -2167,7 +2157,7 @@ export function PraticaDetailPage() {
     () => isPaymentsComplete(paymentsState),
     [paymentsState]
   );
-  const paymentsBadge = useMemo(() => getPaymentsBadge(paymentsState), [paymentsState]);
+  const paymentsBadge = useMemo(() => getPaymentsBadge(paymentsState), [paymentsState, clockTick]);
   const practiceTotal = paymentsState.items.reduce((sum, item) => sum + Math.round(Number(item.amount || 0) * 100), 0) / 100;
   const totalRequiredPayments = practiceTotal;
   const totalPaidPayments = paymentsState.items.reduce((sum, item) => sum + Math.round(Number(item.receivedAmount || 0) * 100), 0) / 100;
@@ -2366,12 +2356,12 @@ export function PraticaDetailPage() {
                   ) : null}
                   {isClosedPracticeStatus && practiceReview?.closedAt ? (
                     <p className="pd-closure-review-meta">
-                      Chiusa da {practiceReview.closedBy || "admin"} il {new Date(practiceReview.closedAt).toLocaleString("it-IT")}
+                      Chiusa da {practiceReview.closedBy || "admin"} il {new Date(practiceReview.closedAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}
                     </p>
                   ) : null}
                   {!isClosedPracticeStatus && reviewDecision === "returned_to_operator" && practiceReview?.returnedAt ? (
                     <p className="pd-closure-review-meta">
-                      Rimandata a operatore il {new Date(practiceReview.returnedAt).toLocaleString("it-IT")}
+                      Rimandata a operatore il {new Date(practiceReview.returnedAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}
                       {practiceReview.returnedBy ? ` da ${practiceReview.returnedBy}` : ""}.
                     </p>
                   ) : null}
@@ -2438,7 +2428,7 @@ export function PraticaDetailPage() {
                     <span>{finalReviewNote}</span>
                     {practiceReview?.finalNoteAt ? (
                       <small>
-                        {new Date(practiceReview.finalNoteAt).toLocaleString("it-IT")}
+                        {new Date(practiceReview.finalNoteAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}
                         {practiceReview?.finalNoteBy ? ` - ${practiceReview.finalNoteBy}` : ""}
                       </small>
                     ) : null}
@@ -2450,7 +2440,7 @@ export function PraticaDetailPage() {
                     <span>{practiceReview.reviewNote}</span>
                     {practiceReview?.returnedAt ? (
                       <small>
-                        {new Date(practiceReview.returnedAt).toLocaleString("it-IT")}
+                        {new Date(practiceReview.returnedAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}
                         {practiceReview?.returnedBy ? ` - ${practiceReview.returnedBy}` : ""}
                       </small>
                     ) : null}
@@ -3091,7 +3081,7 @@ export function PraticaDetailPage() {
                       <div className="pd-call-hint">Il richiamo va indicato con data, ora, operatore e motivo: sono tutti obbligatori.</div>
                       <label>
                         <span>Data e ora richiamo</span>
-                        <input type="datetime-local" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
+                        <input type="datetime-local" title="Ora italiana (Europe/Rome), con cambio automatico ora solare e legale" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
                       </label>
                       <label>
                         <span>Motivo del richiamo</span>
@@ -3123,7 +3113,7 @@ export function PraticaDetailPage() {
                       <div className="pd-call-hint">Indica la data e l'ora dell'appuntamento fissato con il cliente.</div>
                       <label>
                         <span>Data e ora appuntamento</span>
-                        <input type="datetime-local" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
+                        <input type="datetime-local" title="Ora italiana (Europe/Rome), con cambio automatico ora solare e legale" value={callFollowUpAt} onChange={(event) => setCallFollowUpAt(event.target.value)} />
                       </label>
                     </>
                   ) : resolvedCallOutcome === "not_interested" ? (
@@ -3161,7 +3151,7 @@ export function PraticaDetailPage() {
                       <label>
                         <span>Data follow-up</span>
                         <input
-                          type="datetime-local"
+                          type="datetime-local" title="Ora italiana (Europe/Rome), con cambio automatico ora solare e legale"
                           value={callFollowUpAt}
                           onChange={(event) => setCallFollowUpAt(event.target.value)}
                           disabled={!callCreateFollowUp}
@@ -3270,7 +3260,7 @@ export function PraticaDetailPage() {
                   <label className="pd-task-field">
                     <span>Scadenza</span>
                     <input
-                      type="datetime-local"
+                      type="datetime-local" title="Ora italiana (Europe/Rome), con cambio automatico ora solare e legale"
                       value={taskDraft.dueAt}
                       onChange={(event) => setTaskDraft((current) => (current ? { ...current, dueAt: event.target.value } : current))}
                     />

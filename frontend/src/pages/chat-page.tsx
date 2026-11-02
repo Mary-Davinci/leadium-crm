@@ -1,3 +1,5 @@
+import { useClock } from "../lib/use-clock";
+import { romeInputToIso, romeCalendarDate } from "../lib/business-time";
 import { DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { WifiOff, X } from "lucide-react";
@@ -151,6 +153,7 @@ function useOnlineStatus() {
 }
 
 export function ChatPage() {
+  const clockTick = useClock();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const authUser = getAuthUser();
@@ -419,7 +422,7 @@ export function ChatPage() {
   const boardLeadById = useMemo(() => new Map(boardLeads.map((lead) => [lead.id, lead])), [boardLeads]);
   const openTasks = useMemo(
     () => tasks.filter((task) => task.status === "open" && task.leadId && task.leadId === selectedConversation?.leadId).sort(sortOperationalTasks),
-    [tasks, selectedConversation?.leadId]
+    [tasks, selectedConversation?.leadId, clockTick]
   );
   const missingDocumentsCount = useMemo(
     () => (currentLead?.documents?.items || []).filter((item) => item.required && (!item.received || !item.verified)).length,
@@ -463,7 +466,7 @@ export function ChatPage() {
         ...conversation,
         operational: getLeadOperationalSummary(conversation.leadId ? boardLeadById.get(String(conversation.leadId)) : null)
       })),
-    [authUsername, boardLeadById, conversations, inboxFilter, search]
+    [authUsername, boardLeadById, conversations, inboxFilter, search, clockTick]
   );
 
   const threadItems = useMemo(() => {
@@ -876,12 +879,11 @@ export function ChatPage() {
   function makeDueAt(amount: "1h" | "tomorrow") {
     const due = new Date();
     if (amount === "1h") {
-      due.setHours(due.getHours() + 1, 0, 0, 0);
+      due.setTime(due.getTime() + 3600000);
+      due.setUTCMinutes(0, 0, 0);
       return due.toISOString();
     }
-    due.setDate(due.getDate() + 1);
-    due.setHours(9, 0, 0, 0);
-    return due.toISOString();
+    return romeCalendarDate(due, 1, 9).toISOString();
   }
 
   async function createSmartTask(input: { kind: string; title: string; description: string; priority: number; dueAt: string; meta?: Record<string, unknown> }) {
@@ -1044,7 +1046,7 @@ export function ChatPage() {
           body: JSON.stringify({
             disposition: "call_back",
             actor: authUsername || "chat",
-            followUpAt: payload.followUpAt,
+            followUpAt: romeInputToIso(payload.followUpAt),
             callbackReason: payload.callbackReason,
             assignedTo: currentLead?.assignedTo || authUsername || undefined,
             idempotencyKey: `chat_callback_${currentLead?.id}_${Date.now()}`

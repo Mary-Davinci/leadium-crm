@@ -1,3 +1,4 @@
+import { romeDayStamp } from "../../lib/business-time";
 ﻿import { Lead, NextActionMeta, Priority, Task, TimelineMeta } from "./practice-detail.types";
 
 export function includesAny(value: string, terms: string[]) {
@@ -69,9 +70,9 @@ export function getNextActionMeta(value?: string): NextActionMeta {
   }
   const date = new Date(value);
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const dateText = date.toLocaleString("it-IT");
+  const today = new Date(romeDayStamp(now));
+  const target = new Date(romeDayStamp(date));
+  const dateText = date.toLocaleString("it-IT", { timeZone: "Europe/Rome" });
 
   if (date.getTime() < now.getTime()) {
     return {
@@ -103,7 +104,7 @@ export function getActionNameFromTask(task?: Task | null) {
 
 export function formatDateDisplay(value?: string) {
   if (!value) return "Da pianificare";
-  return new Date(value).toLocaleString("it-IT");
+  return new Date(value).toLocaleString("it-IT", { timeZone: "Europe/Rome" });
 }
 
 export function getPracticeLabel(lead: Lead) {

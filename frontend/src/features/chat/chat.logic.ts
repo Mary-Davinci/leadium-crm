@@ -1,3 +1,4 @@
+import { romeDayStamp } from "../../lib/business-time";
 // Pure chat helpers (no React, no network) so the inbox rules can be unit tested.
 import type { AttachmentKind, ChatAttachment, ChatLayoutMode, Conversation, InboxFilter, Message, TemplateOption } from "./chat.types";
 
@@ -10,12 +11,12 @@ function toDate(value?: string | null) {
 }
 
 function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return new Date(romeDayStamp(date)).getTime();
 }
 
 export function formatShortTime(value?: string | null) {
   const date = toDate(value);
-  return date ? date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : "";
+  return date ? date.toLocaleTimeString("it-IT", { timeZone: "Europe/Rome", hour: "2-digit", minute: "2-digit" }) : "";
 }
 
 export function formatDayLabel(value?: string | null, now = new Date()) {
@@ -24,7 +25,7 @@ export function formatDayLabel(value?: string | null, now = new Date()) {
   const diffDays = Math.round((startOfDay(now) - startOfDay(date)) / DAY_MS);
   if (diffDays === 0) return "Oggi";
   if (diffDays === 1) return "Ieri";
-  return date.toLocaleDateString("it-IT", { day: "2-digit", month: "long", year: "numeric" });
+  return date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "long", year: "numeric" });
 }
 
 // WhatsApp-style list timestamp: time today, "Ieri", weekday within a week, otherwise a date.
@@ -34,8 +35,8 @@ export function formatListTimestamp(value?: string | null, now = new Date()) {
   const diffDays = Math.round((startOfDay(now) - startOfDay(date)) / DAY_MS);
   if (diffDays <= 0) return formatShortTime(value);
   if (diffDays === 1) return "Ieri";
-  if (diffDays < 7) return date.toLocaleDateString("it-IT", { weekday: "short" });
-  return date.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit", year: "2-digit" });
+  if (diffDays < 7) return date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome", weekday: "short" });
+  return date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "2-digit", year: "2-digit" });
 }
 
 export function formatFileSize(bytes?: number) {

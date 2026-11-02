@@ -18,7 +18,7 @@ export function PracticeTimelineCard({ timeline }: Props) {
                 <strong>
                   {meta.icon} {getTimelineLabel(item.type)}
                 </strong>
-                <span>{new Date(item.createdAt).toLocaleString("it-IT")}</span>
+                <span>{new Date(item.createdAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}</span>
               </div>
               <p>{item.text}</p>
             </article>

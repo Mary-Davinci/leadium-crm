@@ -1,3 +1,4 @@
+import { romeDayStamp } from "../../lib/business-time";
 export type DecisionDocument = {
   key: string;
   label?: string;
@@ -53,8 +54,8 @@ export function getTaskDueLane(task: DecisionTask) {
   if (!task.dueAt) return "planned";
   const due = new Date(task.dueAt);
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+  const today = new Date(romeDayStamp(now)).getTime();
+  const dueDay = new Date(romeDayStamp(due)).getTime();
   if (due.getTime() < now.getTime()) return "overdue";
   if (dueDay === today) return "today";
   return "planned";
@@ -90,7 +91,7 @@ export function formatPaymentStatusDate(value?: string) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" });
+  return date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "2-digit" });
 }
 
 export function getPaymentVisualStatus(payment: DecisionPayment) {
@@ -128,7 +129,7 @@ export function getRecommendedAction(lead: DecisionLead | null, openTasks: Decis
   if (firstTask) {
     return {
       label: firstTask.title,
-      detail: firstTask.dueAt ? `Scadenza ${new Date(firstTask.dueAt).toLocaleString("it-IT")}` : "Task da pianificare",
+      detail: firstTask.dueAt ? `Scadenza ${new Date(firstTask.dueAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}` : "Task da pianificare",
       kind: "task" as const,
       task: firstTask
     };

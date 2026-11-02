@@ -1,3 +1,4 @@
+import { useClock } from "../../lib/use-clock";
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -59,7 +60,7 @@ function formatEuroAmount(value: number) {
 function formatTimelineDate(value: string) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
-  return date.toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleString("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function getRelatedOpenTask(openTasks: CrmTask[], terms: string[]) {
@@ -98,8 +99,9 @@ export function ChatDecisionEngine({
   onPostponeTaskOneDay,
   automationSection
 }: ChatDecisionEngineProps) {
+  const clockTick = useClock();
   const navigate = useNavigate();
-  const decision = useMemo(() => getDecisionSnapshot(lead, openTasks), [lead, openTasks]);
+  const decision = useMemo(() => getDecisionSnapshot(lead, openTasks), [lead, openTasks, clockTick]);
   const [paymentsOpen, setPaymentsOpen] = useState(true);
   const [documentsOpen, setDocumentsOpen] = useState(false);
   const [callbackFormOpen, setCallbackFormOpen] = useState(false);
@@ -353,7 +355,7 @@ export function ChatDecisionEngine({
               <div key={task.id} className={`chat-info-task ${getTaskDueLane(task)}`}>
                 <button type="button" className="chat-info-task-open" onClick={() => navigate(buildPracticeUrl(lead.id, "task"))}>
                   <strong>{task.title}</strong>
-                  <span>{task.dueAt ? new Date(task.dueAt).toLocaleString("it-IT") : "Da pianificare"}</span>
+                  <span>{task.dueAt ? new Date(task.dueAt).toLocaleString("it-IT", { timeZone: "Europe/Rome" }) : "Da pianificare"}</span>
                 </button>
                 <div className="chat-info-actions">
                   <button type="button" className="chat-secondary-button small" disabled={busy} onClick={() => onPostponeTaskOneDay(task.id)}>
@@ -408,7 +410,7 @@ export function ChatDecisionEngine({
               <div className="chat-callback-form">
                 <label>
                   <span>Data e ora richiamo</span>
-                  <input type="datetime-local" value={callbackDate} onChange={(event) => setCallbackDate(event.target.value)} />
+                  <input type="datetime-local" title="Ora italiana (Europe/Rome), con cambio automatico ora solare e legale" value={callbackDate} onChange={(event) => setCallbackDate(event.target.value)} />
                 </label>
                 <label>
                   <span>Motivo</span>

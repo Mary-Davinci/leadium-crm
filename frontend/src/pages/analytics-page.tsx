@@ -1,3 +1,5 @@
+import { useClock } from "../lib/use-clock";
+import { romeCalendarDate } from "../lib/business-time";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ContactRound, Gauge, TrendingUp, TriangleAlert, UsersRound } from "lucide-react";
 import { PageState } from "../components/ui/page-state";
@@ -100,6 +102,7 @@ function Breakdown({ rows, emptyLabel }: { rows?: BreakdownRow[]; emptyLabel: st
 }
 
 export function AnalyticsPage() {
+  const clockTick = useClock();
   const authUser = getAuthUser();
   const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
   const actorKeys = useMemo(
@@ -140,17 +143,14 @@ export function AnalyticsPage() {
   const trend = useMemo(() => {
     const scoped = leadsSummary.filter((lead) => isAdmin || actorKeys.includes(key(lead.assignedTo)));
     return Array.from({ length: trendDays }, (_, index) => {
-      const start = new Date();
-      start.setHours(0, 0, 0, 0);
-      start.setDate(start.getDate() - trendDays + index + 1);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 1);
+      const start = romeCalendarDate(new Date(), -trendDays + index + 1, 0);
+      const end = romeCalendarDate(start, 1, 0);
       return {
         date: start,
         count: scoped.filter((lead) => timestamp(lead.createdAt) >= start.getTime() && timestamp(lead.createdAt) < end.getTime()).length
       };
     });
-  }, [leadsSummary, trendDays, isAdmin, actorKeys]);
+  }, [leadsSummary, trendDays, isAdmin, actorKeys, clockTick]);
 
   const trendMax = Math.max(2, ...trend.map((item) => item.count));
   const trendPoints = trend.map((item, index) => `${38 + (index * 604) / (trendDays - 1)},${162 - (item.count / trendMax) * 128}`).join(" ");
@@ -261,7 +261,7 @@ export function AnalyticsPage() {
           className="rpt-chart"
           viewBox="0 0 660 200"
           role="img"
-          aria-label={`Nuovi lead negli ultimi ${trendDays} giorni: ${trend.map((item) => `${item.date.toLocaleDateString("it-IT")}: ${item.count}`).join(", ")}`}
+          aria-label={`Nuovi lead negli ultimi ${trendDays} giorni: ${trend.map((item) => `${item.date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome" })}: ${item.count}`).join(", ")}`}
         >
           <defs>
             <linearGradient id="rpt-chart-fill" x1="0" y1="0" x2="0" y2="1">
@@ -283,7 +283,7 @@ export function AnalyticsPage() {
             <g key={index}>
               <circle cx={38 + (index * 604) / (trendDays - 1)} cy={162 - (item.count / trendMax) * 128} r="3" fill="#5191fa" stroke="white">
                 <title>
-                  {item.date.toLocaleDateString("it-IT")}: {item.count} lead
+                  {item.date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome" })}: {item.count} lead
                 </title>
               </circle>
               {(index === 0 || index === trendDays - 1 || index === Math.floor(trendDays / 2)) && (
@@ -292,7 +292,7 @@ export function AnalyticsPage() {
                   y="190"
                   textAnchor={index === 0 ? "start" : index === trendDays - 1 ? "end" : "middle"}
                 >
-                  {item.date.toLocaleDateString("it-IT", { day: "numeric", month: "short" })}
+                  {item.date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome", day: "numeric", month: "short" })}
                 </text>
               )}
             </g>

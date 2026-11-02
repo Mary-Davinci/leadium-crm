@@ -6,7 +6,7 @@ import { CustomerDetail } from "../features/customers/customer.types";
 import "../styles/customer-detail-page.css";
 
 const currencyFormatter = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
-const dateFormatter = new Intl.DateTimeFormat("it-IT", { day: "2-digit", month: "2-digit", year: "numeric" });
+const dateFormatter = new Intl.DateTimeFormat("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "2-digit", year: "numeric" });
 
 function formatCurrency(value?: number) {
   return currencyFormatter.format(Number(value || 0));

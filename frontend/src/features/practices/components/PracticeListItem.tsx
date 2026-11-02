@@ -1,3 +1,4 @@
+import { romeDayStamp } from "../../../lib/business-time";
 import type { MouseEvent } from "react";
 import { Lead } from "../pratiche.types";
 import { CrmTask } from "../../../store/crm-store";
@@ -97,16 +98,16 @@ function formatDueShort(value?: string) {
   if (!value) return "Da pianificare";
   const date = new Date(value);
   const now = new Date();
-  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const tomorrow = new Date(romeDayStamp(now) + 86400000).getTime();
+  const target = new Date(romeDayStamp(date)).getTime();
   const dayLabel =
-    target === new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    target === new Date(romeDayStamp(now)).getTime()
       ? "Oggi"
       : target === tomorrow
         ? "Domani"
-        : date.toLocaleDateString("it-IT");
+        : date.toLocaleDateString("it-IT", { timeZone: "Europe/Rome" });
 
-  return `${dayLabel}, ${date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}`;
+  return `${dayLabel}, ${date.toLocaleTimeString("it-IT", { timeZone: "Europe/Rome", hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function getDueDeltaLabel(value?: string) {
@@ -126,7 +127,7 @@ function formatCompactDateTime(value?: string | null) {
   if (!value) return "Non disponibile";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Non disponibile";
-  return date.toLocaleString("it-IT", {
+  return date.toLocaleString("it-IT", { timeZone: "Europe/Rome",
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",

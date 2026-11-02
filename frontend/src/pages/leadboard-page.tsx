@@ -1,3 +1,5 @@
+import { useAutoRefresh } from "../lib/use-auto-refresh";
+import { useClock } from "../lib/use-clock";
 import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
 import { isWorkedLead } from "../features/practices/worked";
 import { useEffect, useMemo, useState } from "react";
@@ -115,7 +117,7 @@ function compareLeadsForAssignment(a: Lead, b: Lead) {
 
 function formatImportDate(value?: string) {
   if (!value) return "Data import non disponibile";
-  return new Date(value).toLocaleString("it-IT", {
+  return new Date(value).toLocaleString("it-IT", { timeZone: "Europe/Rome",
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -135,6 +137,7 @@ function getLeadCompleteness(lead: Lead) {
 }
 
 export function LeadBoardPage() {
+  const clockTick = useClock();
   const authUser = getAuthUser();
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<CrmTask[]>(() => getTaskBoardCache()?.data.tasks.map(normalizeTask) || []);
@@ -223,6 +226,10 @@ export function LeadBoardPage() {
     return () => { cancelled = true; };
   }, [view, canView]);
 
+  useAutoRefresh(async () => {
+    try { await refreshManagement(); } catch (e) { setError(e instanceof Error ? e.message : "Aggiornamento non riuscito."); }
+  }, canView && !batchAssigning && !leadAction && !loading);
+
   const operatorUsers = useMemo(() => users.filter((user) => user.role === "operatore"), [users]);
 
   const operatorChoices = useMemo<OperatorOption[]>(() => {
@@ -264,7 +271,7 @@ export function LeadBoardPage() {
         };
       })
       .sort((a, b) => a.openCount - b.openCount || a.label.localeCompare(b.label, "it"));
-  }, [leads, operatorUsers, tasks]);
+  }, [leads, operatorUsers, tasks, clockTick]);
 
   useEffect(() => {
     if (defaultOperatorUsername || !operatorChoices.length) return;

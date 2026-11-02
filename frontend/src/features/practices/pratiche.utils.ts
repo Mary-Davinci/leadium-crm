@@ -1,3 +1,4 @@
+import { romeDayStamp } from "../../lib/business-time";
 import { Lead, NextActionMeta, Priority } from "./pratiche.types";
 
 export const urgencyLabels: Record<Priority, string> = {
@@ -112,7 +113,7 @@ export function getTravelLabel(lead: Lead) {
 
 export function formatDate(value?: string) {
   if (!value) return "Nessuna attività programmata";
-  return new Date(value).toLocaleString("it-IT");
+  return new Date(value).toLocaleString("it-IT", { timeZone: "Europe/Rome" });
 }
 
 export function getNextActionMeta(value?: string): NextActionMeta {
@@ -126,9 +127,9 @@ export function getNextActionMeta(value?: string): NextActionMeta {
 
   const date = new Date(value);
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const dateText = date.toLocaleString("it-IT");
+  const today = new Date(romeDayStamp(now));
+  const target = new Date(romeDayStamp(date));
+  const dateText = date.toLocaleString("it-IT", { timeZone: "Europe/Rome" });
 
   if (date.getTime() < now.getTime()) {
     return {
@@ -157,8 +158,8 @@ export function getSmartBucket(lead: Lead): "overdue" | "today" | "planned" | "n
   if (!lead.nextActionAt) return "new";
   const date = new Date(lead.nextActionAt);
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const today = new Date(romeDayStamp(now)).getTime();
+  const target = new Date(romeDayStamp(date)).getTime();
   if (date.getTime() < now.getTime()) return "overdue";
   if (target === today) return "today";
   return "planned";
@@ -167,8 +168,8 @@ export function getSmartBucket(lead: Lead): "overdue" | "today" | "planned" | "n
 export function getPriorityScore(lead: Lead) {
   const now = new Date();
   const next = lead.nextActionAt ? new Date(lead.nextActionAt) : null;
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const nextDay = next ? new Date(next.getFullYear(), next.getMonth(), next.getDate()).getTime() : null;
+  const today = new Date(romeDayStamp(now)).getTime();
+  const nextDay = next ? new Date(romeDayStamp(next)).getTime() : null;
   const isOverdue = Boolean(next && next.getTime() < now.getTime());
   const isToday = Boolean(nextDay !== null && nextDay === today);
   const isUrgent = String(lead.notes || "").toLowerCase().includes("urgente");

@@ -35,3 +35,7 @@ function loadEnvFromFile() {
 }
 
 loadEnvFromFile();
+
+// Business calendar: Node must not inherit UTC from the hosting machine.
+// IANA timezone rules automatically handle Italian summer/winter time.
+process.env.TZ = "Europe/Rome";
