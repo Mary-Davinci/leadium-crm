@@ -46,10 +46,14 @@ const failureMessages = {
 } as const;
 type FailureStage = keyof typeof failureMessages;
 class MonitorStageError extends Error {
-  constructor(stage: FailureStage) { super(`${failureMessages[stage]} [${stage}]`); }
+  constructor(stage: FailureStage, detail?: string) { super(`${failureMessages[stage]} [${stage}]${detail ? ": " + detail : ""}`); }
 }
 async function atStage<T>(stage: FailureStage, work: () => Promise<T>): Promise<T> {
-  try { return await work(); } catch (error) { throw error instanceof MonitorStageError ? error : new MonitorStageError(stage); }
+  try { return await work(); } catch (error) {
+    if (error instanceof MonitorStageError) throw error;
+    // Which DN and HTTP status failed (local text only), so the admin knows what to fix on the PBX.
+    throw new MonitorStageError(stage, error instanceof MonitorReadError ? error.message : undefined);
+  }
 }
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
   if (signal.aborted) return resolve();
@@ -269,7 +273,8 @@ export class ThreeCxMonitor {
     // Never enumerate or read any DN outside the fixed allowlist, even if the SP sees more.
     for (const dn of monitoredDns()) {
       const info = await this.request("/callcontrol/" + dn);
-      if (!info || info.dn !== dn || !Array.isArray(info.participants) || typeof info.type !== "string") throw new Error("Invalid DN snapshot");
+      if (!info) throw new MonitorReadError(`3CX monitoring read unavailable for DN ${dn} (not found)`);
+      if (info.dn !== dn || !Array.isArray(info.participants) || typeof info.type !== "string") throw new MonitorReadError(`3CX monitoring snapshot invalid for DN ${dn}`);
       this.dnTypes.set(dn, info.type);
       // Diagnostic failures must never interrupt participant processing or startup.
       try { this.deviceDiagnostics.observe(dn, info.devices); }

@@ -221,6 +221,7 @@ async function main() {
     const f = fixture({ deniedDn: "920" }); f.monitor.start();
     try {
       await until(() => Boolean(f.monitor.diagnostics().lastError?.includes("initial_reconcile_failed")), "permission diagnostic");
+      assert.match(f.monitor.diagnostics().lastError!, /DN 920 \(HTTP \d{3}\)$/, "the admin sees which DN the PBX refuses");
       assert.equal(f.deliveries.length, 0); assert.ok(!JSON.stringify(f.monitor.diagnostics()).includes(SECRET));
       assert.ok(f.requests.every(request => request.path === "/connect/token" || request.method === "GET"));
     } finally { await f.monitor.stop(); }
