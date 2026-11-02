@@ -151,7 +151,7 @@ function getSessionFromRequest(req: http.IncomingMessage) {
 // Identity fields the lead service trusts only with the internal capability: a browser can
 // never supply them; the gateway removes them and re-adds only what the session proves.
 function stripIdentityFields<T extends Record<string, any>>(body: T): T {
-  for (const key of ["__creator", "__contactActor", "__paymentActor", "__assignActor"]) delete body[key];
+  for (const key of ["__creator", "__contactActor", "__paymentActor", "__assignActor", "__actor"]) delete body[key];
   return body;
 }
 
@@ -1104,6 +1104,36 @@ export const server = http.createServer(async (req, res) => {
       const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json", ...internalIdentityHeaders() }, body: JSON.stringify(body) });
       await forwardUpstreamResponse(res, upstream);
       return;
+    }
+    // Archive / restore (admin), "worked" and customer email (operators and admins). Only the
+    // fields each action needs are forwarded; the author always comes from the session.
+    const leadAction = pathname.replace(/\/+$/, "").match(/^\/api\/leads\/([^/]+)\/(archive|restore|worked|worked\/undo|email)$/);
+    if (leadAction && method === "POST") {
+      const action = leadAction[2];
+      if ((action === "archive" || action === "restore") && !isAdmin(session.user)) {
+        return sendJson(res, 403, { error: "Solo admin e super admin possono archiviare o ripristinare un contatto." });
+      }
+      const leadId = decodeURIComponent(leadAction[1]);
+      if (!isAdmin(session.user)) {
+        let status: string;
+        try { status = await fetchLeadStatus(leadId); } catch { return sendJson(res, 502, { error: "Impossibile verificare lo stato della pratica." }); }
+        if (!status) return sendJson(res, 404, { error: "Pratica non trovata." });
+        if ([PRACTICE_READY_STATUS, PRACTICE_CLOSED_STATUS].includes(status)) return sendJson(res, 403, { error: "Questa pratica e riservata alla supervisione admin." });
+      }
+      const input = (await parseJsonBody(req)) as Record<string, any>;
+      const fields = action === "archive" ? ["reason"] : action === "worked" ? ["note"] : action === "email" ? ["subject", "text"] : [];
+      const body: Record<string, unknown> = Object.fromEntries(fields.map((key) => [key, typeof input[key] === "string" ? input[key] : ""]));
+      body.__actor = { id: session.user.id, username: session.user.username, role: session.user.role };
+      const upstream = await fetch(`${LEAD_URL}/leads/${encodeURIComponent(leadId)}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...internalIdentityHeaders() },
+        body: JSON.stringify(body)
+      });
+      await forwardUpstreamResponse(res, upstream);
+      return;
+    }
+    if (pathname.replace(/\/+$/, "") === "/api/leads" && method === "GET" && url.searchParams.has("archived") && !isAdmin(session.user)) {
+      return sendJson(res, 403, { error: "Solo admin e super admin possono consultare i contatti archiviati." });
     }
     const leadScopedMatch = pathname.match(/^\/api\/leads\/([^/]+)(?:\/(notes|activities|calls))?$/);
     if (leadScopedMatch && !isAdmin(session.user)) {

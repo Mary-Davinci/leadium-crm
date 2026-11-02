@@ -1,0 +1,12 @@
+.lead-action-dialog { width: min(520px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; border: 1px solid #d5deea; border-radius: 10px; padding: 24px; color: #1b2a40; background: #fff; }
+.lead-action-dialog::backdrop { background: #1b2a4080; }
+.lead-action-dialog h3 { margin: 0 0 12px; }
+.lead-action-dialog p { font-size: 13px; line-height: 1.5; }
+.lead-action-dialog label { display: grid; gap: 6px; margin: 14px 0; font-size: 13px; font-weight: 600; }
+.lead-action-dialog input, .lead-action-dialog textarea { box-sizing: border-box; width: 100%; padding: 10px; font: inherit; border: 1px solid #d5deea; border-radius: 8px; }
+.lead-action-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.lead-action-dialog button { padding: 9px 12px; border: 1px solid #d5deea; border-radius: 8px; background: #f8fbff; color: #213b62; cursor: pointer; }
+.lead-action-dialog button[type=submit] { background: #225fb6; color: white; }
+.lead-action-dialog button:disabled { opacity: .55; cursor: default; }
+.lead-action-dialog :focus-visible { outline: 2px solid #225fb6; outline-offset: 3px; }
+.lead-action-error { color: #a42121; }

@@ -1,3 +1,5 @@
+import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
+import { isWorkedLead } from "../features/practices/worked";
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { getAuthUser } from "../lib/auth";
@@ -16,6 +18,10 @@ import {
 import "../styles/leadboard-page.css";
 
 type Lead = {
+  workedAt?: string | null;
+  archivedAt?: string | null;
+  archivedBy?: string | null;
+  archiveReason?: string | null;
   id: string;
   fullName: string;
   phone: string;
@@ -136,7 +142,6 @@ export function LeadBoardPage() {
   const [users, setUsers] = useState<CrmUser[]>(() => getUsersCache()?.data || []);
   const [defaultOperatorUsername, setDefaultOperatorUsername] = useState("");
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
-  const [assigningLeadId, setAssigningLeadId] = useState("");
   const [search, setSearch] = useState("");
   const [dataFilter, setDataFilter] = useState<DataFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("newest");
@@ -145,6 +150,10 @@ export function LeadBoardPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const [view, setView] = useState("inbox");
+  const [archivedLeads, setArchivedLeads] = useState<Lead[]>([]);
+  const [leadAction, setLeadAction] = useState<{ lead: Lead; action: LeadAction } | null>(null);
+  const [notice, setNotice] = useState("");
   const canView = authUser?.role === "admin" || authUser?.role === "super_admin";
 
   useEffect(() => {
@@ -194,6 +203,26 @@ export function LeadBoardPage() {
     };
   }, [canView]);
 
+  async function refreshManagement() {
+    const [board, archived] = await Promise.all([
+      api<TaskBoardPayload>("/api/tasks/board"), api<Lead[]>("/api/leads?archived=only")
+    ]);
+    setTaskBoardCache(board.tasks, board.leads);
+    setTasks(board.tasks.map(normalizeTask));
+    setLeads(board.leads.map(normalizeLead));
+    setArchivedLeads(archived.map(normalizeLead));
+  }
+  useEffect(() => {
+    setSelectedLeadIds([]);
+    if (!canView || view !== "archived") return;
+    let cancelled = false;
+    setLoading(true);
+    api<Lead[]>("/api/leads?archived=only").then((rows) => { if (!cancelled) setArchivedLeads(rows.map(normalizeLead)); })
+      .catch((e) => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [view, canView]);
+
   const operatorUsers = useMemo(() => users.filter((user) => user.role === "operatore"), [users]);
 
   const operatorChoices = useMemo<OperatorOption[]>(() => {
@@ -203,7 +232,7 @@ export function LeadBoardPage() {
 
     leads.forEach((lead) => {
       const assignedKey = normalizeKey(lead.assignedTo);
-      if (!assignedKey || (lead.closingOutcome || "open") !== "open") return;
+      if (!assignedKey || isWorkedLead(lead)) return;
       leadsByAssignee.set(assignedKey, (leadsByAssignee.get(assignedKey) || 0) + 1);
     });
 
@@ -252,7 +281,11 @@ export function LeadBoardPage() {
 
   const filteredLeads = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const filtered = importedUnassignedLeads.filter((lead) => {
+    const source = view === "inbox" ? importedUnassignedLeads : view === "archived" ? archivedLeads : view === "all" ? leads : leads.filter((lead) => {
+      const operator = operatorChoices.find((item) => item.username === view);
+      return [normalizeKey(view), normalizeKey(operator?.label)].includes(normalizeKey(lead.assignedTo));
+    });
+    const filtered = source.filter((lead) => {
       if (dataFilter === "missing-phone" && lead.phone) return false;
       if (dataFilter === "missing-email" && lead.email) return false;
       if (dataFilter === "complete" && (!lead.phone || !lead.email)) return false;
@@ -276,7 +309,7 @@ export function LeadBoardPage() {
     }
 
     return filtered.sort(compareLeadsForAssignment);
-  }, [assignmentDrafts, dataFilter, defaultOperatorUsername, importedUnassignedLeads, operatorChoices, search, sortMode]);
+  }, [assignmentDrafts, dataFilter, defaultOperatorUsername, importedUnassignedLeads, operatorChoices, search, sortMode, view, archivedLeads, leads]);
 
   const summary = useMemo(
     () => ({
@@ -336,54 +369,22 @@ export function LeadBoardPage() {
     });
   }
 
-  async function handleAssignLead(lead: Lead) {
-    const assignedTo = getLeadAssigneeDraft(lead.id).trim();
-    if (!assignedTo) {
-      setError("Seleziona un operatore prima di assegnare la lead.");
-      return;
-    }
-
-    setAssigningLeadId(lead.id);
-    setError("");
-    try {
-      await api(`/api/leads/${lead.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ assignedTo })
-      });
-      applyAssignmentLocally([lead.id], assignedTo);
-    } catch (assignError) {
-      setError(assignError instanceof Error ? assignError.message : "Errore assegnazione lead.");
-    } finally {
-      setAssigningLeadId("");
-    }
-  }
-
   async function handleAssignVisibleBatch() {
-    const assignedTo = defaultOperatorUsername.trim();
-    if (!assignedTo) {
-      setError("Seleziona un operatore predefinito per l'assegnazione batch.");
-      return;
-    }
-    const targetLeadIds = batchTargetIds;
-    if (!targetLeadIds.length) return;
-
+    const target = operatorUsers.find((user) => user.username === defaultOperatorUsername);
+    if (!target || !batchTargetIds.length) return;
     setBatchAssigning(true);
     setError("");
-    try {
-      await Promise.all(
-        targetLeadIds.map((leadId) =>
-          api(`/api/leads/${leadId}`, {
-            method: "PATCH",
-            body: JSON.stringify({ assignedTo })
-          })
-        )
-      );
-      applyAssignmentLocally(targetLeadIds, assignedTo);
-    } catch (assignError) {
-      setError(assignError instanceof Error ? assignError.message : "Errore assegnazione batch.");
-    } finally {
-      setBatchAssigning(false);
-    }
+    setNotice("");
+    const results = await Promise.allSettled(batchTargetIds.map((leadId) => api(`/api/leads/${leadId}/assign`, {
+      method: "POST", body: JSON.stringify({ userId: target.id })
+    })));
+    const succeeded = batchTargetIds.filter((_, index) => results[index].status === "fulfilled");
+    applyAssignmentLocally(succeeded, target.username);
+    const failed = results.filter((result) => result.status === "rejected");
+    setNotice(`${succeeded.length} lead assegnate a ${getOperatorDisplay(target)}.`);
+    if (failed.length) setError(`${failed.length} assegnazioni non riuscite. ${(failed[0] as PromiseRejectedResult).reason?.message || "Riprova sulle lead rimaste selezionate."}`);
+    try { await refreshManagement(); } catch { setError("Assegnazioni salvate; aggiornamento elenco non riuscito. Premi Aggiorna."); }
+    setBatchAssigning(false);
   }
 
   if (!canView) return <Navigate to="/dashboard" replace />;
@@ -406,6 +407,18 @@ export function LeadBoardPage() {
         </div>
       </section>
 
+      {leadAction && <LeadActionDialog key={`${leadAction.lead.id}-${leadAction.action}`} lead={leadAction.lead} action={leadAction.action}
+        onClose={() => setLeadAction(null)} onDone={async () => {
+          setNotice("Contatto aggiornato. Operazione registrata nello storico.");
+          try { await refreshManagement(); } catch { setError("Operazione salvata; aggiorna l'elenco per vedere i dati recenti."); }
+        }} />}
+      {notice && <div className="ops-alert neutral" role="status">{notice}</div>}
+      <nav className="ops-management-tabs" aria-label="Elenchi gestione">
+        <button type="button" aria-pressed={view === "inbox"} onClick={() => setView("inbox")}>Da assegnare</button>
+        <button type="button" aria-pressed={view === "all"} onClick={() => setView("all")}>Tutte le lead</button>
+        <button type="button" aria-pressed={view === "archived"} onClick={() => setView("archived")}>Archiviate</button>
+        {!["inbox", "all", "archived"].includes(view) && <strong>Lead di {operatorChoices.find((operator) => operator.username === view)?.label}</strong>}
+      </nav>
       {error ? <div className="ops-alert">{error}</div> : null}
       {loading ? <div className="ops-alert neutral">Caricamento coda lead...</div> : null}
 
@@ -445,7 +458,7 @@ export function LeadBoardPage() {
 
           <div className="ops-list-head">
             <div className="ops-list-summary">
-              <strong>Coda da assegnare</strong>
+              <strong>{view === "inbox" ? "Coda da assegnare" : view === "archived" ? "Contatti archiviati" : view === "all" ? "Tutte le lead" : "Lead assegnate all’operatore"}</strong>
               <span>{summary.visibleLeads} visibili</span>
             </div>
             <label className="ops-select-all">
@@ -459,10 +472,10 @@ export function LeadBoardPage() {
             <span>Lead</span>
             <span>Contatti</span>
             <span>Origine</span>
-            <span>Operatore suggerito</span>
+            <span>Operatore e azioni</span>
           </div>
 
-          <div className="ops-grid-body" role="list" aria-label="Lead senza assegnazione">
+          <div className="ops-grid-body" role="list" aria-label="Elenco lead">
             {filteredLeads.map((lead) => {
               const currentDraft = getLeadAssigneeDraft(lead.id);
               const suggestedOperator = operatorChoices.find((operator) => operator.username === currentDraft) || null;
@@ -478,7 +491,7 @@ export function LeadBoardPage() {
                   </div>
 
                   <div className="ops-row-cell lead">
-                    <strong>{lead.fullName}</strong>
+                    <button type="button" className="ops-refresh-btn" onClick={() => navigate(`/pratiche/${lead.id}`)}>{lead.fullName}</button>
                     <small>Importata {formatImportDate(lead.createdAt || lead.updatedAt)}</small>
                   </div>
 
@@ -492,12 +505,16 @@ export function LeadBoardPage() {
                   </div>
 
                   <div className="ops-row-cell assignee">
-                    <strong>{suggestedOperator?.label || "Nessun owner"}</strong>
+                    <strong>{lead.assignedTo || suggestedOperator?.label || "Nessun operatore"}</strong>
                     <small>
                       {suggestedOperator
                         ? formatOperatorLoad(suggestedOperator)
                         : "Assegna dal pannello"}
                     </small>
+                    {view === "archived" ? <>
+                      <small>{lead.archivedBy} · {formatImportDate(lead.archivedAt || undefined)} · {lead.archiveReason}</small>
+                      <button type="button" className="ops-refresh-btn" onClick={() => setLeadAction({ lead, action: "restore" })}>Ripristina</button>
+                    </> : <button type="button" className="ops-refresh-btn" disabled={batchAssigning} onClick={() => setLeadAction({ lead, action: "archive" })}>Archivia</button>}
                   </div>
 
                 </article>
@@ -506,11 +523,9 @@ export function LeadBoardPage() {
 
             {!filteredLeads.length ? (
               <div className="ops-empty-state">
-                <strong>{importedUnassignedLeads.length ? "Nessuna lead trovata con questo filtro." : "Coda pulita."}</strong>
+                <strong>Nessuna lead in questo elenco.</strong>
                 <p>
-                  {importedUnassignedLeads.length
-                    ? "Prova a cambiare ricerca o filtro."
-                    : "Le lead importate da Excel sono tutte assegnate."}
+                  {"Scegli un altro elenco oppure modifica ricerca e filtri."}
                 </p>
               </div>
             ) : null}
@@ -544,7 +559,7 @@ export function LeadBoardPage() {
               type="button"
               className="ops-assign-btn secondary"
               onClick={handleAssignVisibleBatch}
-              disabled={!selectedDefaultOperator || !batchTargetIds.length || batchAssigning}
+              disabled={view === "archived" || !selectedDefaultOperator || !batchTargetIds.length || batchAssigning}
             >
               {batchAssigning ? "Assegno..." : `Assegna ${batchTargetIds.length} lead`}
             </button>
@@ -567,8 +582,8 @@ export function LeadBoardPage() {
                 <button
                   key={operator.username}
                   type="button"
-                  className={`ops-operator-item ${defaultOperatorUsername === operator.username ? "active" : ""} ${operator.openCount > 10 ? "warning" : ""}`}
-                  onClick={() => setDefaultOperatorUsername(operator.username)}
+                  className={`ops-operator-item ${view === operator.username ? "active" : ""} ${operator.openCount > 10 ? "warning" : ""}`}
+                  onClick={() => { setView(operator.username); setSearch(""); }}
                 >
                   <div>
                     <strong>{operator.label}</strong>

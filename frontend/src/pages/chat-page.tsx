@@ -3,7 +3,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { WifiOff, X } from "lucide-react";
 import { getAuthUser } from "../lib/auth";
 import { api } from "../lib/api";
-import { useThreeCx } from "../features/calls/threecx-context";
 import { ChatDecisionEngine, ChatDecisionLead, Payment, PracticeDocument, sortOperationalTasks } from "../features/chat/ChatDecisionEngine";
 import { buildPracticeUrl } from "../features/practices/practice-links";
 import { uploadChatFile } from "../features/chat/chat-api";
@@ -18,7 +17,6 @@ import {
   mapChatError,
   normalizeNewChatPhone,
   renderTemplatePreview,
-  getTemplateParameterError,
   shouldCloseListOnSelect,
   validateChatFile,
   type ThreadMarker
@@ -78,26 +76,27 @@ type TaskBoardPayload = {
 type OutgoingJob =
   | { kind: "text"; conversationId: string; to: string; text: string; idempotencyKey: string }
   | {
-      kind: "template";
-      conversationId: string;
-      to: string;
-      template: TemplateOption;
-      params: Record<string, string>;
-      idempotencyKey: string;
-    }
+    kind: "template";
+    conversationId: string;
+    to: string;
+    template: TemplateOption;
+    params: Record<string, string>;
+    idempotencyKey: string;
+  }
   | {
-      kind: "attachment";
-      conversationId: string;
-      to: string;
-      leadId: string;
-      draft: DraftAttachment;
-      caption: string;
-      // Set once the upload succeeded, so a retry after a failed send reuses the stored file
-      // instead of uploading a duplicate copy.
-      stored?: { storageKey: string; name: string; mimeType: string; size: number };
-    };
+    kind: "attachment";
+    conversationId: string;
+    to: string;
+    leadId: string;
+    draft: DraftAttachment;
+    caption: string;
+    // Set once the upload succeeded, so a retry after a failed send reuses the stored file
+    // instead of uploading a duplicate copy.
+    stored?: { storageKey: string; name: string; mimeType: string; size: number };
+  };
 
 const FALLBACK_TEMPLATE_OPTIONS: TemplateOption[] = [
+  { key: "reopen_contact", name: "reopen_contact", label: "Ricontatto pratica", body: "Ciao, ti ricontattiamo per aggiornarti sulla tua pratica.", category: "followup" },
   { key: "request_documents", name: "request_documents", label: "Richiesta documenti", body: "Ciao, ci servono i documenti mancanti per proseguire con la pratica.", category: "utility" },
   { key: "payment_followup", name: "payment_followup", label: "Promemoria pagamento", body: "Ciao, ti contattiamo per il pagamento in sospeso della tua pratica.", category: "utility" },
   { key: "booking_update", name: "booking_update", label: "Aggiornamento prenotazione", body: "Ciao, abbiamo un aggiornamento sulla tua prenotazione.", category: "utility" }
@@ -445,7 +444,7 @@ export function ChatPage() {
   const templateBlockedReason =
     selectedTemplateCheck && !selectedTemplateCheck.allowed && ["opt_out", "already_sent"].includes(String(selectedTemplateCheck.code))
       ? String(selectedTemplateCheck.reason || "")
-      : getTemplateParameterError(selectedTemplate, templateParams);
+      : "";
 
   const practiceDocuments = useMemo<PracticeDocumentOption[]>(
     () =>
@@ -799,7 +798,7 @@ export function ChatPage() {
       return;
     }
     if (messageMode === "template") {
-      if (!selectedTemplate || templateBlockedReason) return;
+      if (!selectedTemplate) return;
       void sendJobs([
         { kind: "template", conversationId, to, template: selectedTemplate, params: { ...templateParams }, idempotencyKey: newLocalId("send") }
       ]);
@@ -1055,10 +1054,9 @@ export function ChatPage() {
     );
   }
 
-  const threeCx = useThreeCx();
-  async function callCustomer() {
+  function callCustomer() {
     const phone = String(currentLead?.phone || selectedConversation?.phone || "").trim();
-    await threeCx.dial(phone, { leadId: currentLead?.id, customerName: currentLead?.fullName || selectedConversation?.customerName });
+    if (phone) window.location.href = `tel:${phone}`;
   }
 
   // Quick actions from the practice panel prefill the composer with the matching template.

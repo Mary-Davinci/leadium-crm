@@ -1,3 +1,5 @@
+import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
+import { isWorkedLead } from "../features/practices/worked";
 import type { WhatsappAutomationInfo } from "../features/chat/chat.types";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
@@ -24,6 +26,12 @@ type Workflow = {
 };
 
 type Lead = {
+  workedAt?: string | null;
+  workedBy?: string | null;
+  workedNote?: string | null;
+  archivedAt?: string | null;
+  archiveReason?: string | null;
+  closingOutcome?: "open" | "won" | "lost" | "disqualified";
   id: string;
   // Explicit opt-out: no WhatsApp templates are sent (set/cleared from the chat contact panel).
   doNotContact?: { active?: boolean; reason?: string | null } | null;
@@ -585,6 +593,11 @@ export function contactPatch(initial: ContactDraft, draft: ContactDraft) {
 
 function getTimelineLabel(type: string) {
   const t = String(type || "").toLowerCase();
+  if (t === "email_sent") return "Email inviata";
+  if (t === "lead_worked") return "Pratica lavorata";
+  if (t === "lead_worked_undone") return "Pratica rimessa tra le attive";
+  if (t === "lead_archived") return "Contatto archiviato";
+  if (t === "lead_restored") return "Contatto ripristinato";
   if (t === "lead_phone_changed") return "Telefono modificato";
   if (t === "lead_contact_changed") return "Dati cliente modificati";
   if (t === "lead_deduplicated") return "Inserimento duplicato";
@@ -842,6 +855,8 @@ function getTaskUrgencyMeta(task: CrmTask) {
 }
 
 export function PraticaDetailPage() {
+  const [leadAction, setLeadAction] = useState<LeadAction | null>(null);
+  const [actionNotice, setActionNotice] = useState("");
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -2209,6 +2224,14 @@ export function PraticaDetailPage() {
     <div className="pd-page panel">
 
 
+      {detail && leadAction && <LeadActionDialog key={`${detail.lead.id}-${leadAction}`} lead={detail.lead} action={leadAction}
+        onClose={() => setLeadAction(null)} onDone={async () => {
+          setActionNotice(leadAction === "email" ? "Email inviata e registrata nello storico." : "Pratica aggiornata.");
+          if (leadAction === "worked") setTaskBoardTasks((current) => current.map((task) =>
+            task.leadId === detail.lead.id && task.status === "open" ? { ...task, status: "dismissed" } : task));
+          await load();
+        }} />}
+      {actionNotice && <p role="status">{actionNotice}</p>}
       {loading ? <p className="muted">Caricamento dettaglio...</p> : null}
       {error ? <p className="pd-error">{error}</p> : null}
 
@@ -2234,6 +2257,13 @@ export function PraticaDetailPage() {
               </p>
               {contactNotice ? <p className="pd-phone-notice" role="status">{contactNotice}</p> : null}
               <p className="pd-sub pd-sub-secondary">{detail.lead.email || "-"}</p>
+              <div className="pd-badges">
+                <button type="button" className="pd-inline-edit" disabled={busy || !detail.lead.email || Boolean(detail.lead.archivedAt)} onClick={() => setLeadAction("email")}>Invia email</button>
+                {detail.lead.workedAt ? <>
+                  <span>Lavorata da {detail.lead.workedBy} · {detail.lead.workedNote}</span>
+                  <button type="button" className="pd-inline-edit" disabled={busy} onClick={() => setLeadAction("worked/undo")}>Rimetti tra le attive</button>
+                </> : !isWorkedLead(detail.lead) && !["Pronta per chiusura", "Chiusa 100%"].includes(detail.lead.status) && <button type="button" className="pd-inline-edit" disabled={busy} onClick={() => setLeadAction("worked")}>Segna come lavorata</button>}
+              </div>
               {detail.lead.customerId ? (
                 <Link className="pd-customer-link" to={`/customers/${detail.lead.customerId}`}>
                   {customerSummary

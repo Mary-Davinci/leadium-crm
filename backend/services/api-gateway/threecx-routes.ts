@@ -19,7 +19,7 @@ export async function lookupThreeCxCaller(_externalId: string | null, phone: str
   let rows: any[];
   if (isMongoEnabled()) {
     const db = await getMongoDb();
-    rows = await db.collection("leads").find({ phoneNormalized: { $in: variants } }).limit(2).toArray();
+    rows = await db.collection("leads").find({ phoneNormalized: { $in: variants }, archivedAt: { $exists: false } }).limit(2).toArray();
   } else rows = (await listLeads()).filter(lead => variants.includes(normalizePhone(lead.phone)));
   // Multiple matching practices need an operator choice; never open an arbitrary record.
   return rows.length === 1 ? { id: String(rows[0].id || rows[0]._id), fullName: rows[0].fullName, status: rows[0].status } : null;

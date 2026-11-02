@@ -95,6 +95,7 @@
 }
 
 .ops-panel {
+  min-width: 0;
   padding: 16px;
 }
 
@@ -177,7 +178,7 @@
 .ops-grid-head,
 .ops-row {
   display: grid;
-  grid-template-columns: 34px minmax(180px, 1.15fr) minmax(180px, 1.05fr) minmax(220px, 1.35fr) minmax(240px, 1.55fr);
+  grid-template-columns: 28px minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, .8fr) minmax(0, 1.2fr);
   gap: 12px;
   align-items: center;
 }
@@ -253,7 +254,7 @@
   justify-self: end;
   justify-items: end;
   text-align: right;
-  min-width: 220px;
+  min-width: 0;
   gap: 2px;
 }
 
@@ -447,7 +448,7 @@
 @media (max-width: 1280px) {
   .ops-grid-head,
   .ops-row {
-    grid-template-columns: 34px minmax(160px, 1.1fr) minmax(160px, 1fr) minmax(170px, 1.2fr) minmax(210px, 1.35fr);
+    grid-template-columns: 28px minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, .8fr) minmax(0, 1.2fr);
   }
 }
 
@@ -517,3 +518,8 @@
     width: 100%;
   }
 }
+.ops-management-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.ops-management-tabs button { border: 1px solid #d5deea; border-radius: 8px; background: #fff; color: #213b62; padding: 8px 12px; cursor: pointer; }
+.ops-management-tabs button[aria-pressed=true] { background: #225fb6; color: #fff; }
+.ops-management-tabs :focus-visible { outline: 2px solid #225fb6; outline-offset: 3px; }
+.ops-row-cell.assignee small { overflow-wrap: anywhere; }

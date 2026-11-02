@@ -2,7 +2,7 @@ import { Workflow } from "../pratiche.types";
 
 export type PracticeFiltersProps = {
   isAdmin: boolean;
-  practiceView: "active" | "ready" | "closed";
+  practiceView: "active" | "ready" | "closed" | "worked";
   workflow: Workflow | null;
   assignees: string[];
   search: string;

@@ -1,3 +1,4 @@
+import { isWorkedLead } from "../features/practices/worked";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PracticeListItem } from "../features/practices/components/PracticeListItem";
@@ -44,15 +45,15 @@ const practiceDetailCache = new Map<string, LeadDetail>();
 const PRACTICE_READY_STATUS = "pronta per chiusura";
 const PRACTICE_CLOSED_STATUS = "chiusa 100";
 
-type PracticeView = "active" | "ready" | "closed";
+type PracticeView = "active" | "ready" | "closed" | "worked";
 type CallConnection = "answered" | "no_answer" | "busy";
 type AnsweredCallOutcome = "completed" | "interested" | "call_back" | "not_interested";
 
-function getPracticeViewFromStatus(status?: string | null): PracticeView {
-  const normalized = String(status || "").trim().toLowerCase();
+function getPracticeViewFromLead(lead: Lead): PracticeView {
+  const normalized = String(lead.status || "").trim().toLowerCase();
   if (normalized.includes(PRACTICE_CLOSED_STATUS)) return "closed";
   if (normalized.includes(PRACTICE_READY_STATUS)) return "ready";
-  return "active";
+  return isWorkedLead(lead) ? "worked" : "active";
 }
 
 function dedupeTasksById(tasks: CrmTask[]) {
@@ -740,7 +741,7 @@ export function PratichePage() {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (!isAdmin && practiceView !== "active") {
+    if (!isAdmin && practiceView !== "active" && practiceView !== "worked") {
       setPracticeView("active");
     }
   }, [isAdmin, practiceView]);
@@ -822,20 +823,21 @@ export function PratichePage() {
 
   const scopedRows = useMemo(() => getBaseScopeRows(leads), [leads, assignedFilter, scopeFilter, currentUserKeys]);
   const activeScopedRows = useMemo(
-    () => scopedRows.filter((lead) => getPracticeViewFromStatus(lead.status) === "active"),
+    () => scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "active"),
     [scopedRows]
   );
   const viewCounts = useMemo(
     () => ({
       active: activeScopedRows.length,
-      ready: scopedRows.filter((lead) => getPracticeViewFromStatus(lead.status) === "ready").length,
-      closed: scopedRows.filter((lead) => getPracticeViewFromStatus(lead.status) === "closed").length
+      worked: scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "worked" || (!isAdmin && ["ready", "closed"].includes(getPracticeViewFromLead(lead)))).length,
+      ready: scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "ready").length,
+      closed: scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "closed").length
     }),
-    [activeScopedRows.length, scopedRows]
+    [activeScopedRows.length, scopedRows, isAdmin]
   );
   const viewScopedRows = useMemo(
-    () => scopedRows.filter((lead) => getPracticeViewFromStatus(lead.status) === practiceView),
-    [scopedRows, practiceView]
+    () => scopedRows.filter((lead) => getPracticeViewFromLead(lead) === practiceView || (!isAdmin && practiceView === "worked" && ["ready", "closed"].includes(getPracticeViewFromLead(lead)))),
+    [scopedRows, practiceView, isAdmin]
   );
 
   const rows = useMemo(
@@ -877,7 +879,7 @@ export function PratichePage() {
     };
 
     return [...rows].sort((a, b) => {
-      if (practiceView === "closed") {
+      if (practiceView === "closed" || practiceView === "worked") {
         const aTs = new Date(a.updatedAt || a.createdAt || 0).getTime();
         const bTs = new Date(b.updatedAt || b.createdAt || 0).getTime();
         return bTs - aTs;
@@ -983,7 +985,7 @@ export function PratichePage() {
   const modalClosedOutcome = resolvedCallOutcome === "not_interested";
   const isQuickDetailVisible = Boolean(selectedLeadId);
   const pageTitle =
-    practiceView === "closed"
+    practiceView === "worked" ? "Pratiche lavorate" : practiceView === "closed"
       ? "Archivio pratiche"
       : practiceView === "ready"
         ? "Pratiche pronte alla chiusura"
@@ -991,7 +993,7 @@ export function PratichePage() {
           ? "Pratiche del team"
           : "Il mio lavoro";
   const pageSubtitle =
-    practiceView === "closed"
+    practiceView === "worked" ? "Pratiche con esito finale o segnate come lavorate, consultabili nello storico." : practiceView === "closed"
       ? "Storico delle pratiche completate, consultabili e riapribili se serve."
       : practiceView === "ready"
         ? "Ultimo controllo prima della chiusura definitiva del cliente."
@@ -1005,7 +1007,7 @@ export function PratichePage() {
         ? "Nessuna pratica pronta alla chiusura con i filtri attuali."
         : "Nessuna pratica trovata con i filtri attuali.";
   const viewHintText =
-    practiceView === "ready"
+    practiceView === "worked" ? "Qui trovi le pratiche con esito finale e quelle segnate come lavorate. Le note da sole non spostano una pratica." : practiceView === "ready"
       ? "Qui restano solo le pratiche che hanno completato checklist e attendono conferma finale."
       : practiceView === "closed"
         ? "Questa vista e pensata come archivio operativo: consulta, verifica e riapri solo quando serve."
@@ -1048,6 +1050,11 @@ export function PratichePage() {
               >
                 <strong>Attive</strong>
                 <span>{viewCounts.active} da lavorare</span>
+              </button>
+              <button type="button" role="tab" aria-selected={practiceView === "worked"}
+                className={`pr-view-tile pr-view-tone-closed ${practiceView === "worked" ? "active" : ""}`}
+                onClick={() => setPracticeView("worked")}>
+                <strong>Lavorate</strong><span>{viewCounts.worked} lavorate</span>
               </button>
               {isAdmin ? (
                 <button

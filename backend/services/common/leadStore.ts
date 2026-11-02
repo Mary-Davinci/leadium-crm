@@ -33,9 +33,15 @@ function fromLeadDoc(doc: any) {
   return lead;
 }
 
+/** Archived leads stay in the database but leave every list, count and contact lookup. */
+export const isArchivedLead = (lead: any) => Boolean(lead?.archivedAt);
+const NOT_ARCHIVED = { archivedAt: { $exists: false } };
+
+/** query.archived: "only" lists the archived leads (admin view), otherwise they are left out. */
 export async function listLeads(query: Record<string, string> = {}) {
+  const archivedOnly = query.archived === "only";
   if (!isMongoEnabled()) {
-    let rows = readDb().leads;
+    let rows = readDb().leads.filter((item: any) => isArchivedLead(item) === archivedOnly);
     if (query.status) rows = rows.filter((item: any) => item.status === query.status);
     if (query.assignedTo) rows = rows.filter((item: any) => (item.assignedTo || "") === query.assignedTo);
     if (query.customerId) rows = rows.filter((item: any) => item.customerId === query.customerId);
@@ -51,7 +57,7 @@ export async function listLeads(query: Record<string, string> = {}) {
     return rows.sort((a: any, b: any) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
   const db = await getMongoDb();
-  const filter: any = {};
+  const filter: any = archivedOnly ? { archivedAt: { $exists: true } } : { ...NOT_ARCHIVED };
   if (query.status) filter.status = query.status;
   if (query.assignedTo) filter.assignedTo = query.assignedTo;
   if (query.customerId) filter.customerId = query.customerId;
@@ -137,6 +143,7 @@ export async function findLeadByContact(phone: string, email: string) {
     const nEmail = normalizeEmail(email);
     return (
       db.leads.find((lead: any) => {
+        if (isArchivedLead(lead)) return false;
         const samePhone = nPhone && normalizePhone(lead.phone) === nPhone;
         const sameEmail = nEmail && normalizeEmail(lead.email) === nEmail;
         return samePhone || sameEmail;
@@ -150,7 +157,7 @@ export async function findLeadByContact(phone: string, email: string) {
   if (nPhone) or.push({ phoneNormalized: nPhone });
   if (nEmail) or.push({ emailNormalized: nEmail });
   if (!or.length) return null;
-  const doc = await db.collection("leads").findOne({ $or: or });
+  const doc = await db.collection("leads").findOne({ $or: or, ...NOT_ARCHIVED });
   return fromLeadDoc(doc);
 }
 
@@ -197,13 +204,13 @@ export async function listLeadsByContact(phone: string, email: string, limit = 5
     byEmail: Boolean(nEmail) && normalizeEmail(lead.email) === nEmail
   });
   if (!isMongoEnabled()) {
-    return readDb().leads.map(tag).filter((row: any) => row.byPhone || row.byEmail).slice(0, limit);
+    return readDb().leads.filter((lead: any) => !isArchivedLead(lead)).map(tag).filter((row: any) => row.byPhone || row.byEmail).slice(0, limit);
   }
   const db = await getMongoDb();
   const or: any[] = [];
   if (keys.length) or.push({ phoneNormalized: { $in: keys } });
   if (nEmail) or.push({ emailNormalized: nEmail });
-  const docs = await db.collection("leads").find({ $or: or }).limit(limit).toArray();
+  const docs = await db.collection("leads").find({ $or: or, ...NOT_ARCHIVED }).limit(limit).toArray();
   return docs.map(fromLeadDoc).map(tag);
 }
 
@@ -212,7 +219,7 @@ export async function findLeadByExternalOrPhone(externalId: string | null, incom
     const db = readDb();
     return (
       db.leads.find((item: any) => item.id === externalId) ||
-      db.leads.find((item: any) => item.phone && item.phone.includes(incomingNumber || "")) ||
+      db.leads.find((item: any) => !isArchivedLead(item) && item.phone && item.phone.includes(incomingNumber || "")) ||
       null
     );
   }
@@ -224,7 +231,7 @@ export async function findLeadByExternalOrPhone(externalId: string | null, incom
   const nPhone = normalizePhone(incomingNumber);
   if (!nPhone) return null;
   const regex = new RegExp(`${escapeRegex(nPhone)}$`);
-  const doc = await db.collection("leads").findOne({ phoneNormalized: regex });
+  const doc = await db.collection("leads").findOne({ phoneNormalized: regex, ...NOT_ARCHIVED });
   return fromLeadDoc(doc);
 }
 

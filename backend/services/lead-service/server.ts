@@ -29,6 +29,7 @@ import { createPurchase, listAllPurchases, PurchaseRecord } from "../common/purc
 import { isActiveLeadInvariantSatisfied } from "../common/leadInvariants";
 import { resolveLeadAssociationForPhone, tryHandleCustomerRoutes } from "./customer-routes";
 import { rowsToCsv } from "../common/csv";
+import { MailError, mailConfig, sendCustomerEmail, validateCustomerEmail } from "../common/mailer";
 import { BOOKING_ACTIVITY_HEADERS, BookingActivityFilters, buildBookingActivityCsvRows, buildBookingActivityRows, filterBookingActivityRows } from "./booking-report";
 
 // Internal service: reached only through the gateway in the same process. INTERNAL_SERVICE_HOST=127.0.0.1
@@ -67,7 +68,7 @@ function sendJson(res: http.ServerResponse, statusCode: number, payload: unknown
   res.end(JSON.stringify(payload));
 }
 
-const IDENTITY_FIELDS = ["__creator", "__contactActor", "__paymentActor", "__assignActor"] as const;
+const IDENTITY_FIELDS = ["__creator", "__contactActor", "__paymentActor", "__assignActor", "__actor"] as const;
 
 function parseBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -209,6 +210,120 @@ function requiresExplicitLossReason(status: string) {
  * calls and WhatsApp threads keep their links.
  */
 const CONTACT_FIELD_LABELS: Record<ContactField, string> = { fullName: "Nome", phone: "Telefono", email: "Email" };
+type LeadActor = { id: string; username: string; role: string };
+
+/** Author of an archive / worked / email action: only as set by the gateway from the session. */
+function leadActor(body: any): LeadActor | null {
+  const actor = body?.__actor;
+  if (!actor || !actor.id || !actor.username || !["admin", "super_admin", "operatore"].includes(String(actor.role))) return null;
+  return { id: String(actor.id), username: String(actor.username), role: String(actor.role) };
+}
+
+function cleanActionText(value: unknown, max: number) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+/** Open tasks of a lead that leaves the operators' work (archived or marked as worked). */
+async function dismissOpenLeadTasks(leadId: string, reason: string, actor: string) {
+  const open = await listTasks({ leadId, status: "open" });
+  const now = new Date().toISOString();
+  for (const task of open) {
+    task.status = "dismissed";
+    task.updatedAt = now;
+    task.meta = { ...(task.meta || {}), dismissedReason: reason, dismissedBy: actor };
+    await saveTask(task);
+  }
+  return open.length;
+}
+
+async function handleLeadAction(res: http.ServerResponse, leadId: string, action: string, body: any) {
+  const actor = leadActor(body);
+  if (!actor) return sendJson(res, 403, { error: "Azione non autorizzata." });
+  const lead = await getLeadById(leadId);
+  if (!lead) return sendJson(res, 404, { error: "Lead non trovato." });
+  const now = new Date().toISOString();
+  const isAdminActor = actor.role === "admin" || actor.role === "super_admin";
+
+  if (action === "archive" || action === "restore") {
+    if (!isAdminActor) return sendJson(res, 403, { error: "Solo admin e super admin possono archiviare o ripristinare un contatto." });
+    if (action === "archive") {
+      const reason = cleanActionText(body.reason, 300);
+      if (!reason) return sendJson(res, 400, { error: "Indica il motivo dell'archiviazione." });
+      if (lead.archivedAt) return sendJson(res, 409, { error: "Contatto gia archiviato." });
+      Object.assign(lead, { archivedAt: now, archivedBy: actor.username, archivedById: actor.id, archiveReason: reason, updatedAt: now });
+      await saveLead(lead);
+      const dismissedTasks = await dismissOpenLeadTasks(lead.id, "lead_archived", actor.username);
+      await appendActivities([createActivity({
+        leadId: lead.id, type: "lead_archived", actor: actor.username,
+        text: `Contatto archiviato. Motivo: ${reason}.`,
+        meta: { reason, archivedById: actor.id, archivedByRole: actor.role, assignedTo: lead.assignedTo || "", status: lead.status, dismissedTasks }
+      })]);
+    } else {
+      if (!lead.archivedAt) return sendJson(res, 409, { error: "Il contatto non e archiviato." });
+      const previous = { archivedAt: lead.archivedAt, archivedBy: lead.archivedBy || "", archiveReason: lead.archiveReason || "" };
+      for (const key of ["archivedAt", "archivedBy", "archivedById", "archiveReason"]) delete lead[key];
+      lead.updatedAt = now;
+      await saveLead(lead);
+      await appendActivities([createActivity({
+        leadId: lead.id, type: "lead_restored", actor: actor.username,
+        text: `Contatto ripristinato dall'archivio (archiviato il ${new Date(previous.archivedAt).toLocaleDateString("it-IT", { timeZone: "Europe/Rome" })} da ${previous.archivedBy || "-"}).`,
+        meta: { previous, restoredById: actor.id }
+      })]);
+    }
+    return sendJson(res, 200, safeLead(lead));
+  }
+
+  if (lead.archivedAt) return sendJson(res, 409, { error: "Contatto archiviato: un admin deve prima ripristinarlo." });
+
+  if (action === "worked") {
+    if ((lead.closingOutcome || "open") !== "open") return sendJson(res, 409, { error: "La pratica ha gia un esito finale: e gia tra le lavorate." });
+    if (lead.workedAt) return sendJson(res, 409, { error: "Pratica gia segnata come lavorata." });
+    const note = cleanActionText(body.note, 1000);
+    if (!note) return sendJson(res, 400, { error: "Scrivi una nota: cosa e stato fatto con il cliente." });
+    const previousNextActionAt = lead.nextActionAt || null;
+    Object.assign(lead, { workedAt: now, workedBy: actor.username, workedById: actor.id, workedNote: note, nextActionAt: null, updatedAt: now });
+    await saveLead(lead);
+    const dismissedTasks = await dismissOpenLeadTasks(lead.id, "lead_worked", actor.username);
+    await appendActivities([createActivity({
+      leadId: lead.id, type: "lead_worked", actor: actor.username,
+      text: `Segnata come lavorata: ${note}`,
+      meta: { note, workedById: actor.id, workedByRole: actor.role, previousNextActionAt, dismissedTasks }
+    })]);
+    return sendJson(res, 200, safeLead(lead));
+  }
+
+  if (action === "worked/undo") {
+    if (!lead.workedAt) return sendJson(res, 409, { error: "La pratica non e segnata come lavorata." });
+    const previous = { workedAt: lead.workedAt, workedBy: lead.workedBy || "", workedNote: lead.workedNote || "" };
+    for (const key of ["workedAt", "workedBy", "workedById", "workedNote"]) delete lead[key];
+    lead.updatedAt = now;
+    await saveLead(lead);
+    await appendActivities([createActivity({
+      leadId: lead.id, type: "lead_worked_undone", actor: actor.username,
+      text: "Pratica rimessa tra le attive.",
+      meta: { previous, undoneById: actor.id }
+    })]);
+    return sendJson(res, 200, safeLead(lead));
+  }
+
+  // action === "email"
+  const config = mailConfig();
+  if (!config) return sendJson(res, 503, { error: "Invio email non ancora configurato: un amministratore deve impostare la casella di posta." });
+  try {
+    const message = validateCustomerEmail({ to: lead.email, subject: body.subject, text: body.text });
+    const sent = await sendCustomerEmail(config, message);
+    await appendActivities([createActivity({
+      leadId: lead.id, type: "email_sent", actor: actor.username,
+      text: `Email inviata a ${message.to}: "${message.subject}".`,
+      meta: { to: message.to, from: config.from, subject: message.subject, text: message.text, messageId: sent.messageId, sentById: actor.id }
+    })]);
+    return sendJson(res, 200, { ok: true, to: message.to });
+  } catch (error) {
+    if (error instanceof MailError) return sendJson(res, error.status, { error: error.message });
+    throw error;
+  }
+}
+
 async function handleLeadContactCorrection(res: http.ServerResponse, lead: any, body: any) {
   const actor = body.__contactActor;
   if (!actor || !["admin", "super_admin", "operatore"].includes(String(actor.role)) || !actor.id || !actor.username) {
@@ -264,6 +379,8 @@ async function handleLeadContactCorrection(res: http.ServerResponse, lead: any, 
  * relationship where a new inbound contact means a new opportunity.
  */
 function isTerminalClosingOutcome(lead: any) {
+  // An archived contact who comes back is a new opportunity, never merged into the archive.
+  if (lead?.archivedAt) return true;
   const outcome = String(lead?.closingOutcome || "open");
   if (outcome === "lost" || outcome === "disqualified") return true;
   if (outcome === "won") return String(lead?.status || "") === LEAD_STATUSES.CLOSED_FULL;
@@ -450,6 +567,12 @@ function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
     closingOutcome: lead.closingOutcome || "open",
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
+    workedAt: lead.workedAt || null,
+    workedBy: lead.workedBy || null,
+    workedNote: lead.workedNote || null,
+    archivedAt: lead.archivedAt || null,
+    archivedBy: lead.archivedBy || null,
+    archiveReason: lead.archiveReason || null,
     customerId: lead.customerId || null,
     metaEventSync: lead.metaEventSync || null,
     practiceReview: lead.practiceReview || null,
@@ -852,6 +975,12 @@ function getBoardLeadSummary(lead: any) {
     closingOutcome: lead.closingOutcome || "open",
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
+    workedAt: lead.workedAt || null,
+    workedBy: lead.workedBy || null,
+    workedNote: lead.workedNote || null,
+    archivedAt: lead.archivedAt || null,
+    archivedBy: lead.archivedBy || null,
+    archiveReason: lead.archiveReason || null,
     customerId: lead.customerId || null,
     callAttempts: lead.callAttempts || 0,
     secondAttemptPending: getSecondAttemptPending(lead),
@@ -916,6 +1045,12 @@ function getLeadListSummary(lead: any) {
     closingOutcome: lead.closingOutcome || "open",
     lossReason: lead.lossReason || null,
     lossDetail: lead.lossDetail || null,
+    workedAt: lead.workedAt || null,
+    workedBy: lead.workedBy || null,
+    workedNote: lead.workedNote || null,
+    archivedAt: lead.archivedAt || null,
+    archivedBy: lead.archivedBy || null,
+    archiveReason: lead.archiveReason || null,
     customerId: lead.customerId || null,
     practiceReview: lead.practiceReview || null,
     latestCallOutcome: lead.latestCallOutcome || null,
@@ -1012,6 +1147,8 @@ export async function ensureSlaTasks() {
   const automaticTaskGroups = buildAutomaticTaskGroups(allTasks);
   const now = Date.now();
   for (const lead of rows) {
+    // Marked as worked by the operator: no reminder until it is put back among the active ones.
+    if (lead.workedAt) continue;
     const nextActionTasks = automaticTaskGroups.get(getAutomaticTaskKey(lead.id, "next_action")) || [];
     const nextActionTask = nextActionTasks[0] || null;
     if (lead.nextActionAt) {
@@ -1948,6 +2085,9 @@ export const server = http.createServer(async (req, res) => {
       ]);
       return sendJson(res, 201, { ok: true });
     }
+
+    const leadActionParams = pathname.match(/^\/leads\/([^/]+)\/(archive|restore|worked|worked\/undo|email)$/);
+    if (leadActionParams && method === "POST") return await handleLeadAction(res, leadActionParams[1], leadActionParams[2], await parseBody(req));
 
     const leadByIdParams = routeMatch(pathname, "/leads/:leadId");
     if (leadByIdParams && method === "GET") {

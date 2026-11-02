@@ -287,6 +287,28 @@ async function main() {
     });
   });
 
+  await runCase("archivia/ripristina solo admin; lavorata per operatori; autore dalla sessione; archiviate visibili solo agli admin", async () => {
+    await withServers(async (leadUrl, gatewayUrl, gateway) => {
+      const lead = await createLead(leadUrl);
+      const operator = makeSession(gateway, "operatore");
+      const admin = makeSession(gateway, "admin");
+      const spoofed = { id: "x", username: "falso_admin", role: "admin" };
+      assert.equal((await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/archive`, { token: operator, body: { reason: "doppione", __actor: spoofed } })).status, 403);
+      assert.equal((await apiRequest(gatewayUrl, "GET", "/api/leads?archived=only", { token: operator })).status, 403);
+      const worked = await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/worked`, { token: operator, body: { note: "Cliente seguito", __actor: spoofed } });
+      assert.equal(worked.status, 200, JSON.stringify(worked.body));
+      assert.equal((worked.body as any).workedBy, "operatore_user", "l'autore falsificato nel body e ignorato");
+      const archived = await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/archive`, { token: admin, body: { reason: "Non piu necessario" } });
+      assert.equal(archived.status, 200);
+      assert.equal((archived.body as any).archivedBy, "admin_user");
+      const list = await apiRequest(gatewayUrl, "GET", "/api/leads?archived=only", { token: admin });
+      assert.ok((list.body as any[]).some((row) => row.id === lead.id));
+      const reserved = await seedLeadWithStatus("Pronta per chiusura");
+      assert.equal((await apiRequest(gatewayUrl, "POST", `/api/leads/${reserved.id}/worked`, { token: operator, body: { note: "x" } })).status, 403, "pratica riservata alla supervisione admin");
+      assert.equal((await apiRequest(leadUrl, "POST", `/leads/${reserved.id}/archive`, { body: { reason: "x", __actor: spoofed } })).status, 403, "accesso diretto senza capability: anonimo");
+    });
+  });
+
   await runCase("confine di fiducia: header interni e identita nel body non sono accettati dal browser ne da accessi diretti", async () => {
     await withServers(async (leadUrl, gatewayUrl, gateway) => {
       const lead = await seedLeadWithStatus("Da contattare");

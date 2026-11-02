@@ -114,7 +114,7 @@
 
 .pr-view-switcher {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: stretch;
   gap: 6px;
   width: min(760px, 100%);
@@ -125,8 +125,8 @@
 }
 
 .pr-view-switcher-operator {
-  grid-template-columns: minmax(0, 1fr);
-  width: min(280px, 100%);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(480px, 100%);
 }
 
 .pr-view-tile {

@@ -4,6 +4,11 @@ export type Workflow = {
 };
 
 export type Lead = {
+  workedAt?: string | null;
+  workedBy?: string | null;
+  workedNote?: string | null;
+  archivedAt?: string | null;
+  archiveReason?: string | null;
   id: string;
   fullName: string;
   phone: string;
