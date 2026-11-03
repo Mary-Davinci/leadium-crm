@@ -156,6 +156,18 @@ async function main() {
       blocked = false; await until(() => f.monitor.diagnostics().connected && store.saves > 0, "claim recovered");
     } finally { await f.monitor.stop(); }
   });
+  await test("lease held by the previous instance (deploy) is polled at a short fixed interval, not backed off", async () => {
+    const store = new MemoryStore(); store.owner = true; const claim = store.claim.bind(store); let claims = 0;
+    store.claim = async () => { claims++; return claim(); };
+    const f = fixture({ store }); f.monitor.start();
+    try {
+      await new Promise(resolve => setTimeout(resolve, 400));
+      // Exponential backoff from 10 ms would claim about 6 times in 400 ms; the fixed 20 ms poll far more.
+      assert.ok(claims >= 10, `claims while held elsewhere: ${claims}`);
+      assert.equal(f.requests.length, 0);
+      store.owner = false; await until(() => f.monitor.diagnostics().connected, "claimed after release");
+    } finally { await f.monitor.stop(); }
+  });
   await test("checkpoint save failure still releases ownership and reconnects", async () => {
     const store = new MemoryStore(); const save = store.save.bind(store); let broken = true, releases = 0;
     store.save = async state => { if (broken) throw new Error(SECRET + TOKEN); await save(state); };

@@ -463,10 +463,11 @@ export class ThreeCxMonitor {
     let failures = 0;
     while (!this.abort.signal.aborted) {
       const connectedAt = this.now();
+      let heldElsewhere = false;
       try {
         if (!this.lease) {
           const state = await atStage("checkpoint_claim_failed", () => this.deps.store.claim());
-          if (!state) throw new MonitorStageError("checkpoint_claim_failed");
+          if (!state) { heldElsewhere = true; throw new MonitorStageError("checkpoint_claim_failed"); }
           this.state = state; this.lease = true;
           for (const id of Object.keys(this.state.calls)) if (await atStage("checkpoint_claim_failed", () => this.deps.store.hasFinal(id, this.now()))) delete this.state.calls[id];
           for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "checkpoint_recovery");
@@ -489,7 +490,9 @@ export class ThreeCxMonitor {
       }
       if (this.now() - connectedAt > 60000) failures = 0;
       if (!this.abort.signal.aborted) this.logLink("disconnected" + (this.status.lastError ? ": " + this.status.lastError : ""));
-      const backoff = Math.min(60000, (this.deps.retryMs || 1000) * 2 ** Math.min(failures++, 6));
+      // Lease still held by the previous instance (a deploy): it is released on its shutdown, so poll
+      // every few seconds instead of backing off up to a minute while nobody can dial.
+      const backoff = heldElsewhere ? Math.min(3000, (this.deps.retryMs || 1000) * 2) : Math.min(60000, (this.deps.retryMs || 1000) * 2 ** Math.min(failures++, 6));
       await sleep(backoff + Math.floor(Math.random() * backoff * 0.2), this.abort.signal);
     }
   }
