@@ -91,11 +91,11 @@ function main() {
       "interested_undecided",
       "final_recovery",
       "contact_closure",
-      "primo_contatto_cliente",
       "request_documents"
     ]) {
       assert.ok(keys.includes(key), `manca il template ${key}`);
     }
+    for (const retired of ["primo_contatto_cliente", "reopen_contact"]) assert.ok(!keys.includes(retired), `template ritirato ancora configurato: ${retired}`);
   });
 
   runCase("default prudente: nessun template e automatic_allowed nella configurazione di produzione", () => {

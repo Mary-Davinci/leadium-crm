@@ -134,7 +134,7 @@ async function main() {
       assert.equal(second.status, 409);
       assert.equal(second.body.code, "already_sent");
       const legacy = await sendTemplate(waUrl, conversation.id, "primo_contatto_cliente");
-      assert.equal(legacy.status, 409, "anche il vecchio template di primo contatto e bloccato");
+      assert.notEqual(legacy.status, 200, "il vecchio template di primo contatto non si puo piu inviare");
       assert.equal((await templateMessages(conversation.id)).length, 1);
     });
   });

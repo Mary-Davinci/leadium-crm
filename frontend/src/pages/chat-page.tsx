@@ -98,13 +98,12 @@ type OutgoingJob =
   };
 
 const FALLBACK_TEMPLATE_OPTIONS: TemplateOption[] = [
-  { key: "reopen_contact", name: "reopen_contact", label: "Ricontatto pratica", body: "Ciao, ti ricontattiamo per aggiornarti sulla tua pratica.", category: "followup" },
   { key: "request_documents", name: "request_documents", label: "Richiesta documenti", body: "Ciao, ci servono i documenti mancanti per proseguire con la pratica.", category: "utility" },
   { key: "payment_followup", name: "payment_followup", label: "Promemoria pagamento", body: "Ciao, ti contattiamo per il pagamento in sospeso della tua pratica.", category: "utility" },
   { key: "booking_update", name: "booking_update", label: "Aggiornamento prenotazione", body: "Ciao, abbiamo un aggiornamento sulla tua prenotazione.", category: "utility" }
 ];
 
-const FIRST_CONTACT_TEMPLATE_KEY = "primo_contatto_cliente";
+const FIRST_CONTACT_TEMPLATE_KEY = "lead_first_contact";
 const POLL_INTERVAL_MS = 15000;
 const MAX_DRAFT_ATTACHMENTS = 10;
 const WHATSAPP_CAPTION_MAX = 1024;

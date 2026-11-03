@@ -38,8 +38,8 @@ export type TemplateDefinition = {
   metaStatus?: string;
   parameters?: TemplateParameter[];
   automationMode?: AutomationMode;
-  // Templates sharing a group can be sent at most once per lead (e.g. both the legacy
-  // primo_contatto_cliente and lead_first_contact are the lead's single first contact).
+  // Templates sharing a group can be sent at most once per lead (lead_first_contact is the
+  // lead's single first contact).
   onceGroup?: string;
   // Sent after `after` (same lead, no customer reply since) once `afterHours` have passed.
   sequence?: { after: string; afterHours: number };
@@ -119,8 +119,13 @@ function lastSendOf(sent: SentTemplate[], keys: string[]) {
     .sort((a, b) => toMs(b.sentAt) - toMs(a.sentAt))[0] || null;
 }
 
+// Retired templates whose past sends still count for their group: a lead that already got the
+// old "Primo contatto cliente" never receives the Booking first contact again.
+const RETIRED_GROUP_KEYS: Record<string, string[]> = { first_contact: ["primo_contatto_cliente"] };
+
 function groupKeys(templates: TemplateDefinition[], group?: string) {
-  return group ? templates.filter((item) => item.onceGroup === group).map((item) => item.key) : [];
+  if (!group) return [];
+  return [...new Set([...templates.filter((item) => item.onceGroup === group).map((item) => item.key), ...(RETIRED_GROUP_KEYS[group] || [])])];
 }
 
 export function isOptedOut(lead: AutomationLead) {
