@@ -19,7 +19,7 @@ const workflowServer=http.createServer((req,res)=>{res.setHeader('Content-Type',
 process.env.WORKFLOW_SERVICE_URL=await listen(workflowServer);
 let liveCalls=[];
 process.on('message',message=>{if(message.liveCalls){liveCalls=message.liveCalls;process.send({ack:true})}});
-const mock=http.createServer(async(req,res)=>{for await(const chunk of req){}res.setHeader('Content-Type','application/json');res.end(JSON.stringify(req.url.startsWith('/3cx/live')?{available:true,calls:liveCalls}:{ok:true,callId:'12345'}))});
+const mock=http.createServer(async(req,res)=>{for await(const chunk of req){}res.setHeader('Content-Type','application/json');res.end(JSON.stringify(req.url.startsWith('/3cx/live')?{available:true,calls:liveCalls}:req.url.startsWith('/3cx/devices')?{available:true,devices:[{device:'device-0123456789ab',label:'3CX Web',userAgent:'3CX Web Client 20'}]}:{ok:true,callId:'12345'}))});
 process.env.CALL_SERVICE_URL=await listen(mock);process.env.WHATSAPP_SERVICE_URL=process.env.CALL_SERVICE_URL;
 const auth=require(root+'/backend/dist/services/api-gateway/auth-store.js');auth.getUserThreeCxDn=async()=> '901';
 const gateway=require(root+'/backend/dist/services/api-gateway/server.js');
@@ -103,7 +103,7 @@ async function noAutomaticOutcome(page, label) {
         await page.locator('.pd-attempts').filter({ hasText: /tentativ/i }).click();
         await noAutomaticOutcome(page, 'attempt badge is informational only');
       }
-      const outcome = page.locator('#timeline-section').getByRole('button', { name: 'Registra esito', exact: true });
+      const outcome = page.locator('#next-step-section').getByRole('button', { name: 'Registra esito', exact: true });
       for (const method of ['escape', 'cancel', 'close', 'backdrop']) {
         await page.evaluate(() => { window.__outcomeOpeningAllowed = true; });
         await outcome.click(); const dialog = page.getByRole('dialog', { name: 'Esito chiamata', exact: true }); await dialog.waitFor();
@@ -136,11 +136,13 @@ async function noAutomaticOutcome(page, label) {
       await noAutomaticOutcome(page, 'dial must not open an outcome before the current call ends');
       if (attempts === 5 && !publicUi) {
         const call = { callId: '12345', agentDn: '901', direction: 'outbound', customerPhone: before.lead.phone,
-          status: 'ringing', startedAt: new Date().toISOString(), capabilities: { answer: false, hangup: true, transfer: false } };
-        await updateCalls([call]); await page.getByRole('region', { name: 'Chiamata 3CX attiva' }).waitFor();
+          status: 'ringing', phase: 'dialing_customer', startedAt: new Date().toISOString(), capabilities: { answer: false, hangup: true, transfer: false } };
+        // A call started from Leadium is shown on its own outgoing card (3CX call card redesign).
+        const callCard = page.locator('.threecx-attempt, .threecx-live-call').first();
+        await updateCalls([call]); await callCard.waitFor();
         await noAutomaticOutcome(page, 'ringing current call with five historic attempts');
-        await updateCalls([{ ...call, status: 'connected', answeredAt: new Date().toISOString() }]);
-        await page.getByRole('region', { name: 'Chiamata 3CX attiva' }).getByText(/In chiamata/).waitFor();
+        await updateCalls([{ ...call, status: 'connected', phase: 'connected', answeredAt: new Date().toISOString(), connectedAt: new Date().toISOString() }]);
+        await callCard.getByText(/In (chiamata|conversazione)/).waitFor();
         await noAutomaticOutcome(page, 'connected current call with five historic attempts');
         await updateCalls([]); await page.locator('.threecx-live-call').waitFor({ state: 'detached' });
         await noAutomaticOutcome(page, 'call ended: there is no product post-call modal trigger');

@@ -77,7 +77,7 @@ async function checkGeometry(page) {
         const panel = page.getByRole('region', { name: 'Stato 3CX' });
         await panel.getByText('enabled', { exact: true }).waitFor();
         const fields = await panel.locator('dt').allTextContents();
-        assert.deepEqual(fields, ['enabled', 'configured', 'connected', 'lastConnectedAt', 'lastEventAt', 'lastCallId', 'lastError', 'observedDnTypes', 'observedDevices']);
+        assert.deepEqual(fields, ['enabled', 'configured', 'connected', 'lastConnectedAt', 'lastEventAt', 'lastCallId', 'lastError', 'interni non abilitati', 'observedDnTypes', 'observedDevices', 'recentCallAttempts']);
         assert.equal(await panel.locator('dd').first().innerText(), 'false');
         await panel.getByText('Nessun DN osservato', { exact: true }).waitFor();
         // Synthetic values only: exercise the real UI without connecting to the PBX.

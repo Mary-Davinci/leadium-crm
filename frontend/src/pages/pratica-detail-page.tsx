@@ -2,6 +2,7 @@ import { useClock } from "../lib/use-clock";
 import { romeDateTimeInput, romeInputToIso, romeDayStamp, romeCalendarDate } from "../lib/business-time";
 import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
 import { isWorkedLead } from "../features/practices/worked";
+import { getPracticeRoute, ROUTE_STOPS } from "../features/practices/practice-route";
 import type { WhatsappAutomationInfo } from "../features/chat/chat.types";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
@@ -617,6 +618,23 @@ function getTimelineMeta(type: string) {
   return { icon: "-", className: "generic" };
 }
 
+type TimelineFilter = "all" | "call" | "message" | "note";
+const TIMELINE_FILTERS: Array<{ key: TimelineFilter; label: string }> = [
+  { key: "all", label: "Tutto" },
+  { key: "call", label: "Chiamate" },
+  { key: "message", label: "Messaggi" },
+  { key: "note", label: "Note" }
+];
+
+function matchesTimelineFilter(item: TimelineItem, filter: TimelineFilter) {
+  if (filter === "all") return true;
+  const type = String(item.type || "").toLowerCase();
+  const kind = getTimelineMeta(type).className;
+  if (filter === "call") return kind === "call";
+  if (filter === "message") return kind === "whatsapp" || type.includes("email");
+  return kind === "note";
+}
+
 function buildRenderableTimeline(detail: LeadDetail | null): TimelineItem[] {
   const rawTimeline = Array.isArray(detail?.timeline) ? [...detail.timeline] : [];
   const noteText = String(detail?.lead?.notes || "").trim();
@@ -844,6 +862,7 @@ function getTaskUrgencyMeta(task: CrmTask) {
 export function PraticaDetailPage() {
   const clockTick = useClock();
   const [leadAction, setLeadAction] = useState<LeadAction | null>(null);
+  const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>("all");
   const [actionNotice, setActionNotice] = useState("");
   const { id } = useParams();
   const navigate = useNavigate();
@@ -2116,9 +2135,10 @@ export function PraticaDetailPage() {
 
   const timeline = useMemo(() => buildRenderableTimeline(detail).slice().reverse(), [detail]);
   const priority = detail ? getPriority(detail.lead) : "media";
+  const practiceRoute = getPracticeRoute(detail?.lead.status);
   const statusClass = detail ? getStatusClass(detail.lead.status) : "pd-status-new";
   const nextStatuses = detail ? workflow?.flow[detail.lead.status] || [] : [];
-  const compactTimeline = useMemo(() => timeline.slice(0, 8), [timeline]);
+  const compactTimeline = useMemo(() => timeline.filter((item) => matchesTimelineFilter(item, timelineFilter)).slice(0, 8), [timeline, timelineFilter]);
   const practiceTasks = useMemo(
     () => (detail?.lead.id ? taskBoardTasks.filter((task) => task.leadId === detail.lead.id) : []),
     [detail?.lead.id, taskBoardTasks]
@@ -2232,30 +2252,7 @@ export function PraticaDetailPage() {
               <Link className="pd-back-btn pd-back-btn-inline" to="/pratiche">
                 Torna a pratiche
               </Link>
-              <h4>{detail.lead.fullName}</h4>
-              <p className="pd-sub">
-                {detail.lead.phone}
-                <button type="button" className="pd-inline-edit" onClick={openContactModal} disabled={busy}>
-                  Modifica dati
-                </button>
-              </p>
-              {contactNotice ? <p className="pd-phone-notice" role="status">{contactNotice}</p> : null}
-              <p className="pd-sub pd-sub-secondary">{detail.lead.email || "-"}</p>
-              <div className="pd-badges">
-                <button type="button" className="pd-inline-edit" disabled={busy || !detail.lead.email || Boolean(detail.lead.archivedAt)} onClick={() => setLeadAction("email")}>Invia email</button>
-                {detail.lead.workedAt ? <>
-                  <span>Lavorata da {detail.lead.workedBy} · {detail.lead.workedNote}</span>
-                  <button type="button" className="pd-inline-edit" disabled={busy} onClick={() => setLeadAction("worked/undo")}>Rimetti tra le attive</button>
-                </> : !isWorkedLead(detail.lead) && !["Pronta per chiusura", "Chiusa 100%"].includes(detail.lead.status) && <button type="button" className="pd-inline-edit" disabled={busy} onClick={() => setLeadAction("worked")}>Segna come lavorata</button>}
-              </div>
-              {detail.lead.customerId ? (
-                <Link className="pd-customer-link" to={`/customers/${detail.lead.customerId}`}>
-                  {customerSummary
-                    ? `Storico cliente - LTV ${formatCurrency(customerSummary.ltv)} - ${customerSummary.purchaseCount} ${customerSummary.purchaseCount === 1 ? "acquisto" : "acquisti"}`
-                    : "Storico cliente"}
-                </Link>
-              ) : null}
-              <div className="pd-badges">
+              <div className="pd-badges pd-hero-badges">
                 <span className={`pd-status ${statusClass}`}>{getStatusLabel(detail.lead.status)}</span>
                 <span className={`pd-priority pd-priority-${priority}`}>{getPriorityLabel(priority)}</span>
                 {detail.lead.doNotContact?.active || whatsappInfo?.state?.doNotContact?.active ? (
@@ -2277,6 +2274,34 @@ export function PraticaDetailPage() {
                   </span>
                 ) : null}
               </div>
+              <h4>{detail.lead.fullName}</h4>
+              <div className="pd-hero-contacts">
+                <p className="pd-sub pd-hero-contact">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.4 15.4 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.3 1.1.4 2.2.6 3.4.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.3.6 3.4.1.4 0 .8-.3 1.1l-2.2 2.3Z" fill="currentColor" /></svg>
+                  {detail.lead.phone || "Telefono mancante"}
+                </p>
+                <p className="pd-sub pd-sub-secondary pd-hero-contact">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm0 2.2V17h16V7.2l-8 5.3-8-5.3Zm1.6-.2L12 11.3 18.4 7H5.6Z" fill="currentColor" /></svg>
+                  {detail.lead.email || "Email mancante"}
+                </p>
+                <button type="button" className="pd-inline-edit" onClick={openContactModal} disabled={busy}>
+                  Modifica dati
+                </button>
+              </div>
+              {contactNotice ? <p className="pd-phone-notice" role="status">{contactNotice}</p> : null}
+              <p className="pd-hero-meta">
+                {detail.lead.assignedTo ? <>Assegnata a <strong>{detail.lead.assignedTo}</strong></> : "Non assegnata"}
+                {detail.lead.customerId ? (
+                  <>
+                    {" · "}
+                    <Link className="pd-customer-link" to={`/customers/${detail.lead.customerId}`}>
+                      {customerSummary
+                        ? `Storico cliente: ${customerSummary.purchaseCount} ${customerSummary.purchaseCount === 1 ? "acquisto" : "acquisti"}, ${formatCurrency(customerSummary.ltv)}`
+                        : "Storico cliente"}
+                    </Link>
+                  </>
+                ) : null}
+              </p>
               <div className="pd-hero-actions">
                 <button type="button" className="pd-hero-action pd-hero-action-call" disabled={busy || threeCx.busy} title={threeCx.dn ? undefined : "Interno 3CX non configurato"} onClick={startCall}>
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2304,6 +2329,19 @@ export function PraticaDetailPage() {
                   </svg>
                   <span>WhatsApp</span>
                 </button>
+                <button
+                  type="button"
+                  className="pd-hero-action pd-hero-action-email"
+                  aria-label="Invia email"
+                  disabled={busy || !detail.lead.email || Boolean(detail.lead.archivedAt)}
+                  title={detail.lead.email ? undefined : "Il cliente non ha un'email: aggiungila con Modifica dati"}
+                  onClick={() => setLeadAction("email")}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm0 2.2V17h16V7.2l-8 5.3-8-5.3Zm1.6-.2L12 11.3 18.4 7H5.6Z" fill="currentColor" />
+                  </svg>
+                  <span>Email</span>
+                </button>
                 <button type="button" className="pd-hero-action pd-hero-action-note" onClick={openNoteModal}>
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path
@@ -2314,6 +2352,83 @@ export function PraticaDetailPage() {
                   <span>Nota</span>
                 </button>
               </div>
+            </div>
+          </section>
+
+          <section className="pd-route" aria-label="Avanzamento pratica">
+            <div className="pd-route-head">
+              <strong>Rotta della pratica</strong>
+              <span>
+                {practiceRoute.stopped
+                  ? "Pratica chiusa senza vendita"
+                  : practiceRoute.completed
+                    ? "Viaggio completato"
+                    : practiceRoute.current >= 0
+                      ? `Tappa ${practiceRoute.current + 1} di ${ROUTE_STOPS.length} · ${ROUTE_STOPS[practiceRoute.current].label}`
+                      : getStatusLabel(detail.lead.status)}
+              </span>
+            </div>
+            <div className="pd-route-track" aria-hidden="true">
+              <span style={{ width: `${Math.round(practiceRoute.progress * 100)}%` }} />
+            </div>
+            <ol className="pd-route-stops">
+              {ROUTE_STOPS.map((stop, index) => {
+                const state = practiceRoute.stopped || practiceRoute.current < 0
+                  ? "todo"
+                  : practiceRoute.completed || index < practiceRoute.current
+                    ? "done"
+                    : index === practiceRoute.current
+                      ? "current"
+                      : "todo";
+                return (
+                  <li key={stop.key} className={`pd-route-stop is-${state}`} aria-current={state === "current" ? "step" : undefined}>
+                    <strong>{stop.label}</strong>
+                    <span>{state === "current" ? "Siamo qui" : state === "done" ? "Completata" : stop.hint}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+
+          <section id="next-step-section" className={`pd-next-step ${detail.lead.workedAt ? "is-worked" : ""}`} aria-label="Prossimo passo">
+            <span className="pd-next-step-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+            </span>
+            <div className="pd-next-step-copy">
+              <span className="pd-next-step-eyebrow">{detail.lead.workedAt ? "Pratica lavorata" : "Prossimo passo"}</span>
+              {detail.lead.workedAt ? (
+                <>
+                  <strong>{detail.lead.workedNote || "Segnata come lavorata"}</strong>
+                  <span className="pd-next-step-when">Da {detail.lead.workedBy || "operatore"}{detail.lead.workedAt ? ` · ${formatDateDisplay(detail.lead.workedAt)}` : ""}</span>
+                </>
+              ) : openPracticeTasks[0] ? (
+                <>
+                  <strong>{openPracticeTasks[0].title}</strong>
+                  <span className={`pd-next-step-when ${nextTaskMeta?.className || ""}`}>
+                    {openPracticeTasks[0].dueAt ? formatDateDisplay(openPracticeTasks[0].dueAt) : "Senza scadenza"}
+                    {nextTaskMeta?.label ? ` · ${nextTaskMeta.label}` : ""}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <strong>Nessun passo pianificato</strong>
+                  <span className="pd-next-step-when">Registra l'esito del contatto per pianificare il prossimo.</span>
+                </>
+              )}
+            </div>
+            <div className="pd-next-step-actions">
+              {detail.lead.workedAt ? (
+                <button type="button" className="pd-next-step-secondary" disabled={busy} onClick={() => setLeadAction("worked/undo")}>Rimetti tra le attive</button>
+              ) : (
+                <>
+                  <button type="button" className="pd-next-step-primary threecx-outcome-button" disabled={busy} onClick={() => openCallOutcomeModal()}>
+                    Registra esito
+                  </button>
+                  {!isWorkedLead(detail.lead) && !["Pronta per chiusura", "Chiusa 100%"].includes(detail.lead.status) ? (
+                    <button type="button" className="pd-next-step-secondary" disabled={busy} onClick={() => setLeadAction("worked")}>Segna come lavorata</button>
+                  ) : null}
+                </>
+              )}
             </div>
           </section>
 
@@ -2919,9 +3034,19 @@ export function PraticaDetailPage() {
                     {compactTimeline.length ? `${compactTimeline.length} eventi recenti` : "Nessuna attivita recente"}
                   </p>
                 </div>
-                <button type="button" className="secondary threecx-outcome-button" disabled={busy} onClick={() => openCallOutcomeModal()}>
-                  Registra esito
-                </button>
+              </div>
+              <div className="pd-timeline-filters" role="group" aria-label="Filtra attivita">
+                {TIMELINE_FILTERS.map((filter) => (
+                  <button
+                    key={filter.key}
+                    type="button"
+                    aria-pressed={timelineFilter === filter.key}
+                    className={timelineFilter === filter.key ? "is-active" : ""}
+                    onClick={() => setTimelineFilter(filter.key)}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
               </div>
               {compactTimeline.length ? (
                 <div className="pd-timeline-list">

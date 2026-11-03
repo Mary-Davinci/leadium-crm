@@ -3762,3 +3762,321 @@ button.pd-doc-delete-button:hover .pd-doc-bin-garbage {
 .pd-contact-form label .pd-notes-input { min-height: 38px; }
 .pd-contact-form small { font-weight: 400; font-size: 11px; color: #6d83a3; }
 @media (min-width: 640px) { .pd-contact-form { grid-template-columns: 1fr 1fr; } .pd-contact-form > :not(label) { grid-column: 1 / -1; } }
+
+/* ---- Practice card, Crocieriamo style simplified (hero order, route, next step) ---- */
+.pd-hero-badges {
+  margin: 14px 0 12px;
+}
+
+.pd-hero-contacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pd-hero-contacts .pd-sub {
+  margin: 0;
+}
+
+.pd-hero-contact {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: rgba(9, 28, 53, 0.42);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.pd-hero-contact.pd-sub-secondary {
+  font-weight: 500;
+}
+
+.pd-hero-contact svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.pd-hero-contacts .pd-inline-edit {
+  margin-left: 0;
+  background: rgba(9, 28, 53, 0.42);
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.pd-hero-meta {
+  margin: 10px 0 0;
+  color: #dbe1f2;
+  font-size: 13px;
+}
+
+.pd-hero-meta strong {
+  color: #ffffff;
+}
+
+.pd-hero-meta .pd-customer-link {
+  color: #ffffff;
+}
+
+.pd-hero-actions {
+  width: 100%;
+}
+
+.pd-hero-action-email {
+  --pd-hero-accent: #2f6fe0;
+}
+
+.pd-route {
+  display: grid;
+  gap: 10px;
+  padding: 14px 18px;
+  border: 1px solid #d9e1ee;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(31, 53, 88, 0.06);
+}
+
+.pd-route-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.pd-route-head strong {
+  color: #213b62;
+  font-size: 15px;
+}
+
+.pd-route-head span {
+  color: #5f7595;
+  font-size: 13px;
+}
+
+.pd-route-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e3eaf4;
+  overflow: hidden;
+}
+
+.pd-route-track span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2f6fe0, #5191fa);
+}
+
+.pd-route-stops {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pd-route-stop {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pd-route-stop strong {
+  color: #5f7595;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pd-route-stop span {
+  color: #6d83a3;
+  font-size: 12px;
+}
+
+.pd-route-stop.is-done strong {
+  color: #1f7a49;
+  font-weight: 700;
+}
+
+.pd-route-stop.is-current strong,
+.pd-route-stop.is-current span {
+  color: #1c4189;
+  font-weight: 700;
+}
+
+.pd-next-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border: 1px solid #c9daf8;
+  border-radius: 14px;
+  background: linear-gradient(90deg, #eaf1ff 0%, #f6f9ff 100%);
+}
+
+.pd-next-step.is-worked {
+  border-color: #c4e4d0;
+  background: linear-gradient(90deg, #e9f6ef 0%, #f6fbf8 100%);
+}
+
+.pd-next-step-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #2f6fe0;
+  color: #ffffff;
+}
+
+.pd-next-step.is-worked .pd-next-step-icon {
+  background: #2f8a57;
+}
+
+.pd-next-step-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.pd-next-step-copy {
+  flex: 1 1 280px;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pd-next-step-eyebrow {
+  color: #1c4189;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.pd-next-step.is-worked .pd-next-step-eyebrow {
+  color: #1f6b41;
+}
+
+.pd-next-step-copy strong {
+  color: #1b2a40;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.pd-next-step-when {
+  color: #5f7595;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pd-next-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pd-next-step-actions .pd-next-step-primary,
+.pd-next-step-actions .pd-next-step-secondary {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pd-next-step-actions .pd-next-step-primary {
+  border: 0;
+  background: #2f6fe0;
+  color: #ffffff;
+}
+
+.pd-next-step-actions .pd-next-step-primary:hover:not(:disabled) {
+  background: #2a52a0;
+}
+
+.pd-next-step-actions .pd-next-step-secondary {
+  border: 1px solid #c9daf8;
+  background: #ffffff;
+  color: #1c4189;
+}
+
+.pd-next-step-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pd-next-step-actions button:focus-visible {
+  outline: 2px solid #225fb6;
+  outline-offset: 2px;
+}
+
+.pd-timeline-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.pd-timeline-filters button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid #d5deea;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #244061;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pd-timeline-filters button.is-active {
+  border-color: #6f86d9;
+  background: #eef1fc;
+  color: #3b4f9c;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .pd-route-stops {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .pd-route-stop {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+  }
+
+  .pd-next-step-actions {
+    width: 100%;
+  }
+
+  .pd-next-step-actions button {
+    flex: 1 1 140px;
+  }
+}
+
+/* Four contact pills on one row on desktop (Chiama, WhatsApp, Email, Nota). */
+@media (min-width: 1081px) {
+  .pd-hero-main {
+    max-width: min(54%, 700px);
+  }
+
+  .pd-hero-actions {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+}

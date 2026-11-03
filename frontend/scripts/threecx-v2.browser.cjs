@@ -180,7 +180,7 @@ async function geometry(page) {
       await update({reset:true,devices:{'901':[{id:'private-device-901',ua:'3CX Web Client 20'}],'913':[{id:'private-device-913',ua:'3CX Web Client 20'}]}});
       const leadResponse=await fetch(fixture.gatewayUrl+'/api/leads/native-fixture',{headers:{Authorization:'Bearer native-mapped'}});assert.equal((await leadResponse.json()).lead.status,'In contatto');
       assert.equal(await page.locator('.pd-hero-actions').getByRole('button',{name:'Registra esito',exact:true}).count(),0);
-      const outcomeButton=page.locator('#timeline-section').getByRole('button',{name:'Registra esito',exact:true});
+      const outcomeButton=page.locator('#next-step-section').getByRole('button',{name:'Registra esito',exact:true});
       await outcomeButton.evaluate(el=>el.scrollIntoView({block:'center',behavior:'instant'}));
       await page.screenshot({path:path.join(os.tmpdir(),'leadium-threecx-timeline-'+width+'.png')});
       assert.ok(await outcomeButton.evaluate(el=>{const r=el.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return r.x>=0&&r.right<=innerWidth&&!!hit&&(el===hit||el.contains(hit));}));
@@ -256,6 +256,7 @@ async function geometry(page) {
       await page.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-admin');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.admin);
       await page.goto(fixture.frontUrl+'/pratiche/native-fixture');
       const docs=page.locator('.pd-card-documents');await docs.waitFor();
+      await page.locator('#next-step-section').waitFor();await page.screenshot({path:path.join(os.tmpdir(),'leadium-practice-full-'+width+'.png'),fullPage:true});
       for(const label of ['Documenti cliente','Contratti','Preventivi','Ricevute o pagamenti acconto'])await docs.locator('.pd-doc-row-title strong',{hasText:label}).first().waitFor();
       const suffix=String(width);
       await docs.getByLabel('Carica file in Ricevute o pagamenti acconto').setInputFiles([
