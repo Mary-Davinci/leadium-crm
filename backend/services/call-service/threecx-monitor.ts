@@ -306,7 +306,7 @@ export class ThreeCxMonitor {
       for (const summary of info.participants) {
         if (!Number.isSafeInteger(summary.id)) continue;
         const participant = await this.request(`/callcontrol/${dn}/participants/${summary.id}`);
-        if (participant && participant.dn === dn && !(await this.deps.store.hasFinal(String(participant.callid)))) {
+        if (participant && participant.dn === dn && !(await this.deps.store.hasFinal(String(participant.callid), this.now()))) {
           seen.add(legKey(dn, participant.id));
           this.rememberParticipant(participant);
           observeParticipant(this.state, participant, this.iso(), recovery, info.type);
@@ -328,6 +328,13 @@ export class ThreeCxMonitor {
   private markDnUnreadable(dn: string, reason: string) {
     this.unreadableDns.set(dn, reason);
     this.controlDevices.delete(dn); this.deviceDiagnostics.forget(dn);
+  }
+  /** One log line per change of the PBX link (local text only), so a "call did not start" can be dated. */
+  private lastLinkLog = "";
+  private logLink(state: string) {
+    if (state === this.lastLinkLog || process.env.NODE_ENV === "test") return;
+    this.lastLinkLog = state;
+    console.log(`[3cx] monitor ${state}`);
   }
   private save() { return atStage("checkpoint_save_failed", () => this.deps.store.save(this.state)); }
   private message(raw: unknown) {
@@ -367,7 +374,7 @@ export class ThreeCxMonitor {
         }
         if (participant && participant.dn === dn && participant.id === Number(id) && Number.isSafeInteger(participant.callid) && participant.callid > 0) {
           this.rememberParticipant(participant);
-          if (!(await this.deps.store.hasFinal(String(participant.callid)))) observeParticipant(this.state, participant, this.iso(), false, this.dnTypes.get(dn) || "Unknown");
+          if (!(await this.deps.store.hasFinal(String(participant.callid), this.now()))) observeParticipant(this.state, participant, this.iso(), false, this.dnTypes.get(dn) || "Unknown");
           this.rememberCallId(participant.callid);
         } else removeParticipant(this.state, dn, Number(id), this.iso(), true);
       }
@@ -419,6 +426,7 @@ export class ThreeCxMonitor {
     opened = true;
     if (this.abort.signal.aborted) { socket.terminate(); return; }
     this.status.connected = true; this.status.lastConnectedAt = this.iso(); this.status.lastError = null;
+    this.logLink("connected");
     // Queue initial snapshot before notifications, so queue types are known on first update.
     const initial = this.enqueue(() => atStage("initial_reconcile_failed", () => this.reconcile(true)));
     socket.on("message", data => this.message(data));
@@ -460,7 +468,7 @@ export class ThreeCxMonitor {
           const state = await atStage("checkpoint_claim_failed", () => this.deps.store.claim());
           if (!state) throw new MonitorStageError("checkpoint_claim_failed");
           this.state = state; this.lease = true;
-          for (const id of Object.keys(this.state.calls)) if (await atStage("checkpoint_claim_failed", () => this.deps.store.hasFinal(id))) delete this.state.calls[id];
+          for (const id of Object.keys(this.state.calls)) if (await atStage("checkpoint_claim_failed", () => this.deps.store.hasFinal(id, this.now()))) delete this.state.calls[id];
           for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "checkpoint_recovery");
         }
         await this.flush();
@@ -480,6 +488,7 @@ export class ThreeCxMonitor {
         }
       }
       if (this.now() - connectedAt > 60000) failures = 0;
+      if (!this.abort.signal.aborted) this.logLink("disconnected" + (this.status.lastError ? ": " + this.status.lastError : ""));
       const backoff = Math.min(60000, (this.deps.retryMs || 1000) * 2 ** Math.min(failures++, 6));
       await sleep(backoff + Math.floor(Math.random() * backoff * 0.2), this.abort.signal);
     }

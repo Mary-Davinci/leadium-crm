@@ -6,7 +6,7 @@ import path from "node:path";
 import { ThreeCxMonitor, monitorConfig } from "./threecx-monitor";
 import { classifyMonitoredDn, emptyMonitorState, finalizeCalls, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
 import { monitoredDns } from "./threecx-topology";
-import { createMonitorStore, MonitorStore } from "./threecx-store";
+import { createMonitorStore, isRecentFinal, MonitorStore, RECENT_FINAL_MS } from "./threecx-store";
 import { ThreeCxDeviceDiagnostics } from "./threecx-device-diagnostics";
 import * as mongo from "../common/mongo";
 
@@ -32,7 +32,7 @@ class MemoryStore implements MonitorStore {
   async renew() { assert.ok(this.owner); this.renewals++; }
   async save(state: MonitorState) { assert.ok(this.owner); this.state = clone({ ...state, finals: { ...this.state.finals, ...state.finals } }); this.saves++; }
   async release() { this.owner = false; }
-  async hasFinal(id: string) { return Boolean(this.state.finals[id]); }
+  async hasFinal(id: string, now = Date.now()) { return isRecentFinal(this.state.finals[id], now); }
 }
 class FakeSocket extends EventEmitter {
   readyState = 1; terminated = false; pings = 0;
@@ -554,6 +554,29 @@ async function main() {
     try { await restarted.upsert("901", 1, 555, "Ringing"); await restarted.remove("901", 1); restarted.advance(4000); await wait(20); assert.equal(restarted.deliveries.length, 0); }
     finally { await restarted.monitor.stop(); }
   });
+  await test("PBX restart: a call id reused after the dedup window is a new call (tracked, hangup, logged)", async () => {
+    const f = fixture(); await f.start();
+    try {
+      await f.upsert("901", 1, 6, "Ringing"); await f.remove("901", 1); await f.finish();
+      // 3CX restarted: numbering starts again and id 6 is a different call.
+      f.advance(RECENT_FINAL_MS + 60_000);
+      // upsert() returns early here (the old final has the same id): wait for the new call itself.
+      await f.upsert("901", 2, 6, "Ringing");
+      await until(() => f.store.state.calls["6"]?.legs["901/2"]?.status === "Ringing", "reused id tracked");
+      await f.upsert("901", 2, 6, "Connected");
+      await until(() => f.monitor.liveCalls().length === 1 && f.monitor.liveCalls()[0].status === "connected", "reused id live");
+      const live = f.monitor.liveCalls();
+      assert.equal(live.length, 1, "the new call is shown, so the operator can hang it up");
+      assert.equal(live[0].callId, "6"); assert.equal(live[0].participantId, 2);
+      await f.remove("901", 2); f.advance(4000);
+      await until(() => f.deliveries.length === 2, "second final delivered");
+      assert.ok(f.deliveries[1].answeredAt, "the new call is logged as answered");
+    } finally { await f.monitor.stop(); }
+    assert.equal(isRecentFinal({ finalizedAt: new Date(0).toISOString() }, RECENT_FINAL_MS - 1), true);
+    assert.equal(isRecentFinal({ finalizedAt: new Date(0).toISOString() }, RECENT_FINAL_MS), false);
+    assert.equal(isRecentFinal({ event: { endedAt: new Date(0).toISOString() } }, 1000), true, "older records without finalizedAt use endedAt");
+    assert.equal(isRecentFinal({ event: null, delivered: true }, 1000), false, "no time at all never hides a call");
+  });
   await test("failed internal delivery retains outbox and retries same final payload", async () => {
     let attempts = 0;
     const f = fixture({ deliver: async () => { if (++attempts === 1) throw Error(SECRET); } }); await f.start();
@@ -585,7 +608,7 @@ async function main() {
     const file = path.join(os.tmpdir(), "leadium-3cx-test-" + process.pid + ".json");
     const a = createMonitorStore("https://pbx.test", file), b = createMonitorStore("https://pbx.test", file);
     try { const state = await a.claim(); assert.ok(state); assert.equal(await b.claim(), null);
-      state.finals["native-id"] = { event: null, delivered: true }; await a.save(state); await a.release();
+      state.finals["native-id"] = { event: null, delivered: true, finalizedAt: new Date().toISOString() }; await a.save(state); await a.release();
       assert.ok(await b.claim()); assert.equal(await b.hasFinal("native-id"), true); await b.release();
     } finally { if (fs.existsSync(file)) fs.unlinkSync(file); }
   });
@@ -629,7 +652,7 @@ async function main() {
       const a = createMonitorStore("https://mongo-pbx.test"), b = createMonitorStore("https://mongo-pbx.test");
       const state = await a.claim(); assert.ok(state); assert.equal(await b.claim(), null);
       await a.renew();
-      state.finals["123"] = { delivered: false, event: { callId: "123" } as any };
+      state.finals["123"] = { delivered: false, event: { callId: "123" } as any, finalizedAt: new Date().toISOString() };
       await a.save(state); assert.deepEqual(checkpoint.state.finals, {}); assert.equal(finals.size, 1);
       await a.release(); const recovered = await b.claim(); assert.equal(recovered.finals["123"].delivered, false);
       assert.equal(await b.hasFinal("123"), true);

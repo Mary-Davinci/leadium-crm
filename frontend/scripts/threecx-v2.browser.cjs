@@ -41,11 +41,13 @@ await new Promise(r=>setTimeout(r,120));return Response.json({finalstatus:'Succe
 let deviceMap={'901':[{id:'private-device-901',ua:'3CX Web Client 20'}],'913':[{id:'private-device-913',ua:'3CX Web Client 20'}]};
 const {deviceLabel}=require(root+'/backend/dist/services/call-service/threecx-device-label.js');
 const mask=id=>'device-'+require('crypto').createHash('sha256').update(id).digest('hex').slice(0,12);
-const controller=new ThreeCxController(config,new ThreeCxOAuth(config,pbx),()=>rows,async()=>{},pbx,undefined,dn=>(deviceMap[dn]||[]).map(d=>d.id),mask);
+// rows marked unseen exist on the PBX but never reach the live view (e.g. right after a PBX restart).
+const liveRows=()=>rows.filter(row=>!row.unseen);
+const controller=new ThreeCxController(config,new ThreeCxOAuth(config,pbx),liveRows,async()=>{},pbx,undefined,dn=>(deviceMap[dn]||[]).map(d=>d.id),mask);
 const internal=http.createServer(async(req,res)=>{
 if(!isCallControlInternal(req.headers['x-leadium-call-control'])){res.writeHead(403);res.end();return}
 try{let data;if(req.url.startsWith('/3cx/devices')){const dn=new URL(req.url,'http://x').searchParams.get('dn');data={available:true,devices:(deviceMap[dn]||[]).map(d=>({device:mask(d.id),label:deviceLabel(d.ua),userAgent:d.ua}))}}
-else if(req.url.startsWith('/3cx/live'))data={available:true,calls:rows.map(({participantId,directControl,...call})=>({...call,capabilities:capabilities({...call,participantId,directControl})}))};
+else if(req.url.startsWith('/3cx/live'))data={available:true,calls:liveRows().map(({participantId,directControl,...call})=>({...call,capabilities:capabilities({...call,participantId,directControl})}))};
 else{let text='';for await(const chunk of req)text+=chunk;const body=JSON.parse(text);data=await controller.execute(body.actor,body.action,body.input,body.callId)}
 res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(data));
 }catch(e){res.writeHead(e.status||503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:e.message}))}});
@@ -159,6 +161,15 @@ async function geometry(page) {
       await page.locator('.pd-note-modal-backdrop').waitFor();
       assert.ok(page.url().includes('/pratiche/native-fixture'),'existing outcome dialog opened in place');
       await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelectorAll('.pd-note-modal-backdrop').length===0);
+      await attemptCard.getByRole('button',{name:'Chiudi'}).click();await attemptCard.waitFor({state:'detached'});
+      // A Leadium call the live view never reports: the card still offers the hang-up, sent to the PBX call.
+      await update({reset:true});
+      await page.locator('.pd-hero-action-call').click();
+      await attemptCard.getByText('Richiesta accettata da 3CX',{exact:true}).waitFor();
+      await update({rows:[outbound({phase:'connected',status:'connected',customerPhone:'+393331234567',unseen:true})]});
+      await attemptCard.getByRole('button',{name:'Annulla chiamata'}).click();
+      await attemptCard.getByText('Chiamata terminata',{exact:true}).waitFor();
+      state=await update({});assert.ok(state.writes.some(p=>p.endsWith('/participants/9/drop')),'hang-up reaches the PBX for the unseen call: '+JSON.stringify(state.writes));
       await attemptCard.getByRole('button',{name:'Chiudi'}).click();await attemptCard.waitFor({state:'detached'});
       // Two devices (web client + app): explicit choice, the chosen one is dialed, cancel sends nothing.
       await update({reset:true,devices:{'901':[{id:'web-901',ua:'3CX Web Client 20'},{id:'android-901',ua:'3CXAndroid 20.1'}]}});

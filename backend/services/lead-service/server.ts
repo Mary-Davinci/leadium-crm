@@ -1482,6 +1482,8 @@ function validIsoOrNull(value: unknown) {
  * recorded on the timeline and left for the operator to confirm. A callback changes status only
  * with a valid date, so nextActionAt is never invented.
  */
+const THREECX_SAME_CALL_WINDOW_MS = 30 * 60_000;
+
 async function handleCallEvent(body: any) {
   const externalId = body.externalLeadId ? String(body.externalLeadId) : null;
   const incomingNumber = body.from ? String(body.from) : "";
@@ -1501,9 +1503,19 @@ async function handleCallEvent(body: any) {
   // and log a duplicate activity/CallLog for the same physical call. When no
   // callId is supplied we can't deduplicate, so we fall back to processing
   // the event (matches the previous, pre-idempotent behavior for that case).
+  // 3CX numbers calls from 1 again after a PBX restart: the same id on the same lead is the
+  // same call only when it started at about the same time (a retry repeats startedAt).
+  let callLogKey = callId ? `3cx_${callId}` : "";
   if (callId) {
-    const existingCall = await findCallLogByIdempotencyKey(lead.id, `3cx_${callId}`);
-    if (existingCall) return { ok: true, matched: true, leadId: lead.id, duplicate: true };
+    const startedMs = Date.parse(String(body.startedAt || ""));
+    const sameCall = (log: any) => !Number.isFinite(startedMs) || !Number.isFinite(Date.parse(String(log?.startedAt || "")))
+      || Math.abs(Date.parse(String(log.startedAt)) - startedMs) < THREECX_SAME_CALL_WINDOW_MS;
+    const existingCall = await findCallLogByIdempotencyKey(lead.id, callLogKey);
+    if (existingCall && sameCall(existingCall)) return { ok: true, matched: true, leadId: lead.id, duplicate: true };
+    if (existingCall && Number.isFinite(startedMs)) {
+      callLogKey = `3cx_${callId}_${startedMs}`;
+      if (await findCallLogByIdempotencyKey(lead.id, callLogKey)) return { ok: true, matched: true, leadId: lead.id, duplicate: true };
+    }
   }
 
   const now = new Date().toISOString();
@@ -1602,7 +1614,7 @@ async function handleCallEvent(body: any) {
     outcome: (KNOWN_CALL_OUTCOMES.has(disposition) ? disposition : "completed") as any,
     actor: String(body.agent || body.extension || "3cx"),
     note,
-    idempotencyKey: callId ? `3cx_${callId}` : undefined,
+    idempotencyKey: callLogKey || undefined,
     source: "3cx",
     durationSeconds,
     ...(body.eventType === "call_control_final" ? {

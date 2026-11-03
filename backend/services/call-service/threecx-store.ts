@@ -8,8 +8,21 @@ export interface MonitorStore {
   claim(): Promise<MonitorState | null>;
   renew(): Promise<void>;
   save(state: MonitorState): Promise<void>;
-  hasFinal(callId: string): Promise<boolean>;
+  /** A call with this native id ended within RECENT_FINAL_MS of `now` (default: the clock). */
+  hasFinal(callId: string, now?: number): Promise<boolean>;
   release(): Promise<void>;
+}
+
+/**
+ * 3CX numbers calls from 1 again after a PBX restart or update, so a native id alone does not
+ * identify a call forever. A final only blocks the same id for a short time: long enough for the
+ * leftovers of the ended call (late notifications, a monitor reconnect), far shorter than a PBX
+ * restart. Older finals (also those saved before finalizedAt existed) never hide a new call.
+ */
+export const RECENT_FINAL_MS = 10 * 60_000;
+export function isRecentFinal(final: any, now: number) {
+  const at = Date.parse(String(final?.finalizedAt || final?.event?.endedAt || ""));
+  return Number.isFinite(at) && now - at < RECENT_FINAL_MS;
 }
 
 /** One durable checkpoint/outbox and one expiring leader lease per PBX.
@@ -63,7 +76,7 @@ export function createMonitorStore(pbx: string, filename = path.join(__dirname, 
         );
         if (!row) return null;
         const pending = await db.collection("threecxFinalCalls").find({ pbx: id, delivered: false }).toArray();
-        return { ...row.state, finals: Object.fromEntries(pending.map(item => [item.callId, { event: item.event, delivered: false }])) };
+        return { ...row.state, finals: Object.fromEntries(pending.map(item => [item.callId, { event: item.event, delivered: false, ...(item.finalizedAt ? { finalizedAt: item.finalizedAt } : {}) }])) };
       } catch (error: any) { if (error.code === 11000) return null; throw error; }
     },
     async save(state) {
@@ -84,10 +97,10 @@ export function createMonitorStore(pbx: string, filename = path.join(__dirname, 
       );
       if (!result.matchedCount) throw new Error("Monitor lease lost");
     },
-    async hasFinal(callId) {
-      if (!isMongoEnabled()) return local(row => ({ row, result: Boolean(row.state?.finals?.[callId]) }));
+    async hasFinal(callId, now = Date.now()) {
+      if (!isMongoEnabled()) return local(row => ({ row, result: isRecentFinal(row.state?.finals?.[callId], now) }));
       const db = await getMongoDb();
-      return Boolean(await db.collection("threecxFinalCalls").findOne({ _id: finalId(callId) }, { projection: { _id: 1 } }));
+      return isRecentFinal(await db.collection("threecxFinalCalls").findOne({ _id: finalId(callId) }, { projection: { finalizedAt: 1, "event.endedAt": 1 } }), now);
     },
     async release() {
       if (!isMongoEnabled()) return local(row => ({ row: row.owner === owner ? { ...row, owner: null, leaseUntil: 0 } : row, result: undefined }));

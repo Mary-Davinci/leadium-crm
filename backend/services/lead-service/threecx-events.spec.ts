@@ -132,6 +132,23 @@ async function main() {
     });
   });
 
+  await runCase("callid riusato dopo un riavvio del centralino: nuova chiamata registrata, retry ancora unico", async () => {
+    await withServer(async (baseUrl) => {
+      const lead = await createLead(baseUrl);
+      const first = { callId: "6", from: lead.phone, eventType: "call_control_final", disposition: "completed", agent: "913", direction: "outbound",
+        startedAt: "2026-11-03T08:41:00.000Z", answeredAt: "2026-11-03T08:41:10.000Z", endedAt: "2026-11-03T08:43:00.000Z", durationSeconds: 110 };
+      const second = { ...first, agent: "901", startedAt: "2026-11-03T10:58:00.000Z", answeredAt: "2026-11-03T10:58:08.000Z", endedAt: "2026-11-03T11:00:00.000Z" };
+      assert.equal((await callEvent(baseUrl, first)).body.matched, true);
+      const reused = await callEvent(baseUrl, second);
+      assert.equal(reused.body.matched, true); assert.notEqual(reused.body.duplicate, true, "same id two hours later is another call");
+      assert.equal((await callEvent(baseUrl, second)).body.duplicate, true, "retry of the second call");
+      assert.equal((await callEvent(baseUrl, first)).body.duplicate, true, "retry of the first call");
+      const after = await detail(baseUrl, lead.id);
+      assert.equal(after.callLogs.length, 2);
+      assert.deepEqual(after.callLogs.map((row: any) => row.idempotencyKey).sort(), ["3cx_6", `3cx_6_${Date.parse(second.startedAt)}`].sort());
+    });
+  });
+
   await runCase("callback 3CX con data: Richiamo concordato, nextActionAt e task di richiamo", async () => {
     await withServer(async (baseUrl) => {
       const lead = await createLead(baseUrl);

@@ -376,10 +376,10 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
   }
 
   async function control(call: LiveCall, verb: string, target?: string) {
-    if (locked.current) return;
+    if (locked.current) return false;
     locked.current = true; setAction(call.callId); setMessage("");
-    try { await api(`/api/3cx/calls/${encodeURIComponent(call.callId)}/${verb}`, { method: "POST", body: JSON.stringify(target ? { target } : {}) }); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "3CX momentaneamente non disponibile"); }
+    try { await api(`/api/3cx/calls/${encodeURIComponent(call.callId)}/${verb}`, { method: "POST", body: JSON.stringify(target ? { target } : {}) }); return true; }
+    catch (error) { setMessage(error instanceof Error ? error.message : "3CX momentaneamente non disponibile"); return false; }
     finally { locked.current = false; setAction(""); }
   }
 
@@ -417,7 +417,16 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
             transferTargets={transferTargets}
             busy={action !== "" || busy}
             onChooseDevice={(option) => chooseDevice.current?.(option)}
-            onAction={(verb, target) => attemptCall && void control(attemptCall, verb, target)}
+            onAction={(verb, target) => {
+              // Hang up also works on the PBX id of a Leadium call the live view has not seen (yet).
+              const pbxCallId = attempt.matchedCallId || attempt.callId;
+              const target3cx = attemptCall || (verb === "hangup" && pbxCallId ? { callId: pbxCallId } as LiveCall : undefined);
+              if (!target3cx) return;
+              void control(target3cx, verb, target).then((done) => {
+                // Nothing will report the end of a call the live view never saw: close the card here.
+                if (done && !attemptCall) setAttempt((current) => (current && current.id === attempt.id ? { ...current, endedAt: Date.now(), phase: undefined } : current));
+              });
+            }}
             onOutcome={() => attempt.target.leadId && openOutcome(attempt.target.leadId)}
             onDismiss={() => setAttempt(null)}
           />}
@@ -515,7 +524,7 @@ export function OutboundAttemptCard({ attempt, call, dn, now, transferTargets = 
 
     {attempt.correlation === "probable" && !closed ? <p className="threecx-attempt-note">Collegamento alla chiamata non certo: 3CX non ha restituito l'identificativo.</p> : null}
 
-    {!closed && call?.capabilities.hangup ? <div className="threecx-round-row">
+    {!closed && (call?.capabilities.hangup || (!call && attempt.stage === "accepted" && (attempt.matchedCallId || attempt.callId))) ? <div className="threecx-round-row">
       <RoundAction tone="reject" icon={<PhoneOff size={22} />} label={attempt.phase === "connected" ? "Termina" : "Annulla chiamata"} disabled={busy} onClick={() => onAction("hangup")} />
     </div> : null}
     {!closed && call?.capabilities.transfer ? <TransferControl targets={transferTargets} exclude={dn} busy={busy} onTransfer={value => onAction("transfer", value)} /> : null}

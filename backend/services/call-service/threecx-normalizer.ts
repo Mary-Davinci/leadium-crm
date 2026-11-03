@@ -31,7 +31,7 @@ export type FinalCallEvent = {
 };
 export type MonitorState = {
   calls: Record<string, ObservedCall>;
-  finals: Record<string, { event: FinalCallEvent | null; delivered: boolean; incompleteReasons?: string[] }>;
+  finals: Record<string, { event: FinalCallEvent | null; delivered: boolean; incompleteReasons?: string[]; finalizedAt?: string }>;
 };
 export const emptyMonitorState = (): MonitorState => ({ calls: {}, finals: {} });
 export const legKey = (dn: string, id: number) => `${dn}/${id}`;
@@ -112,7 +112,7 @@ export function finalizeCalls(state: MonitorState, now: number) {
       disposition: call.answeredAt ? "completed" : "no_answer", eventType: "call_control_final",
       note: "3CX Call Control: tempi osservati dal listener; durata dalla prima risposta osservata."
     } : null;
-    state.finals[id] = { event, delivered: event === null, ...(event ? {} : { incompleteReasons: reasons }) };
+    state.finals[id] = { event, delivered: event === null, finalizedAt: new Date(now).toISOString(), ...(event ? {} : { incompleteReasons: reasons }) };
     delete state.calls[id];
   }
 }
