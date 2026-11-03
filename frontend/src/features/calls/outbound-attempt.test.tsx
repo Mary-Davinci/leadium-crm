@@ -24,6 +24,14 @@ describe("outbound attempt state comes only from observed events", () => {
     expect(late.detail).not.toMatch(/fallit|non riuscit/i);
   });
 
+  it("an accepted call the PBX never reported can be closed after the observation window", () => {
+    expect(card(accepted(), t0 + 5000)).not.toContain(">Chiudi<");
+    const late = card(accepted(), t0 + 61000);
+    expect(late).toContain(">Chiudi<");
+    expect(late).toContain("Annulla chiamata");
+    expect(card(accepted({ matchedCallId: "77", phase: "connected", maxPhaseRank: 4 }), t0 + 61000)).not.toContain(">Chiudi<");
+  });
+
   it("callback phase asks to answer in the 3CX client; nothing promises in-CRM audio or answering", () => {
     const view = describeAttempt(accepted({ phase: "callback_ringing", maxPhaseRank: 1 }), t0 + 2000);
     expect(view.tone).toBe("action");

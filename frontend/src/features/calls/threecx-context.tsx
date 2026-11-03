@@ -76,7 +76,8 @@ function storeAttempt(dn: string, attempt: Attempt | null) {
 function restoreAttempt(dn: string): Attempt | null {
   try {
     const saved = JSON.parse(sessionStorage.getItem(ATTEMPT_STORAGE_KEY) || "null");
-    if (!saved || saved.dn !== dn || !(Date.now() - saved.savedAt < 2 * 3600 * 1000) || saved.attempt?.stage !== "accepted") return null;
+    // Age from the original request: a reload re-saves the attempt, which must not extend its life.
+    if (!saved || saved.dn !== dn || !(Date.now() - (saved.attempt?.acceptedAt || saved.savedAt) < 2 * 3600 * 1000) || saved.attempt?.stage !== "accepted") return null;
     return saved.attempt as Attempt;
   } catch { return null; }
 }
@@ -493,6 +494,8 @@ export function OutboundAttemptCard({ attempt, call, dn, now, transferTargets = 
   const talk = view.showTimer && attempt.connectedAt ? formatDuration((now - Date.parse(attempt.connectedAt)) / 1000) : null;
   const canOutcome = Boolean(attempt.target.leadId) && (Boolean(attempt.endedAt) || attempt.phase === "connected");
   const device = attempt.device?.label || (attempt.stage === "choosing" ? "Da scegliere" : "");
+  // Accepted but never reported by the PBX (e.g. a restart in between): the operator can still close it.
+  const unseen = !closed && !call && attempt.stage === "accepted" && !attempt.matchedCallId && now - (attempt.acceptedAt || now) >= OBSERVATION_WINDOW_MS;
   return <section className={`threecx-attempt is-${view.tone}`} aria-label="Chiamata in uscita" aria-live="polite">
     <div className="threecx-attempt-status">
       <span className="threecx-live-badge"><PhoneOutgoing size={12} aria-hidden="true" />{view.title}</span>
@@ -529,9 +532,9 @@ export function OutboundAttemptCard({ attempt, call, dn, now, transferTargets = 
     </div> : null}
     {!closed && call?.capabilities.transfer ? <TransferControl targets={transferTargets} exclude={dn} busy={busy} onTransfer={value => onAction("transfer", value)} /> : null}
 
-    {canOutcome || closed ? <div className="threecx-attempt-actions">
+    {canOutcome || closed || unseen ? <div className="threecx-attempt-actions">
       {canOutcome ? <button type="button" className="threecx-live-btn is-primary" onClick={onOutcome}><ClipboardCheck size={15} aria-hidden="true" />Registra esito</button> : null}
-      {closed ? <button type="button" className="threecx-live-btn is-quiet" onClick={onDismiss}>Chiudi</button> : null}
+      {closed || unseen ? <button type="button" className="threecx-live-btn is-quiet" onClick={onDismiss}>Chiudi</button> : null}
     </div> : null}
 
     {attempt.attemptId ? <small className="threecx-attempt-ref">Riferimento per la diagnostica: {attempt.attemptId}</small> : null}

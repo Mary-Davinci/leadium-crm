@@ -76,7 +76,10 @@ async function main() {
     assert.equal((await post("/api/3cx/call", "expired", { phone: "+393331234567" })).status, 401);
     assert.equal((await post("/api/3cx/call", "unmapped", { phone: "+393331234567" })).status, 403);
     assert.equal((await post("/api/3cx/calls/123/answer", "operator-b")).status, 403);
-    assert.equal((await post("/api/3cx/calls/456/hangup", "operator-a")).status, 403);
+    // 456 is live on 913: hangup from 901 only looks at 901 and finds nothing to drop.
+    const foreignHangup = await post("/api/3cx/calls/456/hangup", "operator-a");
+    assert.equal(foreignHangup.status, 200);
+    assert.deepEqual(await foreignHangup.json(), { accepted: true, alreadyEnded: true });
     assert.equal(pbxWrites.length, 0);
     console.log("PASS V2 real gateway: anonymous/expired rejected, admin without mapping rejected, operator 913 cannot act on 901");
     for (const key of ['deviceId', 'device_id', 'participantId', 'dn']) {

@@ -290,11 +290,14 @@ export class ThreeCxController {
       const ownershipKey = `${actor.threeCxDn}:${callId}`;
       const owned = this.ownedCalls.get(ownershipKey);
       const ended = async () => {
-        this.ownedCalls.set(ownershipKey, { ended: true, expires: Date.now() + 600000 });
+        // Only a call started here is remembered as ended; a no-op hangup creates no state.
+        if (owned) this.ownedCalls.set(ownershipKey, { ended: true, expires: Date.now() + 600000 });
         await record("success"); return { accepted: true, alreadyEnded: true };
       };
       if (matches.length > 1) throw new CallControlError(409, "Chiamata ambigua per il tuo interno.");
-      if (!matches.length && !(action === "hangup" && owned)) throw new CallControlError(403, "Chiamata non disponibile per il tuo interno.");
+      // Hangup stays possible without live state or ownership (lost on a restart): the participant
+      // is looked up below on the actor's own DN only, so another extension's call is never touched.
+      if (!matches.length && action !== "hangup") throw new CallControlError(403, "Chiamata non disponibile per il tuo interno.");
       if (!matches.length && owned?.ended) return ended();
       let participantId: number | null = matches[0]?.participantId ?? null;
       if (action === "hangup") {

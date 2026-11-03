@@ -9,7 +9,7 @@ const SECRET = "fixture-provider-secret", TOKEN = "fixture-provider-token";
 const config = monitorConfig({ THREECX_ENABLED: "true", THREECX_BASE_URL: "https://pbx.invalid", THREECX_CLIENT_ID: "fixture", THREECX_API_KEY: SECRET });
 const actor = (dn = "901") => ({ userId: "user-" + dn, threeCxDn: dn });
 const liveCall = (dn = "901"): LiveCall => ({ callId: "123", agentDn: dn, customerPhone: "+393331234567", direction: "inbound", status: "ringing", startedAt: new Date().toISOString(), participantId: 1, directControl: true });
-function fixture(options: { devices?: readonly string[] | null; accepted?: number; noFinalStatus?: boolean; empty?: boolean; participantMissing?: boolean; dropMissing?: boolean; endOnMissing?: boolean; providerTimeout?: boolean; returnedParticipantId?: number; currentParticipantId?: number; participantStatus?: string; auth?: number; status?: number; finalstatus?: string; direct?: boolean; stale?: boolean; timeout?: boolean; auditFail?: boolean } = {}) {
+function fixture(options: { devices?: readonly string[] | null; accepted?: number; noFinalStatus?: boolean; empty?: boolean; participantMissing?: boolean; dropMissing?: boolean; endOnMissing?: boolean; providerTimeout?: boolean; returnedParticipantId?: number; currentParticipantId?: number; participantStatus?: string; auth?: number; status?: number; finalstatus?: string; direct?: boolean; stale?: boolean; timeout?: boolean; auditFail?: boolean; hideLive?: boolean } = {}) {
   const requests: any[] = [], audits: any[] = [], makecalls: string[] = [];
   let rows = [liveCall()];
   const http = (async (url: any, init: any) => {
@@ -28,7 +28,7 @@ function fixture(options: { devices?: readonly string[] | null; accepted?: numbe
       ...(options.returnedParticipantId !== undefined ? { id: options.returnedParticipantId } : {}) }, secret: SECRET, access_token: TOKEN }), { status: options.accepted || 200 });
   }) as typeof fetch;
   const oauth = new ThreeCxOAuth(config, http, 20);
-  const controller = new ThreeCxController(config, oauth, () => rows, async row => { if (options.auditFail) throw Error(SECRET); audits.push(row); }, http, 20, dn => options.devices === undefined ? [`private-device-${dn}`] : options.devices, undefined, id => makecalls.push(id));
+  const controller = new ThreeCxController(config, oauth, () => options.hideLive ? [] : rows, async row => { if (options.auditFail) throw Error(SECRET); audits.push(row); }, http, 20, dn => options.devices === undefined ? [`private-device-${dn}`] : options.devices, undefined, id => makecalls.push(id));
   return { controller, makecalls, oauth, http, requests, audits, rows, setRows: (next: LiveCall[]) => { rows = next; } };
 }
 async function main() {
@@ -175,7 +175,26 @@ async function main() {
     f.setRows([]); (f.controller as any).recent.clear();
     assert.deepEqual(await f.controller.execute(actor(dn), 'hangup', {}, '123'), { accepted: true, alreadyEnded: true });
     const other = actor(dn === '901' ? '913' : '901');
-    await assert.rejects(f.controller.execute(other, 'hangup', {}, '123'), (error: any) => error.status === 403);
+    // Nothing on the other extension: an idempotent no-op that never reaches another DN.
+    (f.controller as any).recent.clear(); const before = f.requests.length;
+    assert.deepEqual(await f.controller.execute(other, 'hangup', {}, '123'), { accepted: true, alreadyEnded: true });
+    assert.ok(!f.requests.slice(before).some(row => row.path.endsWith('/drop') || row.path.startsWith(`/callcontrol/${dn}`)));
+    // The call is live on this DN: the other extension cannot drop it.
+    f.setRows([{ ...liveCall(dn), participantId: 7 }]); (f.controller as any).recent.clear();
+    await assert.rejects(f.controller.execute(other, 'hangup', {}, '123'), (error: any) => error.status === 409);
+    assert.ok(!f.requests.slice(before).some(row => row.path.endsWith('/drop')));
+    await assert.rejects(f.controller.execute(other, 'answer', {}, '123'), (error: any) => error.status === 403);
+  }
+  {
+    // After a service restart neither live state nor ownership exists: the call on the actor's own
+    // DN is still found on the PBX and dropped (stuck card "Chiamata non disponibile per il tuo interno").
+    const f = fixture({ hideLive: true });
+    f.setRows([{ ...liveCall('901'), participantId: 7 }]);
+    assert.deepEqual(await f.controller.execute(actor('901'), 'hangup', {}, '123'), { accepted: true });
+    assert.ok(f.requests.some(row => row.path === '/callcontrol/901/participants/7/drop'));
+    f.setRows([]); (f.controller as any).recent.clear();
+    assert.deepEqual(await f.controller.execute(actor('901'), 'hangup', {}, '123'), { accepted: true, alreadyEnded: true });
+    console.log("PASS hangup without live state or ownership: own DN dropped, ended call closes");
   }
   {
     const f = fixture({ returnedParticipantId: 1 });
