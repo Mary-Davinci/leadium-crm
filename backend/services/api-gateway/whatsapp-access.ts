@@ -5,6 +5,7 @@ import { AuthPublicUser } from "./auth-store";
 // by number only, and the first operator who answers the alert takes it.
 
 export const CHAT_FORBIDDEN_MESSAGE = "Questa chat e assegnata a un altro operatore.";
+export const LEAD_FORBIDDEN_MESSAGE = "Questa pratica e assegnata a un altro operatore.";
 export const CHAT_TAKEN_MESSAGE = "Un collega ha gia preso questa chat.";
 
 type ChatConversation = { leadId?: string | null; assignedTo?: string | null; status?: string; replyWindowExpiresAt?: string | null };

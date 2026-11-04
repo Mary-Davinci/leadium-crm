@@ -28,7 +28,7 @@ const gatewayUrl=await listen(gateway.server);
 const ids={};
 for(const [key,statuses,amounts]of [['editable',['pending','pending'],[0,0]],['legacy',['verified','received'],[300,900]],['zero',['pending','pending'],[0,0]]]){
 const id='payment-browser-'+key,now=new Date().toISOString();ids[key]=id;
-await store.createLead({id,fullName:'Cliente '+key,phone:'+393331234567',status:'In contatto',createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:['payment_deposit','payment_balance'].map((id,i)=>({id,amount:amounts[i],status:statuses[i]}))}});
+await store.createLead({id,assignedTo:'payment-browser',fullName:'Cliente '+key,phone:'+393331234567',status:'In contatto',createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:['payment_deposit','payment_balance'].map((id,i)=>({id,amount:amounts[i],status:statuses[i]}))}});
 }
 process.env.API_TARGET=gatewayUrl;
 const {createServer}=await import(require('url').pathToFileURL(root+'/frontend/node_modules/vite/dist/node/index.js').href);

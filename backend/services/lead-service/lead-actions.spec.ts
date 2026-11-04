@@ -124,6 +124,27 @@ async function workedChecks(baseUrl: string) {
   console.log("PASS worked: note required, reminders closed and not recreated, traced, undoable; final outcomes need no button");
 }
 
+async function closeChecks(baseUrl: string) {
+  resetDb();
+  const lead = await seedLead({ fullName: "Mariella Montenero", phone: "+39 333 5000001", assignedTo: "marta" });
+  await taskStore.createTask({ leadId: lead.id, assignedTo: "marta", kind: "callback_reminder", title: "Richiamare", source: "test", status: "open", priority: 75, dueAt: new Date().toISOString() });
+  assert.equal((await request(baseUrl, "POST", `/leads/${lead.id}/close`, { note: "  ", __actor: OPERATOR })).status, 400, "a reason is required");
+  assert.equal((await request(baseUrl, "POST", `/leads/${lead.id}/close`, { note: "x" })).status, 403, "author required");
+  const closed = await request(baseUrl, "POST", `/leads/${lead.id}/close`, { note: "Ha prenotato altrove", __actor: OPERATOR });
+  assert.deepEqual([closed.status, closed.body.closedNote, closed.body.closedBy], [200, "Ha prenotato altrove", "marta"]);
+  assert.equal((await taskStore.listTasks({ status: "open", leadId: lead.id })).length, 0, "reminders stop");
+  assert.equal((await request(baseUrl, "POST", `/leads/${lead.id}/close`, { note: "ancora", __actor: OPERATOR })).status, 409);
+  assert.equal((await request(baseUrl, "POST", `/leads/${lead.id}/worked`, { note: "x", __actor: OPERATOR })).status, 409);
+  const reopened = await request(baseUrl, "POST", `/leads/${lead.id}/close/undo`, { __actor: OPERATOR });
+  assert.deepEqual([reopened.status, reopened.body.closedAt], [200, null]);
+  assert.equal((await request(baseUrl, "POST", `/leads/${lead.id}/close/undo`, { __actor: OPERATOR })).status, 409);
+  const timeline = (await leadStore.getTimelineByLeadId(lead.id)) as any[];
+  assert.ok(["lead_closed", "lead_reopened"].every((type) => timeline.some((row) => row.type === type)), "traced");
+  const final = await seedLead({ fullName: "Esito finale", phone: "+39 333 5000002", closingOutcome: "lost" });
+  assert.equal((await request(baseUrl, "POST", `/leads/${final.id}/close`, { note: "x", __actor: OPERATOR })).status, 409, "a final outcome is already closed");
+  console.log("PASS close: reason required, reminders stop, traced, reopenable, no double closing");
+}
+
 async function emailChecks(baseUrl: string) {
   resetDb();
   const lead = await seedLead({ fullName: "Mirella Pugliese", phone: "+39 333 3000001", email: "mirella@example.test" });
@@ -218,6 +239,7 @@ async function main() {
   await withServer(async (baseUrl) => {
     await archiveChecks(baseUrl);
     await workedChecks(baseUrl);
+    await closeChecks(baseUrl);
     await emailChecks(baseUrl);
     await replyChecks(baseUrl);
   });

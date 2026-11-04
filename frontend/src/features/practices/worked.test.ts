@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isWorkedLead } from "./worked";
+import { isClosedLead, isWorkedLead } from "./worked";
 
 describe("operator worked queue", () => {
   it("keeps notes and non-terminal call outcomes in active work", () => {
@@ -12,6 +12,12 @@ describe("operator worked queue", () => {
     for (const status of ["Contattato non interessato", "Fuori budget", "Persa", "Venduta"]) expect(isWorkedLead({ status })).toBe(true);
     expect(isWorkedLead({ status: "Contatto interessato", workedAt: "2026-11-02T12:00:00Z" })).toBe(true);
   });
+  it("tells closed practices from work that is only done for now", () => {
+    for (const lead of [{ closingOutcome: "won" }, { closingOutcome: "lost" }, { status: "Persa" }, { closedAt: "2026-11-04T12:00:00Z" }]) expect(isClosedLead(lead)).toBe(true);
+    expect(isClosedLead({ status: "Contatto interessato", workedAt: "2026-11-02T12:00:00Z" })).toBe(false);
+    expect(isWorkedLead({ closedAt: "2026-11-04T12:00:00Z" })).toBe(true);
+  });
+
   it("returns explicitly completed work to active when undone", () => {
     expect(isWorkedLead({ status: "Contatto interessato", closingOutcome: "open", workedAt: null })).toBe(false);
   });

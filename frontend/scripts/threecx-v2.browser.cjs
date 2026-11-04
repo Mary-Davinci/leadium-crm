@@ -14,9 +14,11 @@ const listen=async s=>{await new Promise(r=>s.listen(0,'127.0.0.1',r));return 'h
 fs.writeFileSync(process.env.JSON_DB_FILE,JSON.stringify({leads:[],activities:[],tasks:[],customers:[],purchases:[],callLogs:[]}));
 const store=require(root+'/backend/dist/services/common/leadStore.js');
 const now=new Date().toISOString();
-await store.createLead({id:'native-fixture',fullName:'Cliente Native Fixture',phone:'+393331234567',status:'In contatto',createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:[]}});
+await store.createLead({id:'orphan-fixture',fullName:'Cliente Senza Operatore',phone:'+393337777790',status:'In contatto',createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:[]}});
+await store.createLead({id:'unmapped-fixture',assignedTo:'unmapped',fullName:'Cliente Senza Interno',phone:'+393337778899',status:'In contatto',createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:[]}});
+await store.createLead({id:'native-fixture',assignedTo:'mapped',fullName:'Cliente Native Fixture',phone:'+393331234567',status:'In contatto',createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:[]}});
 const customers=require(root+'/backend/dist/services/common/customerStore.js');const shared=await customers.findOrCreateCustomerByContact({phone:'+393401112233',fullName:'Cliente Condiviso'});
-for(const [id,extra] of [['shared-a',{status:'In contatto'}],['shared-b',{status:'Perso',closingOutcome:'lost'}]])await store.createLead({id,fullName:'Cliente Condiviso',phone:'+393401112233',customerId:shared.id,createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:[]},...extra});
+for(const [id,extra] of [['shared-a',{status:'In contatto'}],['shared-b',{status:'Perso',closingOutcome:'lost'}]])await store.createLead({id,assignedTo:'mapped',fullName:'Cliente Condiviso',phone:'+393401112233',customerId:shared.id,createdAt:now,updatedAt:now,documents:{items:[]},payments:{items:[]},...extra});
 const leads=require(root+'/backend/dist/services/lead-service/server.js');process.env.LEAD_SERVICE_URL=await listen(leads.server);
 const mock=http.createServer((req,res)=>{res.setHeader('Content-Type','application/json');res.end('{}')});process.env.WHATSAPP_SERVICE_URL=await listen(mock);
 // Self-contained: the real workflow definition, without depending on a locally running stack.
@@ -201,7 +203,7 @@ async function geometry(page) {
       console.log('PASS V2 '+width+'px: global incoming, direct_control, lookup, answer/transfer/reject, isolation, no duplicates, native dial/double-click, device choice/cancel/none, unchanged practice, usable controls');
     }
     const unmapped=await browser.newPage();await unmapped.addInitScript(user=>{localStorage.setItem('crm.auth.token','native-unmapped');localStorage.setItem('crm.auth.user',JSON.stringify(user))},fixture.users.unmapped);
-    await unmapped.goto(fixture.frontUrl+'/pratiche/native-fixture');await unmapped.locator('.pd-hero-action-call').click();await unmapped.getByText('Interno 3CX non configurato',{exact:true}).waitFor();await unmapped.close();
+    await unmapped.goto(fixture.frontUrl+'/pratiche/unmapped-fixture');await unmapped.locator('.pd-hero-action-call').click();await unmapped.getByText('Interno 3CX non configurato',{exact:true}).waitFor();await unmapped.close();
     console.log('PASS V2 no mapping: readable unavailable state, no local URI/audio dependency');
     // Contact correction (operator: name/email; admin: phone) and duplicate notice, real gateway + lead-service.
     for (const width of [1440, 390]) {
@@ -305,7 +307,7 @@ async function geometry(page) {
       await page.getByRole('button',{name:'Crea lead',exact:true}).click();await page.getByText('E gia tra le tue pratiche.').waitFor();
       await page.getByRole('button',{name:'Chiudi',exact:true}).click();
       await page.getByRole('button',{name:'+ Nuovo lead'}).click();
-      await page.getByPlaceholder('Nome e cognome del cliente').fill('Nome diverso');await page.getByPlaceholder('+39 ...').fill('+39 333 7777778');
+      await page.getByPlaceholder('Nome e cognome del cliente').fill('Nome diverso');await page.getByPlaceholder('+39 ...').fill('+39 333 7777790');
       await page.getByRole('button',{name:'Crea lead',exact:true}).click();
       await page.getByText(/Non e assegnato a nessuno: non compare tra le tue pratiche/).waitFor();
       await page.screenshot({path:path.join(os.tmpdir(),'leadium-operator-duplicate-1100.png')});

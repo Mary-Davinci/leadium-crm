@@ -70,6 +70,7 @@ async function createLead(leadUrl: string, overrides: Record<string, unknown> = 
   const created = await apiRequest(leadUrl, "POST", "/leads", {
     body: {
       fullName: "Cliente Test",
+      assignedTo: "operatore_user",
       phone: `+39 3${Math.floor(Math.random() * 900000000 + 100000000)}`,
       ...overrides
     }
@@ -83,6 +84,7 @@ async function seedLeadWithStatus(status: string) {
   const lead = {
     id: leadStore.newId("lead"),
     fullName: "Cliente Test",
+      assignedTo: "operatore_user",
     phone: `+39 3${Math.floor(Math.random() * 900000000 + 100000000)}`,
     status,
     closingOutcome: "won",
@@ -364,7 +366,7 @@ async function main() {
     ];
     try {
       await withServers(async (leadUrl, gatewayUrl, gateway) => {
-        const lead = await seedLeadWithStatus("Da contattare");
+        const lead = await leadStore.saveLead({ ...(await seedLeadWithStatus("Da contattare")), assignedTo: "" });
         const operator = makeSession(gateway, "operatore");
         assert.equal((await apiRequest(gatewayUrl, "GET", "/api/leads/assignees")).status, 401);
         const assignees = await apiRequest(gatewayUrl, "GET", "/api/leads/assignees", { token: operator });
@@ -393,8 +395,10 @@ async function main() {
         const mine = await apiRequest(gatewayUrl, "GET", "/api/leads?view=summary", { token: "tok-giuseppe" });
         assert.ok((mine.body as any[]).some((row) => row.id === lead.id && row.assignedTo === "Giuseppe"), "listed with the value the 'Assegnate a te' filter compares");
 
-        const reassigned = await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/assign`, { token: operator, body: { userId: "u-giuseppe-r" } });
-        assert.equal(reassigned.status, 200, "operators keep the assignment rights they had");
+        const refusedColleague = await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/assign`, { token: operator, body: { userId: "u-giuseppe-r" } });
+        assert.equal(refusedColleague.status, 403, "a colleague's practice cannot be reassigned");
+        const reassigned = await apiRequest(gatewayUrl, "POST", `/api/leads/${lead.id}/assign`, { token: "tok-giuseppe", body: { userId: "u-giuseppe-r" } });
+        assert.equal(reassigned.status, 200, "operators can still pass on their own practices");
         const second = (await leadStore.getTimelineByLeadId(lead.id)).filter((row: any) => row.type === "lead_assigned")[1];
         assert.deepEqual({ previous: second.meta.previousAssignedTo, next: second.meta.newAssignedTo }, { previous: "Giuseppe", next: "giuseppe.r" });
 

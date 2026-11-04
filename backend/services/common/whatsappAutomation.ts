@@ -57,6 +57,7 @@ export type AutomationLead = {
   id?: string;
   status?: string;
   closingOutcome?: string;
+  closedAt?: string | null;
   productInterest?: string | null;
   quoteUrl?: string | null;
   fullName?: string | null;
@@ -137,7 +138,7 @@ export function getCommercialStopReason(lead: AutomationLead): string | null {
   const status = String(lead.status || "");
   const outcome = String(lead.closingOutcome || "open");
   if (outcome === "won" || SOLD_STATUSES.has(status)) return "sold";
-  if (outcome === "lost" || outcome === "disqualified" || CLOSED_LOST_STATUSES.has(status)) return "not_interested";
+  if (outcome === "lost" || outcome === "disqualified" || CLOSED_LOST_STATUSES.has(status) || lead.closedAt) return "not_interested";
   return null;
 }
 

@@ -17,6 +17,9 @@ const conversations: Row[] = [];
 const whatsappCalls: Array<{ method: string; url: string; body: Row }> = [];
 const leadPatches: Row[] = [];
 const mailMessages: Row[] = [];
+const tasks: Row[] = [{ id: "t-mine", leadId: "lead-mine", assignedTo: "marta" }, { id: "t-other", leadId: "lead-other", assignedTo: "luca" }];
+const calls: Row[] = [{ id: "c-mine", leadId: "lead-mine", actor: "marta" }, { id: "c-other", leadId: "lead-other", actor: "luca" }, { id: "c-none", leadId: "", actor: "marta" }, { id: "c-none-other", leadId: "", actor: "luca" }];
+const taskPosts: Row[] = [];
 const mailPatches: Row[] = [];
 
 function reply(res: http.ServerResponse, status: number, payload: unknown) {
@@ -33,7 +36,17 @@ function readBody(req: http.IncomingMessage): Promise<Row> {
 
 const leadService = http.createServer(async (req, res) => {
   const body = await readBody(req);
+  if (req.method === "GET" && req.url === "/internal/lead-owners") return reply(res, 200, Object.fromEntries(leads.map((lead) => [lead.id, lead.assignedTo || ""])));
   if (req.method === "GET" && req.url === "/leads") return reply(res, 200, leads);
+  if (req.method === "GET" && String(req.url).startsWith("/leads/")) return reply(res, 200, { id: "ok" });
+  if (req.method === "GET" && req.url?.startsWith("/tasks/board")) return reply(res, 200, { tasks, leads });
+  if (req.method === "GET" && req.url?.startsWith("/tasks/")) { const task = tasks.find((row) => req.url?.endsWith(row.id)); return task ? reply(res, 200, task) : reply(res, 404, {}); }
+  if (req.method === "PATCH" && req.url?.startsWith("/tasks/")) return reply(res, 200, { id: "t" });
+  if (req.method === "POST" && req.url === "/tasks") { taskPosts.push(body); return reply(res, 200, { id: "t" }); }
+  if (req.method === "GET" && req.url?.startsWith("/tasks")) return reply(res, 200, tasks);
+  if (req.method === "GET" && req.url?.startsWith("/calls")) return reply(res, 200, calls);
+  if (req.method === "GET" && req.url === "/customers/c1") return reply(res, 200, { customer: { id: "c1" }, leads: [{ id: "lead-mine" }, { id: "lead-other" }], purchases: [{ id: "p1", leadId: "lead-mine" }, { id: "p2", leadId: "lead-other" }], activeLead: { id: "lead-other" } });
+  if (req.method === "GET" && req.url === "/customers/c2") return reply(res, 200, { customer: { id: "c2" }, leads: [{ id: "lead-other" }], purchases: [], activeLead: null });
   if (req.method === "GET" && req.url === "/mail/messages") return reply(res, 200, { configured: true, lastSyncAt: null, lastError: "Casella non raggiungibile.", messages: mailMessages });
   if (req.method === "PATCH" && String(req.url).startsWith("/mail/messages/")) { mailPatches.push({ url: req.url, ...body }); return reply(res, 200, {}); }
   const patch = String(req.url).match(/^\/leads\/([^/]+)$/);
@@ -178,6 +191,34 @@ async function main() {
     assert.equal((await call("PATCH", "/api/mail/messages/m3", "admin", { linkLeadId: "lead-mine" })).status, 200);
     assert.deepEqual(mailPatches.map((row) => [row.url, row.actor]), [["/mail/messages/m1", "marta"], ["/mail/messages/m3", "maro"]]);
     console.log("PASS customer email follows the practice's operator; unmatched senders stay with admins");
+
+    reset(); await settle();
+    assert.deepEqual((await call("GET", "/api/leads", "marta")).body.map((row: Row) => row.id), ["lead-mine"], "colleagues' and unassigned practices stay out");
+    assert.equal((await call("GET", "/api/leads", "admin")).body.length, 3);
+    assert.equal((await call("GET", "/api/leads/lead-other", "marta")).status, 403);
+    assert.equal((await call("GET", "/api/leads/lead-free", "marta")).status, 403, "the admin distributes unassigned practices");
+    assert.equal((await call("GET", "/api/leads/lead-mine", "marta")).status, 200);
+    assert.equal((await call("GET", "/api/leads/lead-other", "admin")).status, 200);
+    for (const [method, url] of [["GET", "/api/leads/lead-other/activities"], ["PATCH", "/api/leads/lead-other"], ["POST", "/api/leads/lead-other/worked"], ["POST", "/api/leads/lead-other/close"], ["POST", "/api/leads/lead-other/email"], ["POST", "/api/leads/lead-other/assign"]]) {
+      assert.equal((await call(method, url, "marta", method === "GET" ? undefined : {})).status, 403, url);
+    }
+    const board = await call("GET", "/api/tasks/board?status=open", "marta");
+    assert.deepEqual([board.body.tasks.map((row: Row) => row.id), board.body.leads.map((row: Row) => row.id)], [["t-mine"], ["lead-mine"]], "dashboard, search and reminders read this");
+    assert.deepEqual((await call("GET", "/api/tasks?status=open", "marta")).body.map((row: Row) => row.id), ["t-mine"]);
+    assert.equal((await call("GET", "/api/tasks/board", "admin")).body.tasks.length, 2);
+    assert.equal((await call("PATCH", "/api/tasks/t-other", "marta", { status: "done" })).status, 403);
+    assert.equal((await call("PATCH", "/api/tasks/t-mine", "marta", { status: "done" })).status, 200);
+    assert.equal((await call("POST", "/api/tasks", "marta", { leadId: "lead-other", title: "x" })).status, 403);
+    assert.equal(taskPosts.length, 0);
+    assert.equal((await call("POST", "/api/tasks", "marta", { leadId: "lead-mine", title: "x" })).status, 200);
+    assert.deepEqual((await call("GET", "/api/calls?limit=250", "marta")).body.map((row: Row) => row.id), ["c-mine", "c-none"], "a call with no practice stays with who made it");
+    const customer = await call("GET", "/api/customers/c1", "marta");
+    assert.deepEqual([customer.body.leads.map((row: Row) => row.id), customer.body.purchases.map((row: Row) => row.id), customer.body.activeLead], [["lead-mine"], ["p1"], null], "a shared customer shows only own practices");
+    assert.equal((await call("GET", "/api/customers/c2", "marta")).status, 403);
+    assert.equal((await call("GET", "/api/customers/c1", "admin")).body.leads.length, 2);
+    assert.equal((await call("GET", "/api/purchases/p2", "marta")).status, 403);
+    assert.equal((await call("GET", "/api/whatsapp/automation/state?leadId=lead-other", "marta")).status, 403);
+    console.log("PASS operators reach only their own practices, on every path; admins keep the whole view");
   } finally {
     for (const server of [gateway.server, leadService, whatsappService]) server.close();
     fs.rmSync(process.env.JSON_DB_FILE as string, { force: true });

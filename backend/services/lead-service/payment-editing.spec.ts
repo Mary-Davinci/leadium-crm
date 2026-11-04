@@ -20,7 +20,7 @@ async function request(method: string, route: string, body?: any, role = "operat
 }
 async function seed(status = "In contatto", items?: any[]) {
   const now = new Date().toISOString();
-  const lead = { id: store.newId("payment"), fullName: "Cliente pagamento", phone: "+393331234567", status, createdAt: now, updatedAt: now,
+  const lead = { id: store.newId("payment"), fullName: "Cliente pagamento", assignedTo: "real-operatore", phone: "+393331234567", status, createdAt: now, updatedAt: now,
     payments: { items: items || [{ id: "payment_deposit", amount: 300, status: "pending" }, { id: "payment_balance", amount: 900, status: "pending" }] }, documents: { items: [] } };
   await store.createLead(lead); return lead;
 }

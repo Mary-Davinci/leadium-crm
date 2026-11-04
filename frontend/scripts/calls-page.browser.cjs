@@ -18,7 +18,7 @@ fs.writeFileSync(process.env.JSON_DB_FILE,JSON.stringify({leads:[],activities:[]
 const store=require(root+'/backend/dist/services/common/leadStore.js');
 const calls=require(root+'/backend/dist/services/common/callStore.js');
 const now=new Date().toISOString();
-await store.createLead({id:'calls-fixture',fullName:'Cliente fixture chiamate',phone:'+393331234567',status:'In contatto',createdAt:now,updatedAt:now});
+await store.createLead({id:'calls-fixture',assignedTo:'calls-operatore',fullName:'Cliente fixture chiamate',phone:'+393331234567',status:'In contatto',createdAt:now,updatedAt:now});
 await calls.createCallLog({leadId:'calls-fixture',startedAt:now,endedAt:now,outcome:'completed',actor:'901',source:'3cx'});
 const leads=require(root+'/backend/dist/services/lead-service/server.js');
 process.env.LEAD_SERVICE_URL=await listen(leads.server);

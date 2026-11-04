@@ -1,7 +1,7 @@
 import { useClock } from "../lib/use-clock";
 import { romeDateTimeInput, romeInputToIso, romeDayStamp, romeCalendarDate } from "../lib/business-time";
 import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
-import { isWorkedLead } from "../features/practices/worked";
+import { isClosedLead, isWorkedLead } from "../features/practices/worked";
 import { getPracticeRoute, ROUTE_STOPS } from "../features/practices/practice-route";
 import type { WhatsappAutomationInfo } from "../features/chat/chat.types";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
@@ -32,6 +32,9 @@ type Lead = {
   workedAt?: string | null;
   workedBy?: string | null;
   workedNote?: string | null;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  closedNote?: string | null;
   archivedAt?: string | null;
   archiveReason?: string | null;
   closingOutcome?: "open" | "won" | "lost" | "disqualified";
@@ -588,6 +591,8 @@ function getTimelineLabel(type: string) {
   const t = String(type || "").toLowerCase();
   if (t === "email_sent") return "Email inviata";
   if (t === "email_received") return "Email ricevuta";
+  if (t === "lead_closed") return "Pratica chiusa";
+  if (t === "lead_reopened") return "Pratica riaperta";
   if (t === "lead_worked") return "Pratica lavorata";
   if (t === "lead_worked_undone") return "Pratica rimessa tra le attive";
   if (t === "lead_archived") return "Contatto archiviato";
@@ -2391,13 +2396,18 @@ export function PraticaDetailPage() {
             </ol>
           </section>
 
-          <section id="next-step-section" className={`pd-next-step ${detail.lead.workedAt ? "is-worked" : ""}`} aria-label="Prossimo passo">
+          <section id="next-step-section" className={`pd-next-step ${detail.lead.workedAt || detail.lead.closedAt ? "is-worked" : ""}`} aria-label="Prossimo passo">
             <span className="pd-next-step-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
             </span>
             <div className="pd-next-step-copy">
-              <span className="pd-next-step-eyebrow">{detail.lead.workedAt ? "Pratica lavorata" : "Prossimo passo"}</span>
-              {detail.lead.workedAt ? (
+              <span className="pd-next-step-eyebrow">{detail.lead.closedAt ? "Pratica chiusa" : detail.lead.workedAt ? "Pratica lavorata" : "Prossimo passo"}</span>
+              {detail.lead.closedAt ? (
+                <>
+                  <strong>{detail.lead.closedNote || "Pratica chiusa"}</strong>
+                  <span className="pd-next-step-when">Da {detail.lead.closedBy || "operatore"} · {formatDateDisplay(detail.lead.closedAt)}</span>
+                </>
+              ) : detail.lead.workedAt ? (
                 <>
                   <strong>{detail.lead.workedNote || "Segnata come lavorata"}</strong>
                   <span className="pd-next-step-when">Da {detail.lead.workedBy || "operatore"}{detail.lead.workedAt ? ` · ${formatDateDisplay(detail.lead.workedAt)}` : ""}</span>
@@ -2418,8 +2428,13 @@ export function PraticaDetailPage() {
               )}
             </div>
             <div className="pd-next-step-actions">
-              {detail.lead.workedAt ? (
-                <button type="button" className="pd-next-step-secondary" disabled={busy} onClick={() => setLeadAction("worked/undo")}>Rimetti tra le attive</button>
+              {detail.lead.closedAt ? (
+                <button type="button" className="pd-next-step-secondary" disabled={busy} onClick={() => setLeadAction("close/undo")}>Riapri pratica</button>
+              ) : detail.lead.workedAt ? (
+                <>
+                  <button type="button" className="pd-next-step-secondary" disabled={busy} onClick={() => setLeadAction("worked/undo")}>Rimetti tra le attive</button>
+                  <button type="button" className="pd-next-step-secondary" disabled={busy} onClick={() => setLeadAction("close")}>Chiudi pratica</button>
+                </>
               ) : (
                 <>
                   <button type="button" className="pd-next-step-primary threecx-outcome-button" disabled={busy} onClick={() => openCallOutcomeModal()}>
@@ -2427,6 +2442,9 @@ export function PraticaDetailPage() {
                   </button>
                   {!isWorkedLead(detail.lead) && !["Pronta per chiusura", "Chiusa 100%"].includes(detail.lead.status) ? (
                     <button type="button" className="pd-next-step-secondary" disabled={busy} onClick={() => setLeadAction("worked")}>Segna come lavorata</button>
+                  ) : null}
+                  {!isClosedLead(detail.lead) && !["Pronta per chiusura", "Chiusa 100%"].includes(detail.lead.status) ? (
+                    <button type="button" className="pd-next-step-secondary" disabled={busy} onClick={() => setLeadAction("close")}>Chiudi pratica</button>
                   ) : null}
                 </>
               )}

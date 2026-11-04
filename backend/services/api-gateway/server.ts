@@ -24,7 +24,7 @@ import {
   uploadDocumentBuffer
 } from "./document-storage";
 import { applyLeadImport, previewLeadImport } from "./lead-import";
-import { awaitsOperator, CHAT_FORBIDDEN_MESSAGE, CHAT_TAKEN_MESSAGE, chatOwner, ownsChat } from "./whatsapp-access";
+import { awaitsOperator, CHAT_FORBIDDEN_MESSAGE, CHAT_TAKEN_MESSAGE, chatOwner, LEAD_FORBIDDEN_MESSAGE, ownsChat } from "./whatsapp-access";
 import { isInternalServicePath, isTaskDismissBlocked, isValidThreeCxWebhookSecret, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
 import { CHAT_UPLOAD_FORMAT_ERROR, isAllowedChatUploadMime, isChatDocumentKey, validateChatUpload } from "./chat-upload-rules";
 
@@ -210,6 +210,7 @@ async function resolveDocumentAccess(storageKey: string, session: { user: AuthPu
   if (!isAdmin(session.user) && (status === PRACTICE_READY_STATUS || status === PRACTICE_CLOSED_STATUS)) {
     return { ok: false, status: 403, error: "Questa pratica e riservata alla supervisione admin." };
   }
+  if (!isAdmin(session.user) && !(await ownsLead(session.user, leadId))) return { ok: false, status: 403, error: LEAD_FORBIDDEN_MESSAGE };
   return { ok: true, leadId };
 }
 
@@ -226,6 +227,7 @@ async function assertDocumentPracticeNotLocked(leadId: string, session: { user: 
   if (currentStatus === PRACTICE_READY_STATUS || currentStatus === PRACTICE_CLOSED_STATUS) {
     return "Questa pratica e riservata alla supervisione admin.";
   }
+  if (!(await ownsLead(session.user, leadId))) return LEAD_FORBIDDEN_MESSAGE;
   return null;
 }
 
@@ -394,7 +396,9 @@ async function buildInbox(user: AuthPublicUser) {
     updatedAt: task.updatedAt || task.dueAt || null
   }));
 
-  const items = [...taskItems, ...leadItems, ...conversationItems].sort((a, b) => {
+  const taskItemsInScope = taskItems.filter((item) => isAdmin(user) || ownsChat(user, String(owners.get(String(item.leadId || "")) || "")));
+  const leadItemsInScope = leadItems.filter((item) => isAdmin(user) || ownsChat(user, item.assignedTo));
+  const items = [...taskItemsInScope, ...leadItemsInScope, ...conversationItems].sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
     return toMs(b.updatedAt || b.dueAt || null) - toMs(a.updatedAt || a.dueAt || null);
   });
@@ -516,10 +520,10 @@ function mapApiRoute(pathname: string) {
 let leadOwnersCache: { at: number; owners: Map<string, string> } | null = null;
 async function fetchLeadOwners() {
   if (leadOwnersCache && Date.now() - leadOwnersCache.at < 5000) return leadOwnersCache.owners;
-  const response = await fetch(`${LEAD_URL}/leads`);
-  if (!response.ok) throw new Error("Impossibile verificare l'operatore della chat.");
-  const leads = (await response.json()) as Array<{ id: string; assignedTo?: string }>;
-  const owners = new Map(leads.map((lead) => [lead.id, String(lead.assignedTo || "")]));
+  // Not /leads: that list merges the practices of a contact, and a merged practice has an owner too.
+  const response = await fetch(`${LEAD_URL}/internal/lead-owners`);
+  if (!response.ok) throw new Error("Impossibile verificare l'operatore della pratica.");
+  const owners = new Map(Object.entries((await response.json()) as Record<string, string>));
   leadOwnersCache = { at: Date.now(), owners };
   return owners;
 }
@@ -643,7 +647,10 @@ async function handleChatRoute(req: http.IncomingMessage, res: http.ServerRespon
     return false;
   }
   if (path === "/api/whatsapp/automation/state" && method === "GET") {
-    const conversationId = new URLSearchParams(search).get("conversationId");
+    const params = new URLSearchParams(search);
+    const leadId = params.get("leadId");
+    if (leadId && !isAdmin(user) && !(await ownsLead(user, leadId))) { sendJson(res, 403, { error: LEAD_FORBIDDEN_MESSAGE }); return true; }
+    const conversationId = params.get("conversationId");
     const conversation = conversationId ? await fetchConversation(conversationId) : null;
     if (conversation && !(await authorizeChat(user, conversation))) { sendJson(res, 403, { error: CHAT_FORBIDDEN_MESSAGE }); return true; }
     return false;
@@ -653,6 +660,89 @@ async function handleChatRoute(req: http.IncomingMessage, res: http.ServerRespon
     sendJson(res, 403, { error: "Azione riservata agli amministratori." });
     return true;
   }
+  return false;
+}
+
+/** May this operator work on the practice? An id the lead service does not know answers false too. */
+async function ownsLead(user: AuthPublicUser, leadId: string) {
+  let owners = await fetchLeadOwners();
+  // A practice created or reassigned a moment ago is not worth a wrong refusal.
+  if (!owners.has(leadId)) { leadOwnersCache = null; owners = await fetchLeadOwners(); }
+  return ownsChat(user, String(owners.get(leadId) || ""));
+}
+
+/**
+ * Operators work only on their own practices; admins and super admins are never filtered, and the
+ * admin distributes the practices without an operator. Every path that serves practice data goes
+ * through here. Returns true when it answered; otherwise the request continues as usual.
+ */
+async function handleOperatorScope(req: http.IncomingMessage, res: http.ServerResponse, pathname: string, method: string, search: string, user: AuthPublicUser) {
+  const path = pathname.replace(/\/+$/, "");
+  const servicePath = path.replace(/^\/api/, "");
+  const refuse = () => { sendJson(res, 403, { error: LEAD_FORBIDDEN_MESSAGE }); return true; };
+  const mine = async () => { const owners = await fetchLeadOwners(); return (leadId: unknown) => ownsChat(user, String(owners.get(String(leadId || "")) || "")); };
+  const forwardFailure = async (upstream: Response) => { await forwardUpstreamResponse(res, upstream); return true; };
+
+  const leadMatch = path.match(/^\/api\/leads\/([^/]+)(?:\/.*)?$/);
+  if (leadMatch && leadMatch[1] !== "assignees") {
+    return (await ownsLead(user, decodeURIComponent(leadMatch[1]))) ? false : refuse();
+  }
+  // The archive has its own admin-only refusal further on.
+  if (path === "/api/leads" && method === "GET" && !new URLSearchParams(search).has("archived")) {
+    const upstream = await fetch(`${LEAD_URL}/leads${search}`);
+    if (!upstream.ok) return forwardFailure(upstream);
+    sendJson(res, 200, ((await upstream.json()) as any[]).filter((lead) => ownsChat(user, lead.assignedTo)));
+    return true;
+  }
+  if (path === "/api/tasks/board" && method === "GET") {
+    const upstream = await fetch(`${LEAD_URL}/tasks/board${search}`);
+    if (!upstream.ok) return forwardFailure(upstream);
+    const data = (await upstream.json()) as { tasks: any[]; leads: any[] };
+    const isMine = await mine();
+    sendJson(res, 200, { ...data, tasks: data.tasks.filter((task) => isMine(task.leadId)), leads: data.leads.filter((lead) => ownsChat(user, lead.assignedTo)) });
+    return true;
+  }
+  if (path === "/api/tasks" && method === "GET") {
+    const upstream = await fetch(`${LEAD_URL}/tasks${search}`);
+    if (!upstream.ok) return forwardFailure(upstream);
+    const isMine = await mine();
+    sendJson(res, 200, ((await upstream.json()) as any[]).filter((task) => isMine(task.leadId)));
+    return true;
+  }
+  if (path === "/api/tasks" && method === "POST") {
+    const body = (await parseJsonBody(req)) as Record<string, any>;
+    if (!(await ownsLead(user, String(body.leadId || "")))) return refuse();
+    await forwardFailure(await fetch(`${LEAD_URL}/tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+    return true;
+  }
+  const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/);
+  if (taskMatch) {
+    const lookup = await fetch(`${LEAD_URL}/tasks/${encodeURIComponent(decodeURIComponent(taskMatch[1]))}`);
+    if (!lookup.ok) return forwardFailure(lookup);
+    const task = (await lookup.json()) as { leadId?: string };
+    return (await ownsLead(user, String(task.leadId || ""))) ? false : refuse();
+  }
+  // A call with no practice was made by someone: it stays with whoever made it.
+  if (path === "/api/calls" && method === "GET") {
+    const upstream = await fetch(`${LEAD_URL}/calls${search}`);
+    if (!upstream.ok) return forwardFailure(upstream);
+    const isMine = await mine();
+    sendJson(res, 200, ((await upstream.json()) as any[]).filter((call) => (call.leadId ? isMine(call.leadId) : ownsChat(user, call.actor))));
+    return true;
+  }
+  const customerMatch = path.match(/^\/api\/customers\/([^/]+)$/);
+  if (customerMatch && method === "GET") {
+    const upstream = await fetch(`${LEAD_URL}${servicePath}`);
+    if (!upstream.ok) return forwardFailure(upstream);
+    const data = (await upstream.json()) as { leads: any[]; purchases: any[]; activeLead: any };
+    const isMine = await mine();
+    const leads = data.leads.filter((lead) => isMine(lead.id));
+    if (!leads.length) return refuse();
+    const purchases = data.purchases.filter((purchase) => !purchase.leadId || isMine(purchase.leadId));
+    sendJson(res, 200, { ...data, leads, purchases, activeLead: data.activeLead && isMine(data.activeLead.id) ? data.activeLead : null });
+    return true;
+  }
+  if (path.startsWith("/api/customers") || path.startsWith("/api/purchases")) return refuse();
   return false;
 }
 
@@ -1143,6 +1233,7 @@ export const server = http.createServer(async (req, res) => {
       sendJson(res, 401, { error: "Non autorizzato." });
       return;
     }
+    if (!isAdmin(session.user) && (await handleOperatorScope(req, res, pathname, method, url.search, session.user))) return;
     if (pathname.startsWith("/api/analytics/export") && !isAdmin(session.user)) {
       sendJson(res, 403, { error: "Solo admin e super admin possono esportare dati marketing." });
       return;
@@ -1253,6 +1344,7 @@ export const server = http.createServer(async (req, res) => {
     if (pathname.replace(/\/+$/, "") === "/api/leads" && method === "POST") {
       const body = stripIdentityFields((await parseJsonBody(req)) as Record<string, any>);
       body.__creator = { id: session.user.id, username: session.user.username, role: session.user.role };
+      leadOwnersCache = null;
       const upstream = await fetch(route.base + route.path + url.search, { method, headers: { "content-type": "application/json", ...internalIdentityHeaders() }, body: JSON.stringify(body) });
       await forwardUpstreamResponse(res, upstream);
       return;
@@ -1295,7 +1387,7 @@ export const server = http.createServer(async (req, res) => {
     }
     // Archive / restore (admin), "worked" and customer email (operators and admins). Only the
     // fields each action needs are forwarded; the author always comes from the session.
-    const leadAction = pathname.replace(/\/+$/, "").match(/^\/api\/leads\/([^/]+)\/(archive|restore|worked|worked\/undo|email)$/);
+    const leadAction = pathname.replace(/\/+$/, "").match(/^\/api\/leads\/([^/]+)\/(archive|restore|worked|worked\/undo|close|close\/undo|email)$/);
     if (leadAction && method === "POST") {
       const action = leadAction[2];
       if ((action === "archive" || action === "restore") && !isAdmin(session.user)) {
@@ -1309,7 +1401,7 @@ export const server = http.createServer(async (req, res) => {
         if ([PRACTICE_READY_STATUS, PRACTICE_CLOSED_STATUS].includes(status)) return sendJson(res, 403, { error: "Questa pratica e riservata alla supervisione admin." });
       }
       const input = (await parseJsonBody(req)) as Record<string, any>;
-      const fields = action === "archive" ? ["reason"] : action === "worked" ? ["note"] : action === "email" ? ["subject", "text", "replyToMailId"] : [];
+      const fields = action === "archive" ? ["reason"] : action === "worked" || action === "close" ? ["note"] : action === "email" ? ["subject", "text", "replyToMailId"] : [];
       const body: Record<string, unknown> = Object.fromEntries(fields.map((key) => [key, typeof input[key] === "string" ? input[key] : ""]));
       body.__actor = { id: session.user.id, username: session.user.username, role: session.user.role };
       const upstream = await fetch(`${LEAD_URL}/leads/${encodeURIComponent(leadId)}/${action}`, {

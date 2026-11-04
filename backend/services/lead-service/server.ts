@@ -278,9 +278,41 @@ async function handleLeadAction(res: http.ServerResponse, leadId: string, action
 
   if (lead.archivedAt) return sendJson(res, 409, { error: "Contatto archiviato: un admin deve prima ripristinarlo." });
 
+  if (action === "close") {
+    if ((lead.closingOutcome || "open") !== "open") return sendJson(res, 409, { error: "La pratica ha gia un esito finale: e gia tra le chiuse." });
+    if (lead.closedAt) return sendJson(res, 409, { error: "Pratica gia chiusa." });
+    const note = cleanActionText(body.note, 1000);
+    if (!note) return sendJson(res, 400, { error: "Scrivi perche la pratica si chiude." });
+    const previousNextActionAt = lead.nextActionAt || null;
+    Object.assign(lead, { closedAt: now, closedBy: actor.username, closedById: actor.id, closedNote: note, nextActionAt: null, updatedAt: now });
+    await saveLead(lead);
+    const dismissedTasks = await dismissOpenLeadTasks(lead.id, "lead_closed", actor.username);
+    await appendActivities([createActivity({
+      leadId: lead.id, type: "lead_closed", actor: actor.username,
+      text: `Pratica chiusa: ${note}`,
+      meta: { note, closedById: actor.id, closedByRole: actor.role, previousNextActionAt, dismissedTasks }
+    })]);
+    return sendJson(res, 200, safeLead(lead));
+  }
+
+  if (action === "close/undo") {
+    if (!lead.closedAt) return sendJson(res, 409, { error: "La pratica non e chiusa." });
+    const previous = { closedAt: lead.closedAt, closedBy: lead.closedBy || "", closedNote: lead.closedNote || "" };
+    for (const key of ["closedAt", "closedBy", "closedById", "closedNote"]) delete lead[key];
+    lead.updatedAt = now;
+    await saveLead(lead);
+    await appendActivities([createActivity({
+      leadId: lead.id, type: "lead_reopened", actor: actor.username,
+      text: "Pratica riaperta.",
+      meta: { previous, reopenedById: actor.id }
+    })]);
+    return sendJson(res, 200, safeLead(lead));
+  }
+
   if (action === "worked") {
     if ((lead.closingOutcome || "open") !== "open") return sendJson(res, 409, { error: "La pratica ha gia un esito finale: e gia tra le lavorate." });
     if (lead.workedAt) return sendJson(res, 409, { error: "Pratica gia segnata come lavorata." });
+    if (lead.closedAt) return sendJson(res, 409, { error: "La pratica e chiusa: riaprila prima." });
     const note = cleanActionText(body.note, 1000);
     if (!note) return sendJson(res, 400, { error: "Scrivi una nota: cosa e stato fatto con il cliente." });
     const previousNextActionAt = lead.nextActionAt || null;
@@ -586,6 +618,9 @@ function safeLead(lead: any, options?: { stripAttachmentDataUrls?: boolean }) {
     workedAt: lead.workedAt || null,
     workedBy: lead.workedBy || null,
     workedNote: lead.workedNote || null,
+    closedAt: lead.closedAt || null,
+    closedBy: lead.closedBy || null,
+    closedNote: lead.closedNote || null,
     archivedAt: lead.archivedAt || null,
     archivedBy: lead.archivedBy || null,
     archiveReason: lead.archiveReason || null,
@@ -994,6 +1029,9 @@ function getBoardLeadSummary(lead: any) {
     workedAt: lead.workedAt || null,
     workedBy: lead.workedBy || null,
     workedNote: lead.workedNote || null,
+    closedAt: lead.closedAt || null,
+    closedBy: lead.closedBy || null,
+    closedNote: lead.closedNote || null,
     archivedAt: lead.archivedAt || null,
     archivedBy: lead.archivedBy || null,
     archiveReason: lead.archiveReason || null,
@@ -1064,6 +1102,9 @@ function getLeadListSummary(lead: any) {
     workedAt: lead.workedAt || null,
     workedBy: lead.workedBy || null,
     workedNote: lead.workedNote || null,
+    closedAt: lead.closedAt || null,
+    closedBy: lead.closedBy || null,
+    closedNote: lead.closedNote || null,
     archivedAt: lead.archivedAt || null,
     archivedBy: lead.archivedBy || null,
     archiveReason: lead.archiveReason || null,
@@ -1164,7 +1205,7 @@ export async function ensureSlaTasks() {
   const now = Date.now();
   for (const lead of rows) {
     // Marked as worked by the operator: no reminder until it is put back among the active ones.
-    if (lead.workedAt) continue;
+    if (lead.workedAt || lead.closedAt) continue;
     const nextActionTasks = automaticTaskGroups.get(getAutomaticTaskKey(lead.id, "next_action")) || [];
     const nextActionTask = nextActionTasks[0] || null;
     if (lead.nextActionAt) {
@@ -1702,6 +1743,11 @@ export const server = http.createServer(async (req, res) => {
           )
         );
       }
+    // Raw, not merged by contact: the gateway decides access per practice.
+    if (method === "GET" && pathname === "/internal/lead-owners") {
+      return sendJson(res, 200, Object.fromEntries((await listLeads({})).map((lead: any) => [String(lead.id), String(lead.assignedTo || "")])));
+    }
+
     if (method === "GET" && pathname === "/mail/messages") {
       const [messages, leads, sync] = await Promise.all([listMail(), listLeads(), readInboxSync()]);
       const leadById = new Map(leads.map((lead: any) => [String(lead.id), lead]));
@@ -2151,7 +2197,7 @@ export const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, { ok: true });
     }
 
-    const leadActionParams = pathname.match(/^\/leads\/([^/]+)\/(archive|restore|worked|worked\/undo|email)$/);
+    const leadActionParams = pathname.match(/^\/leads\/([^/]+)\/(archive|restore|worked|worked\/undo|close|close\/undo|email)$/);
     if (leadActionParams && method === "POST") return await handleLeadAction(res, leadActionParams[1], leadActionParams[2], await parseBody(req));
 
     const leadByIdParams = routeMatch(pathname, "/leads/:leadId");
@@ -2629,6 +2675,10 @@ export const server = http.createServer(async (req, res) => {
     }
 
     const taskParams = routeMatch(pathname, "/tasks/:taskId");
+    if (taskParams && method === "GET") {
+      const task = await getTaskById(taskParams.taskId);
+      return task ? sendJson(res, 200, task) : sendJson(res, 404, { error: "Task non trovato." });
+    }
     if (taskParams && method === "PATCH") {
       const body = await parseBody(req);
       const task = (await getTaskById(taskParams.taskId)) as TaskRecord | null;

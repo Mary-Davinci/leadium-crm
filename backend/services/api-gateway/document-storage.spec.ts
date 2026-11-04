@@ -114,6 +114,7 @@ async function createLead(leadUrl: string, overrides: Record<string, unknown> = 
   const created = await apiRequest(leadUrl, "POST", "/leads", {
     body: {
       fullName: "Cliente Test",
+      assignedTo: "operatore_user",
       phone: `+39 3${Math.floor(Math.random() * 900000000 + 100000000)}`,
       ...overrides
     }
@@ -127,6 +128,7 @@ async function seedLeadWithStatus(status: string) {
   const lead = {
     id: leadStore.newId("lead"),
     fullName: "Cliente Test",
+      assignedTo: "operatore_user",
     phone: `+39 3${Math.floor(Math.random() * 900000000 + 100000000)}`,
     status,
     closingOutcome: "won",

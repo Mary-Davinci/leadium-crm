@@ -7,6 +7,9 @@ export type Lead = {
   workedAt?: string | null;
   workedBy?: string | null;
   workedNote?: string | null;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  closedNote?: string | null;
   archivedAt?: string | null;
   archiveReason?: string | null;
   id: string;

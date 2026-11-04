@@ -1,7 +1,7 @@
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useClock } from "../lib/use-clock";
 import { romeDateTimeInput, romeInputToIso, romeDayStamp } from "../lib/business-time";
-import { isWorkedLead } from "../features/practices/worked";
+import { isClosedLead, isWorkedLead } from "../features/practices/worked";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PracticeListItem } from "../features/practices/components/PracticeListItem";
@@ -56,6 +56,7 @@ function getPracticeViewFromLead(lead: Lead): PracticeView {
   const normalized = String(lead.status || "").trim().toLowerCase();
   if (normalized.includes(PRACTICE_CLOSED_STATUS)) return "closed";
   if (normalized.includes(PRACTICE_READY_STATUS)) return "ready";
+  if (isClosedLead(lead)) return "closed";
   return isWorkedLead(lead) ? "worked" : "active";
 }
 
@@ -745,7 +746,7 @@ export function PratichePage() {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (!isAdmin && practiceView !== "active" && practiceView !== "worked") {
+    if (!isAdmin && practiceView === "ready") {
       setPracticeView("active");
     }
   }, [isAdmin, practiceView]);
@@ -833,14 +834,15 @@ export function PratichePage() {
   const viewCounts = useMemo(
     () => ({
       active: activeScopedRows.length,
-      worked: scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "worked" || (!isAdmin && ["ready", "closed"].includes(getPracticeViewFromLead(lead)))).length,
+      worked: scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "worked").length,
       ready: scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "ready").length,
-      closed: scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "closed").length
+      // For operators a practice waiting for the admin's final check is already over.
+      closed: scopedRows.filter((lead) => getPracticeViewFromLead(lead) === "closed" || (!isAdmin && getPracticeViewFromLead(lead) === "ready")).length
     }),
     [activeScopedRows.length, scopedRows, isAdmin]
   );
   const viewScopedRows = useMemo(
-    () => scopedRows.filter((lead) => getPracticeViewFromLead(lead) === practiceView || (!isAdmin && practiceView === "worked" && ["ready", "closed"].includes(getPracticeViewFromLead(lead)))),
+    () => scopedRows.filter((lead) => getPracticeViewFromLead(lead) === practiceView || (!isAdmin && practiceView === "closed" && getPracticeViewFromLead(lead) === "ready")),
     [scopedRows, practiceView, isAdmin]
   );
 
@@ -1000,15 +1002,15 @@ export function PratichePage() {
   const isQuickDetailVisible = Boolean(selectedLeadId);
   const pageTitle =
     practiceView === "worked" ? "Pratiche lavorate" : practiceView === "closed"
-      ? "Archivio pratiche"
+      ? "Pratiche chiuse"
       : practiceView === "ready"
         ? "Pratiche pronte alla chiusura"
         : isAdmin
           ? "Pratiche del team"
           : "Il mio lavoro";
   const pageSubtitle =
-    practiceView === "worked" ? "Pratiche con esito finale o segnate come lavorate, consultabili nello storico." : practiceView === "closed"
-      ? "Storico delle pratiche completate, consultabili e riapribili se serve."
+    practiceView === "worked" ? "Pratiche segnate come lavorate: restano consultabili e puoi rimetterle tra le attive." : practiceView === "closed"
+      ? "Pratiche concluse: non vanno ricontattate. Restano consultabili nello storico."
       : practiceView === "ready"
         ? "Ultimo controllo prima della chiusura definitiva del cliente."
         : isAdmin
@@ -1021,10 +1023,10 @@ export function PratichePage() {
         ? "Nessuna pratica pronta alla chiusura con i filtri attuali."
         : "Nessuna pratica trovata con i filtri attuali.";
   const viewHintText =
-    practiceView === "worked" ? "Qui trovi le pratiche con esito finale e quelle segnate come lavorate. Le note da sole non spostano una pratica." : practiceView === "ready"
+    practiceView === "worked" ? "Qui trovi le pratiche segnate come lavorate. Le note da sole non spostano una pratica." : practiceView === "ready"
       ? "Qui restano solo le pratiche che hanno completato checklist e attendono conferma finale."
       : practiceView === "closed"
-        ? "Questa vista e pensata come archivio operativo: consulta, verifica e riapri solo quando serve."
+        ? "Qui trovi le pratiche con esito finale e quelle chiuse a mano: i clienti non vanno ricontattati."
         : "Qui lavori sulle pratiche attive, con priorita, follow-up e azioni operative ancora in corso.";
 
   return (
@@ -1070,6 +1072,11 @@ export function PratichePage() {
                 onClick={() => setPracticeView("worked")}>
                 <strong>Lavorate</strong><span>{viewCounts.worked} lavorate</span>
               </button>
+              <button type="button" role="tab" aria-selected={practiceView === "closed"}
+                className={`pr-view-tile pr-view-tone-closed ${practiceView === "closed" ? "active" : ""}`}
+                onClick={() => setPracticeView("closed")}>
+                <strong>Chiuse</strong><span>{viewCounts.closed} concluse</span>
+              </button>
               {isAdmin ? (
                 <button
                   type="button"
@@ -1080,18 +1087,6 @@ export function PratichePage() {
                 >
                   <strong>Pronte</strong>
                   <span>{viewCounts.ready} in attesa chiusura</span>
-                </button>
-              ) : null}
-              {isAdmin ? (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={practiceView === "closed"}
-                  className={`pr-view-tile pr-view-tone-closed ${practiceView === "closed" ? "active" : ""}`}
-                  onClick={() => setPracticeView("closed")}
-                >
-                  <strong>Archivio</strong>
-                  <span>{viewCounts.closed} in archivio</span>
                 </button>
               ) : null}
             </div>
