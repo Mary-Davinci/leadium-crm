@@ -1387,6 +1387,19 @@ export const server = http.createServer(async (req, res) => {
     }
     // Archive / restore (admin), "worked" and customer email (operators and admins). Only the
     // fields each action needs are forwarded; the author always comes from the session.
+    const bulkAction = pathname.replace(/\/+$/, "").match(/^\/api\/leads\/bulk-(archive|restore)$/);
+    if (bulkAction && method === "POST") {
+      if (!isAdmin(session.user)) return sendJson(res, 403, { error: "Solo admin e super admin possono archiviare o ripristinare i contatti." });
+      const input = (await parseJsonBody(req)) as Record<string, any>;
+      const upstream = await fetch(`${LEAD_URL}/leads/bulk-${bulkAction[1]}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...internalIdentityHeaders() },
+        body: JSON.stringify({ leadIds: input.leadIds, reason: typeof input.reason === "string" ? input.reason : "", __actor: { id: session.user.id, username: session.user.username, role: session.user.role } })
+      });
+      leadOwnersCache = null;
+      await forwardUpstreamResponse(res, upstream);
+      return;
+    }
     const leadAction = pathname.replace(/\/+$/, "").match(/^\/api\/leads\/([^/]+)\/(archive|restore|worked|worked\/undo|close|close\/undo|email)$/);
     if (leadAction && method === "POST") {
       const action = leadAction[2];

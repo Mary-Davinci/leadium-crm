@@ -1,7 +1,8 @@
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useClock } from "../lib/use-clock";
+import { BulkLeadDialog, describeBulkResult } from "../features/practices/components/BulkLeadDialog";
 import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
-import { isWorkedLead } from "../features/practices/worked";
+import { isStaleLead, isWorkedLead, STALE_MONTHS } from "../features/practices/worked";
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { getAuthUser } from "../lib/auth";
@@ -52,7 +53,7 @@ type OperatorOption = {
   leadCount: number;
 };
 
-type DataFilter = "all" | "complete" | "missing-phone" | "missing-email";
+type DataFilter = "all" | "complete" | "missing-phone" | "missing-email" | "stale";
 type SortMode = "newest" | "name" | "lightest-load";
 
 function normalizeLead(input: Lead): Lead {
@@ -157,6 +158,7 @@ export function LeadBoardPage() {
   const [archivedLeads, setArchivedLeads] = useState<Lead[]>([]);
   const [leadAction, setLeadAction] = useState<{ lead: Lead; action: LeadAction } | null>(null);
   const [notice, setNotice] = useState("");
+  const [bulkAction, setBulkAction] = useState<"archive" | "restore" | null>(null);
   const canView = authUser?.role === "admin" || authUser?.role === "super_admin";
 
   useEffect(() => {
@@ -228,7 +230,7 @@ export function LeadBoardPage() {
 
   useAutoRefresh(async () => {
     try { await refreshManagement(); } catch (e) { setError(e instanceof Error ? e.message : "Aggiornamento non riuscito."); }
-  }, canView && !batchAssigning && !leadAction && !loading);
+  }, canView && !batchAssigning && !leadAction && !bulkAction && !loading);
 
   const operatorUsers = useMemo(() => users.filter((user) => user.role === "operatore"), [users]);
 
@@ -296,6 +298,7 @@ export function LeadBoardPage() {
       if (dataFilter === "missing-phone" && lead.phone) return false;
       if (dataFilter === "missing-email" && lead.email) return false;
       if (dataFilter === "complete" && (!lead.phone || !lead.email)) return false;
+      if (dataFilter === "stale" && !isStaleLead(lead, Date.now())) return false;
       if (!query) return true;
       return `${lead.fullName} ${lead.phone} ${lead.email || ""} ${lead.source || ""} ${lead.status}`.toLowerCase().includes(query);
     });
@@ -414,6 +417,11 @@ export function LeadBoardPage() {
         </div>
       </section>
 
+      {bulkAction && <BulkLeadDialog action={bulkAction} leadIds={batchTargetIds} onClose={() => setBulkAction(null)} onDone={async (result) => {
+        setNotice(describeBulkResult(bulkAction, result));
+        setSelectedLeadIds((current) => current.filter((id) => !result.done.includes(id)));
+        await refreshManagement();
+      }} />}
       {leadAction && <LeadActionDialog key={`${leadAction.lead.id}-${leadAction.action}`} lead={leadAction.lead} action={leadAction.action}
         onClose={() => setLeadAction(null)} onDone={async () => {
           setNotice("Contatto aggiornato. Operazione registrata nello storico.");
@@ -450,6 +458,7 @@ export function LeadBoardPage() {
                 <option value="complete">Complete</option>
                 <option value="missing-phone">Senza telefono</option>
                 <option value="missing-email">Senza email</option>
+                <option value="stale">Ferme da oltre {STALE_MONTHS} mesi</option>
               </select>
             </label>
 
@@ -569,6 +578,15 @@ export function LeadBoardPage() {
               disabled={view === "archived" || !selectedDefaultOperator || !batchTargetIds.length || batchAssigning}
             >
               {batchAssigning ? "Assegno..." : `Assegna ${batchTargetIds.length} lead`}
+            </button>
+
+            <button
+              type="button"
+              className="ops-assign-btn secondary"
+              onClick={() => setBulkAction(view === "archived" ? "restore" : "archive")}
+              disabled={!batchTargetIds.length || batchAssigning}
+            >
+              {view === "archived" ? `Ripristina ${batchTargetIds.length} lead` : `Archivia ${batchTargetIds.length} lead`}
             </button>
 
             <p className="ops-side-note">

@@ -217,6 +217,7 @@ async function main() {
     assert.equal((await call("GET", "/api/customers/c2", "marta")).status, 403);
     assert.equal((await call("GET", "/api/customers/c1", "admin")).body.leads.length, 2);
     assert.equal((await call("GET", "/api/purchases/p2", "marta")).status, 403);
+    assert.equal((await call("POST", "/api/leads/bulk-archive", "marta", { leadIds: ["lead-mine"], reason: "x" })).status, 403, "bulk archive is for admins");
     assert.equal((await call("GET", "/api/whatsapp/automation/state?leadId=lead-other", "marta")).status, 403);
     console.log("PASS operators reach only their own practices, on every path; admins keep the whole view");
   } finally {

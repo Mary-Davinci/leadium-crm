@@ -124,6 +124,33 @@ async function workedChecks(baseUrl: string) {
   console.log("PASS worked: note required, reminders closed and not recreated, traced, undoable; final outcomes need no button");
 }
 
+async function bulkChecks(baseUrl: string) {
+  resetDb();
+  const seed = (name: string, phone: string, extra = {}) => seedLead({ fullName: name, phone, ...extra });
+  const one = await seed("Vecchia Uno", "+39 333 6000001", { assignedTo: "marta" });
+  const two = await seed("Vecchia Due", "+39 333 6000002");
+  const sold = await seed("Venduta", "+39 333 6000003", { closingOutcome: "won", status: "Venduta" });
+  await taskStore.createTask({ leadId: one.id, assignedTo: "marta", kind: "callback_reminder", title: "Richiamare", source: "test", status: "open", priority: 75, dueAt: new Date().toISOString() });
+  const ids = [one.id, two.id, sold.id, "inesistente", one.id];
+  assert.equal((await request(baseUrl, "POST", "/leads/bulk-archive", { leadIds: ids, reason: "Pulizia", __actor: OPERATOR })).status, 403, "admins only");
+  assert.equal((await request(baseUrl, "POST", "/leads/bulk-archive", { leadIds: ids, reason: " ", __actor: ADMIN })).status, 400, "a reason is required");
+  assert.equal((await request(baseUrl, "POST", "/leads/bulk-archive", { leadIds: [], reason: "x", __actor: ADMIN })).status, 400);
+  assert.equal((await request(baseUrl, "POST", "/leads/bulk-archive", { leadIds: Array.from({ length: 501 }, (_, index) => "id" + index), reason: "x", __actor: ADMIN })).status, 400, "the limit protects the server");
+  const archived = await request(baseUrl, "POST", "/leads/bulk-archive", { leadIds: ids, reason: "Pulizia iniziale", __actor: ADMIN });
+  assert.equal(archived.status, 200);
+  assert.deepEqual(archived.body.done, [one.id, two.id], "a repeated id counts once");
+  assert.deepEqual(archived.body.skipped, [{ id: sold.id, reason: "sold" }, { id: "inesistente", reason: "not_found" }]);
+  assert.equal((await taskStore.listTasks({ status: "open", leadId: one.id })).length, 0, "reminders stop");
+  assert.equal((await leadStore.getLeadById(sold.id)).archivedAt || null, null, "a sale is never swept away");
+  assert.ok(((await leadStore.getTimelineByLeadId(one.id)) as any[]).some((row) => row.type === "lead_archived" && row.actor === "admin.test" && row.text.includes("Pulizia iniziale")), "same trace as one by one");
+  const again = await request(baseUrl, "POST", "/leads/bulk-archive", { leadIds: [one.id], reason: "x", __actor: ADMIN });
+  assert.deepEqual([again.body.done, again.body.skipped[0].reason], [[], "already_archived"]);
+  const restored = await request(baseUrl, "POST", "/leads/bulk-restore", { leadIds: [one.id, two.id, sold.id], __actor: ADMIN });
+  assert.deepEqual([restored.body.done, restored.body.skipped], [[one.id, two.id], [{ id: sold.id, reason: "not_archived" }]]);
+  assert.equal((await leadStore.getLeadById(one.id)).archivedAt || null, null);
+  console.log("PASS bulk archive: admins only, reason required, sales skipped, every lead accounted for, same trace, restorable in bulk");
+}
+
 async function closeChecks(baseUrl: string) {
   resetDb();
   const lead = await seedLead({ fullName: "Mariella Montenero", phone: "+39 333 5000001", assignedTo: "marta" });
@@ -240,6 +267,7 @@ async function main() {
     await archiveChecks(baseUrl);
     await workedChecks(baseUrl);
     await closeChecks(baseUrl);
+    await bulkChecks(baseUrl);
     await emailChecks(baseUrl);
     await replyChecks(baseUrl);
   });

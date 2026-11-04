@@ -239,6 +239,65 @@ async function dismissOpenLeadTasks(leadId: string, reason: string, actor: strin
   return open.length;
 }
 
+async function archiveLead(lead: any, reason: string, actor: any, now: string) {
+  Object.assign(lead, { archivedAt: now, archivedBy: actor.username, archivedById: actor.id, archiveReason: reason, updatedAt: now });
+  await saveLead(lead);
+  const dismissedTasks = await dismissOpenLeadTasks(lead.id, "lead_archived", actor.username);
+  await appendActivities([createActivity({
+    leadId: lead.id, type: "lead_archived", actor: actor.username,
+    text: `Contatto archiviato. Motivo: ${reason}.`,
+    meta: { reason, archivedById: actor.id, archivedByRole: actor.role, assignedTo: lead.assignedTo || "", status: lead.status, dismissedTasks }
+  })]);
+}
+
+async function restoreLead(lead: any, actor: any, now: string) {
+  const previous = { archivedAt: lead.archivedAt, archivedBy: lead.archivedBy || "", archiveReason: lead.archiveReason || "" };
+  for (const key of ["archivedAt", "archivedBy", "archivedById", "archiveReason"]) delete lead[key];
+  lead.updatedAt = now;
+  await saveLead(lead);
+  await appendActivities([createActivity({
+    leadId: lead.id, type: "lead_restored", actor: actor.username,
+    text: `Contatto ripristinato dall'archivio (archiviato il ${new Date(previous.archivedAt).toLocaleDateString("it-IT", { timeZone: "Europe/Rome" })} da ${previous.archivedBy || "-"}).`,
+    meta: { previous, restoredById: actor.id }
+  })]);
+}
+
+const MAX_BULK_LEADS = 500;
+
+/** One bad row never stops the others: every lead reports what happened to it. */
+async function handleBulkArchive(res: http.ServerResponse, action: "archive" | "restore", body: any) {
+  const actor = leadActor(body);
+  if (!actor || !["admin", "super_admin"].includes(String(actor.role))) return sendJson(res, 403, { error: "Solo admin e super admin possono archiviare o ripristinare i contatti." });
+  const leadIds = Array.isArray(body.leadIds) ? [...new Set(body.leadIds.map(String))] as string[] : [];
+  if (!leadIds.length) return sendJson(res, 400, { error: "Seleziona almeno una lead." });
+  if (leadIds.length > MAX_BULK_LEADS) return sendJson(res, 400, { error: `Massimo ${MAX_BULK_LEADS} lead alla volta.` });
+  const reason = cleanActionText(body.reason, 300);
+  if (action === "archive" && !reason) return sendJson(res, 400, { error: "Indica il motivo dell'archiviazione." });
+  const now = new Date().toISOString();
+  const done: string[] = [];
+  const skipped: Array<{ id: string; reason: string }> = [];
+  for (const id of leadIds) {
+    try {
+      const lead = await getLeadById(id);
+      if (!lead) skipped.push({ id, reason: "not_found" });
+      else if (action === "restore") {
+        if (!lead.archivedAt) { skipped.push({ id, reason: "not_archived" }); continue; }
+        await restoreLead(lead, actor, now);
+        done.push(id);
+      } else if (lead.archivedAt) skipped.push({ id, reason: "already_archived" });
+      // A sale has money and documents behind it: never swept away in a cleanup.
+      else if (lead.closingOutcome === "won") skipped.push({ id, reason: "sold" });
+      else {
+        await archiveLead(lead, reason, actor, now);
+        done.push(id);
+      }
+    } catch {
+      skipped.push({ id, reason: "failed" });
+    }
+  }
+  return sendJson(res, 200, { done, skipped });
+}
+
 async function handleLeadAction(res: http.ServerResponse, leadId: string, action: string, body: any) {
   const actor = leadActor(body);
   if (!actor) return sendJson(res, 403, { error: "Azione non autorizzata." });
@@ -253,25 +312,10 @@ async function handleLeadAction(res: http.ServerResponse, leadId: string, action
       const reason = cleanActionText(body.reason, 300);
       if (!reason) return sendJson(res, 400, { error: "Indica il motivo dell'archiviazione." });
       if (lead.archivedAt) return sendJson(res, 409, { error: "Contatto gia archiviato." });
-      Object.assign(lead, { archivedAt: now, archivedBy: actor.username, archivedById: actor.id, archiveReason: reason, updatedAt: now });
-      await saveLead(lead);
-      const dismissedTasks = await dismissOpenLeadTasks(lead.id, "lead_archived", actor.username);
-      await appendActivities([createActivity({
-        leadId: lead.id, type: "lead_archived", actor: actor.username,
-        text: `Contatto archiviato. Motivo: ${reason}.`,
-        meta: { reason, archivedById: actor.id, archivedByRole: actor.role, assignedTo: lead.assignedTo || "", status: lead.status, dismissedTasks }
-      })]);
+      await archiveLead(lead, reason, actor, now);
     } else {
       if (!lead.archivedAt) return sendJson(res, 409, { error: "Il contatto non e archiviato." });
-      const previous = { archivedAt: lead.archivedAt, archivedBy: lead.archivedBy || "", archiveReason: lead.archiveReason || "" };
-      for (const key of ["archivedAt", "archivedBy", "archivedById", "archiveReason"]) delete lead[key];
-      lead.updatedAt = now;
-      await saveLead(lead);
-      await appendActivities([createActivity({
-        leadId: lead.id, type: "lead_restored", actor: actor.username,
-        text: `Contatto ripristinato dall'archivio (archiviato il ${new Date(previous.archivedAt).toLocaleDateString("it-IT", { timeZone: "Europe/Rome" })} da ${previous.archivedBy || "-"}).`,
-        meta: { previous, restoredById: actor.id }
-      })]);
+      await restoreLead(lead, actor, now);
     }
     return sendJson(res, 200, safeLead(lead));
   }
@@ -2197,6 +2241,8 @@ export const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, { ok: true });
     }
 
+    const bulkParams = pathname.match(/^\/leads\/bulk-(archive|restore)$/);
+    if (bulkParams && method === "POST") return await handleBulkArchive(res, bulkParams[1] as "archive" | "restore", await parseBody(req));
     const leadActionParams = pathname.match(/^\/leads\/([^/]+)\/(archive|restore|worked|worked\/undo|close|close\/undo|email)$/);
     if (leadActionParams && method === "POST") return await handleLeadAction(res, leadActionParams[1], leadActionParams[2], await parseBody(req));
 
