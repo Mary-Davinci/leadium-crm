@@ -19,7 +19,7 @@ const leadService = require("./server") as typeof import("./server");
 const leadStore = require("../common/leadStore") as typeof import("../common/leadStore");
 const taskStore = require("../common/taskStore") as typeof import("../common/taskStore");
 const mailer = require("../common/mailer") as typeof import("../common/mailer");
-const { ingestRawMail } = require("../common/mailInbox") as typeof import("../common/mailInbox");
+const { importSentMail, ingestRawMail } = require("../common/mailInbox") as typeof import("../common/mailInbox");
 const { internalIdentityHeaders } = require("../common/internalCapability") as typeof import("../common/internalCapability");
 
 const ADMIN = { id: "u-admin", username: "admin.test", role: "admin" };
@@ -199,6 +199,15 @@ async function replyChecks(baseUrl: string) {
     const timeline = (await leadStore.getTimelineByLeadId(lead.id)) as any[];
     assert.ok(timeline.some((row: any) => row.type === "email_received" && row.text.includes("ignoto@altro.test")), "the linked email reaches the practice's history");
     assert.equal((await request(baseUrl, "PATCH", "/mail/messages/nope", { read: true })).status, 404);
+
+    fs.rmSync(TEST_MAIL_DB_FILE, { force: true });
+    const history = await leadStore.listActivitiesByType("email_sent");
+    assert.equal(history.length, 2, "both mails of this practice are in its history");
+    assert.equal(await importSentMail(history, own), 2);
+    assert.equal(await importSentMail(history, own), 0, "every restart repeats it: nothing is duplicated");
+    const imported = (await request(baseUrl, "GET", "/mail/messages")).body.messages;
+    assert.deepEqual(imported.map((row: any) => [row.direction, row.sentBy, row.leadName, row.subject]).sort(), [["outbound", "marta", "Luciano Tantucci", "Preventivo"], ["outbound", "marta", "Luciano Tantucci", "Re: Preventivo"]]);
+    assert.equal((await ingestRawMail(reply.replace("<r1@test>", "<r3@test>"), own, deps))?.leadId, lead.id, "a reply to an older mail finds its practice");
   } finally {
     for (const key of ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD"]) delete process.env[key];
   }

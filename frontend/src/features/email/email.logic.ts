@@ -1,3 +1,6 @@
+/** Fired after emails are read, so the menu badge does not wait for its next round. */
+export const MAIL_READ_EVENT = "leadium:mail-read";
+
 export type MailMessage = {
   id: string;
   direction: "inbound" | "outbound";
@@ -40,6 +43,11 @@ export function groupThreads(messages: MailMessage[]) {
     threads.set(key, thread);
   }
   return [...threads.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+}
+
+/** The screen follows the click at once; the next reload shows what the server really kept. */
+export function markRead(messages: MailMessage[], ids: string[], at: string) {
+  return messages.map((message) => (ids.includes(message.id) ? { ...message, readAt: at } : message));
 }
 
 export function replySubject(subject: string) {

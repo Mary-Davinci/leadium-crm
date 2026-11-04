@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ExternalLink, Mail, Paperclip, Search, Send } from "lucide-react";
 import { Link } from "react-router-dom";
 import { buildPracticeUrl } from "../features/practices/practice-links";
-import { formatAttachmentSize, formatMailTime, groupThreads, lastInbound, replySubject, type MailMessage, type MailThread } from "../features/email/email.logic";
+import { formatAttachmentSize, formatMailTime, groupThreads, lastInbound, MAIL_READ_EVENT, markRead, replySubject, type MailMessage, type MailThread } from "../features/email/email.logic";
 import { api } from "../lib/api";
 import { getAuthUser } from "../lib/auth";
 import "../styles/email-page.css";
@@ -41,9 +41,12 @@ export function EmailPage() {
   useEffect(() => {
     if (!selected?.unread) return;
     const unread = selected.messages.filter((message) => message.direction === "inbound" && !message.readAt);
-    void Promise.all(unread.map((message) => api(`/api/mail/messages/${encodeURIComponent(message.id)}`, { method: "PATCH", body: JSON.stringify({ read: true }) })))
-      .then(() => load())
-      .catch(() => undefined);
+    const ids = unread.map((message) => message.id);
+    setData((current) => (current ? { ...current, messages: markRead(current.messages, ids, new Date().toISOString()) } : current));
+    void Promise.all(ids.map((id) => api(`/api/mail/messages/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ read: true }) })))
+      .then(() => window.dispatchEvent(new Event(MAIL_READ_EVENT)))
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Non e stato possibile segnare l'email come letta."))
+      .finally(() => void load());
   }, [selected?.key, selected?.unread, load]);
 
   return (

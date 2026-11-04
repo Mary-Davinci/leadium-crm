@@ -65,6 +65,22 @@ export async function ingestRawMail(raw: Buffer | string, ownAddress: string, de
   return record;
 }
 
+/** Mails sent before the inbox existed live only in the practice history: they open the conversations. */
+export async function importSentMail(activities: any[], fromAddress: string) {
+  let imported = 0;
+  for (const activity of activities) {
+    const meta = activity.meta || {};
+    const messageId = String(meta.messageId || activity.id);
+    const saved = await saveMailIfNew({
+      id: mailRecordId(messageId), messageId, direction: "outbound", from: String(meta.from || fromAddress).toLowerCase(), fromName: "", to: String(meta.to || ""),
+      subject: String(meta.subject || ""), text: String(meta.text || ""), receivedAt: String(activity.createdAt), inReplyTo: "", references: [],
+      leadId: String(activity.leadId), attachments: [], readAt: String(activity.createdAt), readBy: String(activity.actor || ""), sentBy: String(activity.actor || "")
+    });
+    if (saved) imported += 1;
+  }
+  return imported;
+}
+
 export type MailboxMessage = { uid: number; source: Buffer };
 export type OpenMailbox = {
   uidValidity: string;
@@ -98,6 +114,8 @@ export function imapMailbox(config: InboxConfig) {
   };
 }
 
+let inboxReachedOnce = false;
+
 /** One round. A failure stops here and the next round resumes from the last message saved. */
 export async function syncInbox(open: () => Promise<OpenMailbox>, ownAddress: string, deps: InboxDeps, now = Date.now()) {
   let mailbox: OpenMailbox | null = null;
@@ -116,6 +134,9 @@ export async function syncInbox(open: () => Promise<OpenMailbox>, ownAddress: st
       await writeInboxSync({ uidValidity: mailbox.uidValidity, lastUid });
     }
     await writeInboxSync({ uidValidity: mailbox.uidValidity, lastUid, lastSyncAt: new Date(now).toISOString(), lastError: null });
+    // Logged when something changes, not every minute: first success, new mail, a recovered error.
+    if (stored || !inboxReachedOnce || state.lastError) console.log(`[mail] casella letta: ${stored} nuove email`);
+    inboxReachedOnce = true;
     return stored;
   } catch (error: any) {
     // The stage only: server text can echo the account.

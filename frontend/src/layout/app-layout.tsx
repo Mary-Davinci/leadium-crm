@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { getAuthUser } from "../lib/auth";
 import { Header } from "./Header";
 import { ScheduledCallsAlert } from "../features/calls/ScheduledCallsAlert";
+import { MAIL_READ_EVENT } from "../features/email/email.logic";
 import { ThreeCxProvider } from "../features/calls/threecx-context";
 import "../styles/layout.css";
 
@@ -47,7 +48,8 @@ function useUnreadMail(pathname: string) {
     const load = () => api<{ unread: number }>("/api/mail/unread").then((data) => setUnread(Number(data.unread) || 0)).catch(() => undefined);
     void load();
     const timer = window.setInterval(load, 60000);
-    return () => window.clearInterval(timer);
+    window.addEventListener(MAIL_READ_EVENT, load);
+    return () => { window.clearInterval(timer); window.removeEventListener(MAIL_READ_EVENT, load); };
   }, [pathname]);
   return unread;
 }

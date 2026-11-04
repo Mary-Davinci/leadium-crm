@@ -82,6 +82,12 @@ export async function getTimelineByLeadId(leadId: string) {
   return db.collection("activities").find({ leadId }).sort({ createdAt: 1 }).toArray();
 }
 
+export async function listActivitiesByType(type: string) {
+  if (!isMongoEnabled()) return readDb().activities.filter((activity: any) => activity.type === type);
+  const db = await getMongoDb();
+  return db.collection("activities").find({ type }).toArray();
+}
+
 export async function createLead(lead: any, activities: any[] = []) {
   if (!isMongoEnabled()) {
     const db = readDb();

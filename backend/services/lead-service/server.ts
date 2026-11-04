@@ -18,7 +18,8 @@ import {
   listLeadsByContact,
   saveLead,
   savePaymentPlan,
-  setLeadContactIfUnchanged
+  setLeadContactIfUnchanged,
+  listActivitiesByType
 } from "../common/leadStore";
 import { createCallLog, findCallLogByIdempotencyKey, getLatestCallMapByLeadIds, listAllCallLogs, listCallLogs, listCallLogsByLeadId } from "../common/callStore";
 import { createTask, findRecentManualDuplicate, getTaskById, listTasks, listTasksByLeadAndKind, saveTask, TaskRecord } from "../common/taskStore";
@@ -31,7 +32,7 @@ import { resolveLeadAssociationForPhone, tryHandleCustomerRoutes } from "./custo
 import { rowsToCsv } from "../common/csv";
 import { MailError, mailConfig, sendCustomerEmail, validateCustomerEmail } from "../common/mailer";
 import { getMail, linkSenderToLead, listMail, mailRecordId, MailRecord, readInboxSync, saveMailIfNew, updateMail } from "../common/mailStore";
-import { imapMailbox, inboxConfig, InboxDeps, syncInbox } from "../common/mailInbox";
+import { imapMailbox, importSentMail, inboxConfig, InboxDeps, syncInbox } from "../common/mailInbox";
 import { BOOKING_ACTIVITY_HEADERS, BookingActivityFilters, buildBookingActivityCsvRows, buildBookingActivityRows, filterBookingActivityRows } from "./booking-report";
 
 // Internal service: reached only through the gateway in the same process. INTERNAL_SERVICE_HOST=127.0.0.1
@@ -2657,8 +2658,13 @@ if (process.env.NODE_ENV !== "test") {
     cleanupLegacyAutomaticTaskDuplicates().catch(() => {});
     ensureSlaTasks().catch(() => {});
     let automationTickRunning = false;
-    let inboxSyncRunning = false;
+    // Before the first read: a reply is matched on the mail it answers.
+    let inboxSyncRunning = true;
     const inbox = inboxConfig();
+    listActivitiesByType("email_sent")
+      .then((activities) => importSentMail(activities, inbox?.address || ""))
+      .catch((error) => console.error("[mail] import email inviate fallito", error?.message || ""))
+      .finally(() => { inboxSyncRunning = false; });
     setInterval(() => {
       ensureSlaTasks().catch(() => {});
       if (inbox && !inboxSyncRunning) {

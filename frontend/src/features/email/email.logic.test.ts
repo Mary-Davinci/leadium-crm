@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAttachmentSize, formatMailTime, groupThreads, lastInbound, replySubject, type MailMessage } from "./email.logic";
+import { formatAttachmentSize, formatMailTime, groupThreads, lastInbound, markRead, replySubject, type MailMessage } from "./email.logic";
 
 const mail = (id: string, receivedAt: string, extra: Partial<MailMessage> = {}): MailMessage => ({
   id, direction: "inbound", from: "mario@example.test", fromName: "Mario", to: "servizioclienti@crocieriamo.com", subject: "Preventivo", text: "testo", receivedAt, leadId: "l1", leadName: "Mario Rossi", attachments: [], readAt: null, sentBy: "", ...extra
@@ -27,6 +27,13 @@ describe("email threads", () => {
     expect(first.from).toBe("mario@example.test");
     const [second] = groupThreads([mail("a", "2026-11-04T10:00:00Z", { direction: "outbound", from: "servizioclienti@crocieriamo.com", to: "mario@example.test" }), mail("b", "2026-11-04T11:00:00Z", { from: "privato@example.test" })]);
     expect(second.from).toBe("privato@example.test");
+  });
+
+  it("opening a conversation clears its unread count at once", () => {
+    const messages = [mail("a", "2026-11-04T10:00:00Z"), mail("b", "2026-11-04T11:00:00Z", { leadId: "l2" })];
+    const threads = groupThreads(markRead(messages, ["a"], "2026-11-04T12:00:00Z"));
+    expect(threads.find(thread => thread.leadId === "l1")?.unread).toBe(0);
+    expect(threads.find(thread => thread.leadId === "l2")?.unread).toBe(1);
   });
 
   it("the reply answers the customer's last message, not the operator's", () => {
