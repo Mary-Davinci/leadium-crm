@@ -157,6 +157,9 @@ export function ChatPage() {
   const navigate = useNavigate();
   const authUser = getAuthUser();
   const authUsername = String(authUser?.username || authUser?.name || "").trim();
+  const isAdmin = authUser?.role === "admin" || authUser?.role === "super_admin";
+  const [assignees, setAssignees] = useState<Array<{ username: string; label: string }>>([]);
+  const alertConversationId = String(searchParams.get("conversationId") || "").trim();
   const layoutMode = useChatLayoutMode();
   const online = useOnlineStatus();
 
@@ -361,6 +364,22 @@ export function ChatPage() {
     loadTemplates().catch(() => setTemplates(FALLBACK_TEMPLATE_OPTIONS));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Chat just taken from the header alert (also when this page is already open).
+  useEffect(() => {
+    if (!alertConversationId) return;
+    loadConversations({ force: true })
+      .then(() => selectConversation(alertConversationId))
+      .catch((error: unknown) => setListError(mapChatError(error)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertConversationId]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    api<Array<{ username: string; name?: string; surname?: string }>>("/api/leads/assignees")
+      .then((users) => setAssignees(users.map((user) => ({ username: user.username, label: `${user.name || ""} ${user.surname || ""}`.trim() || user.username }))))
+      .catch(() => setAssignees([]));
+  }, [isAdmin]);
 
   // Polling pauses while the tab is hidden (no point refreshing nobody is looking at it, and
   // GET messages marks the open chat as read) and catches up as soon as it is visible again.
@@ -1132,6 +1151,7 @@ export function ChatPage() {
           onSelect={selectConversation}
           onRetry={() => void loadConversations({ force: true })}
           onStartChat={startNewChat}
+          showUnassigned={isAdmin}
         />
       </aside>
       {listVisible && selectedConversation ? <button type="button" className="chat-scrim list" aria-label="Chiudi elenco" onClick={() => setListOpen(false)} /> : null}
@@ -1158,6 +1178,9 @@ export function ChatPage() {
               onToggleInfo={() => setInfoOpen((open) => !open)}
               onAssignToMe={() => void patchConversation({ assignedTo: authUsername }, "Conversazione presa in carico")}
               onRelease={() => void patchConversation({ assignedTo: "" }, "Conversazione rilasciata")}
+              canAssign={isAdmin}
+              assignees={assignees}
+              onAssignTo={(username) => void patchConversation({ assignedTo: username }, "Conversazione assegnata")}
               onMarkUnread={() => void markUnread()}
               onSetStatus={(status) =>
                 void patchConversation(

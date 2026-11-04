@@ -587,6 +587,7 @@ export function contactPatch(initial: ContactDraft, draft: ContactDraft) {
 function getTimelineLabel(type: string) {
   const t = String(type || "").toLowerCase();
   if (t === "email_sent") return "Email inviata";
+  if (t === "email_received") return "Email ricevuta";
   if (t === "lead_worked") return "Pratica lavorata";
   if (t === "lead_worked_undone") return "Pratica rimessa tra le attive";
   if (t === "lead_archived") return "Contatto archiviato";

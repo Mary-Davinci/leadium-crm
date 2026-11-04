@@ -632,3 +632,114 @@
     transition: none;
   }
 }
+
+/* Customers waiting for an operator: the card opens beside the WhatsApp logo. */
+.wa-alert {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.wa-alert-logo {
+  animation: wa-alert-shake 1.6s ease-in-out infinite;
+}
+
+@keyframes wa-alert-shake {
+  0%, 58%, 100% { transform: rotate(0); }
+  62%, 74%, 86% { transform: rotate(-11deg); }
+  68%, 80%, 92% { transform: rotate(11deg); }
+}
+
+.wa-alert-cards {
+  position: absolute;
+  top: 0;
+  right: calc(100% + var(--space-2));
+  z-index: 60;
+  width: 248px;
+  display: grid;
+  gap: 6px;
+}
+
+.wa-alert-card {
+  width: 100%;
+  padding: 8px 12px;
+  display: grid;
+  gap: 1px;
+  border: 1px solid #b8e6c9;
+  border-left: 3px solid #25d366;
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(18, 50, 116, 0.16);
+  color: #1b2a40;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wa-alert-card strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.wa-alert-card span {
+  color: #5f7595;
+  font-size: 12px;
+}
+
+.wa-alert-card:hover:not(:disabled) {
+  background: #f1fbf5;
+}
+
+.wa-alert-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.wa-alert-card:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.wa-alert-notice,
+.wa-alert-more {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(18, 50, 116, 0.16);
+  color: #5f7595;
+  font-size: 12px;
+}
+
+@media (max-width: 860px) {
+  .wa-alert {
+    position: static;
+  }
+
+  .wa-alert-cards {
+    position: fixed;
+    top: 12px;
+    left: 16px;
+    right: 16px;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wa-alert-logo { animation: none; }
+}
+
+.menu-badge {
+  min-width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--brand-coral-500);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}

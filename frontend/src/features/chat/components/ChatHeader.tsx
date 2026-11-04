@@ -32,6 +32,10 @@ type ChatHeaderProps = {
   onSetStatus: (status: "open" | "waiting_customer" | "resolved") => void;
   onOpenPractice: () => void;
   onCopyPhone: () => void;
+  /** Assigning is an admin job; operators receive their chats. */
+  canAssign?: boolean;
+  assignees?: Array<{ username: string; label: string }>;
+  onAssignTo?: (username: string) => void;
 };
 
 export function ChatHeader({
@@ -50,7 +54,10 @@ export function ChatHeader({
   onMarkUnread,
   onSetStatus,
   onOpenPractice,
-  onCopyPhone
+  onCopyPhone,
+  canAssign = true,
+  assignees = [],
+  onAssignTo
 }: ChatHeaderProps) {
   const assignee = String(conversation.assignedTo || "").trim();
   const assignedToMe = Boolean(authUsername) && assignee === authUsername;
@@ -78,7 +85,7 @@ export function ChatHeader({
         </div>
       </div>
       <div className="chat-header-actions">
-        {!assignedToMe ? (
+        {canAssign && !assignee ? (
           <button type="button" className="chat-header-cta" onClick={onAssignToMe} disabled={busy || !authUsername}>
             <UserCheck size={15} aria-hidden="true" />
             <span>Prendi in carico</span>
@@ -111,16 +118,22 @@ export function ChatHeader({
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content className="chat-menu" align="end" sideOffset={6}>
-              {assignedToMe ? (
-                <DropdownMenu.Item className="chat-menu-item" onSelect={onRelease}>
-                  <UserMinus size={15} aria-hidden="true" /> Rilascia conversazione
-                </DropdownMenu.Item>
-              ) : (
+              {canAssign && !assignee ? (
                 <DropdownMenu.Item className="chat-menu-item" onSelect={onAssignToMe} disabled={!authUsername}>
-                  <UserCheck size={15} aria-hidden="true" /> {assignee ? "Prendi in carico (riassegna a te)" : "Assegna a me"}
+                  <UserCheck size={15} aria-hidden="true" /> Assegna a me
                 </DropdownMenu.Item>
-              )}
-              {assignee && !assignedToMe ? (
+              ) : null}
+              {canAssign
+                ? assignees
+                    .filter((item) => item.username !== assignee)
+                    .map((item) => (
+                      <DropdownMenu.Item key={item.username} className="chat-menu-item" onSelect={() => onAssignTo?.(item.username)}>
+                        <UserCheck size={15} aria-hidden="true" /> Assegna a {item.label}
+                      </DropdownMenu.Item>
+                    ))
+                : null}
+              {/* With a practice the operator follows the practice, so there is nothing to remove here. */}
+              {canAssign && assignee && !hasLinkedPractice ? (
                 <DropdownMenu.Item className="chat-menu-item" onSelect={onRelease}>
                   <UserMinus size={15} aria-hidden="true" /> Rimuovi assegnazione
                 </DropdownMenu.Item>

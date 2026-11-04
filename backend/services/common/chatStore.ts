@@ -222,7 +222,8 @@ export async function createOrUpdateConversation({
   customerName = "",
   leadId = null,
   customerId = null,
-  assignedTo = "",
+  // Undefined keeps the current operator: an inbound message must not unassign the chat.
+  assignedTo,
   incrementUnread = false,
   lastMessagePreview = "",
   source = "whatsapp",
@@ -360,6 +361,31 @@ export async function updateConversation(conversationId: string, patch: any) {
     ...patch,
     updatedAt: new Date().toISOString()
   });
+}
+
+/** "automazione" is what template automation stored as assignee: no operator owns those chats. */
+export const NO_OPERATOR_ASSIGNEES = ["", "automazione"];
+
+/**
+ * First operator wins: the write only happens while the chat has no operator, in the same Mongo
+ * operation, so two simultaneous clicks cannot both take it.
+ */
+export async function claimConversation(conversationId: string, username: string) {
+  const updatedAt = new Date().toISOString();
+  if (!isMongoEnabled()) {
+    const conversation = await getConversationById(conversationId);
+    if (!conversation) return { found: false, claimed: false, conversation: null };
+    if (!NO_OPERATOR_ASSIGNEES.includes(String(conversation.assignedTo || "").trim())) return { found: true, claimed: false, conversation };
+    return { found: true, claimed: true, conversation: await updateConversation(conversationId, { assignedTo: username }) };
+  }
+  await ensureMongoIndexes();
+  const db = await getMongoDb();
+  const result = await db.collection("wa_conversations").updateOne(
+    { _id: conversationId as any, $or: [{ assignedTo: { $in: [...NO_OPERATOR_ASSIGNEES, null] } }, { assignedTo: { $exists: false } }] },
+    { $set: { assignedTo: username, updatedAt } }
+  );
+  const conversation = await getConversationById(conversationId);
+  return { found: Boolean(conversation), claimed: result.modifiedCount === 1, conversation };
 }
 
 export async function findMessageByIdempotencyKey(idempotencyKey: string) {

@@ -12,6 +12,12 @@ const upstream = http.createServer((req, res) => {
   const chunks: Buffer[] = [];
   req.on("data", (chunk) => chunks.push(chunk));
   req.on("end", () => {
+    // The chat-access lookup before a send: this stand-in has no stored conversations.
+    if (req.method === "GET" && req.url?.startsWith("/conversations/")) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end("{}");
+      return;
+    }
     received.push({ method: req.method || "", url: req.url || "", headers: req.headers, body: Buffer.concat(chunks).toString("utf8") });
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("upstream-ok");

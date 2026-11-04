@@ -24,6 +24,7 @@ import {
   uploadDocumentBuffer
 } from "./document-storage";
 import { applyLeadImport, previewLeadImport } from "./lead-import";
+import { awaitsOperator, CHAT_FORBIDDEN_MESSAGE, CHAT_TAKEN_MESSAGE, chatOwner, ownsChat } from "./whatsapp-access";
 import { isInternalServicePath, isTaskDismissBlocked, isValidThreeCxWebhookSecret, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
 import { CHAT_UPLOAD_FORMAT_ERROR, isAllowedChatUploadMime, isChatDocumentKey, validateChatUpload } from "./chat-upload-rules";
 
@@ -264,6 +265,7 @@ type InboxConversation = {
   lastMessageAt?: string;
   unreadCount?: number;
   leadId?: string | null;
+  assignedTo?: string;
 };
 
 type InboxTask = {
@@ -307,7 +309,7 @@ function conversationPriority(conversation: InboxConversation) {
   return 50;
 }
 
-async function buildInbox() {
+async function buildInbox(user: AuthPublicUser) {
   const [leadRes, convRes, openTaskRes, doneTaskRes] = await Promise.all([
     fetch(`${LEAD_URL}/leads`),
     fetch(`${WHATSAPP_URL}/conversations`),
@@ -356,7 +358,8 @@ async function buildInbox() {
     };
   });
 
-  const conversationItems = conversations.map((conv) => ({
+  const owners = await fetchLeadOwners();
+  const conversationItems = conversations.filter((conv) => isAdmin(user) || ownsChat(user, chatOwner(conv, owners))).map((conv) => ({
     kind: "chat",
     id: conv.id,
     conversationId: conv.id,
@@ -505,7 +508,186 @@ function mapApiRoute(pathname: string) {
   if (pathname.startsWith("/api/report/booking-activities")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname.startsWith("/api/ingest/")) return { base: INGEST_URL, path: pathname.replace(/^\/api\/ingest/, "") };
   if (pathname.startsWith("/api/whatsapp/")) return { base: WHATSAPP_URL, path: pathname.replace(/^\/api\/whatsapp/, "") };
+  if (pathname.startsWith("/api/mail/")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   return null;
+}
+
+// Operators are served dozens of chat requests a minute: the practice owners are read at most every 5 s.
+let leadOwnersCache: { at: number; owners: Map<string, string> } | null = null;
+async function fetchLeadOwners() {
+  if (leadOwnersCache && Date.now() - leadOwnersCache.at < 5000) return leadOwnersCache.owners;
+  const response = await fetch(`${LEAD_URL}/leads`);
+  if (!response.ok) throw new Error("Impossibile verificare l'operatore della chat.");
+  const leads = (await response.json()) as Array<{ id: string; assignedTo?: string }>;
+  const owners = new Map(leads.map((lead) => [lead.id, String(lead.assignedTo || "")]));
+  leadOwnersCache = { at: Date.now(), owners };
+  return owners;
+}
+
+async function fetchConversation(conversationId: string): Promise<any | null> {
+  const response = await fetch(`${WHATSAPP_URL}/conversations/${encodeURIComponent(conversationId)}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error("Impossibile leggere la conversazione.");
+  return response.json();
+}
+
+async function assignLeadOfChat(leadId: string, username: string, actor: AuthPublicUser) {
+  await fetch(`${LEAD_URL}/leads/${encodeURIComponent(leadId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...internalIdentityHeaders() },
+    body: JSON.stringify({ assignedTo: username, actor: actor.username, __assignActor: { id: actor.id, username: actor.username, role: actor.role } })
+  });
+  leadOwnersCache = null;
+}
+
+/** First click wins. The operator also becomes the practice's owner, so the two stay together. */
+async function claimChat(user: AuthPublicUser, conversation: { id: string; leadId?: string | null }) {
+  const response = await fetch(`${WHATSAPP_URL}/conversations/${encodeURIComponent(conversation.id)}/claim`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: user.username })
+  });
+  if (!response.ok) return null;
+  if (conversation.leadId && !isAdmin(user)) await assignLeadOfChat(String(conversation.leadId), user.username, user);
+  return response.json();
+}
+
+/** Allowed to work on this chat? With takeIfFree a chat without an operator becomes the user's. */
+async function authorizeChat(user: AuthPublicUser, conversation: any, takeIfFree = false) {
+  if (isAdmin(user)) return true;
+  const owner = chatOwner(conversation, await fetchLeadOwners());
+  if (ownsChat(user, owner)) return true;
+  return Boolean(!owner && takeIfFree && (await claimChat(user, conversation)));
+}
+
+/** Chat access rules. Returns true when it answered; otherwise the normal proxy forwards the request. */
+async function handleChatRoute(req: http.IncomingMessage, res: http.ServerResponse, pathname: string, method: string, search: string, user: AuthPublicUser) {
+  const path = pathname.replace(/\/+$/, "");
+  const forwardFailure = async (upstream: Response) => { await forwardUpstreamResponse(res, upstream); return true; };
+  if (path === "/api/whatsapp/conversations" && method === "GET") {
+    const upstream = await fetch(`${WHATSAPP_URL}/conversations${search}`);
+    if (!upstream.ok) return forwardFailure(upstream);
+    const owners = await fetchLeadOwners();
+    const conversations = ((await upstream.json()) as any[]).map((conversation) => ({ ...conversation, assignedTo: chatOwner(conversation, owners) }));
+    sendJson(res, 200, isAdmin(user) ? conversations : conversations.filter((conversation) => ownsChat(user, conversation.assignedTo)));
+    return true;
+  }
+  // Number only: the messages stay closed until someone takes the chat.
+  if (path === "/api/whatsapp/conversations/unclaimed" && method === "GET") {
+    const upstream = await fetch(`${WHATSAPP_URL}/conversations`);
+    if (!upstream.ok) return forwardFailure(upstream);
+    const owners = await fetchLeadOwners();
+    const now = Date.now();
+    const waiting = ((await upstream.json()) as any[])
+      .filter((conversation) => awaitsOperator(conversation, chatOwner(conversation, owners), now))
+      .map((conversation) => ({ id: conversation.id, phone: conversation.phone, lastInboundAt: conversation.lastInboundAt || null }));
+    sendJson(res, 200, waiting);
+    return true;
+  }
+  const claimMatch = path.match(/^\/api\/whatsapp\/conversations\/([^/]+)\/claim$/);
+  if (claimMatch && method === "POST") {
+    const conversation = await fetchConversation(decodeURIComponent(claimMatch[1]));
+    if (!conversation) { sendJson(res, 404, { error: "Conversazione non trovata." }); return true; }
+    const owner = chatOwner(conversation, await fetchLeadOwners());
+    if (owner && !ownsChat(user, owner)) { sendJson(res, 409, { error: CHAT_TAKEN_MESSAGE }); return true; }
+    const claimed = owner ? conversation : await claimChat(user, conversation);
+    if (claimed) sendJson(res, 200, claimed);
+    else sendJson(res, 409, { error: CHAT_TAKEN_MESSAGE });
+    return true;
+  }
+  if (path === "/api/whatsapp/conversations/ensure" && method === "POST") {
+    const body = (await parseJsonBody(req)) as Record<string, any>;
+    const upstream = await fetch(`${WHATSAPP_URL}/conversations/ensure`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!upstream.ok) return forwardFailure(upstream);
+    const conversation = await upstream.json();
+    if (await authorizeChat(user, conversation, true)) sendJson(res, 200, conversation);
+    else sendJson(res, 403, { error: CHAT_FORBIDDEN_MESSAGE });
+    return true;
+  }
+  const chatMatch = path.match(/^\/api\/whatsapp\/conversations\/([^/]+)(\/messages)?$/);
+  if (chatMatch && (method === "GET" || (method === "PATCH" && !chatMatch[2]))) {
+    const conversation = await fetchConversation(decodeURIComponent(chatMatch[1]));
+    if (!conversation) { sendJson(res, 404, { error: "Conversazione non trovata." }); return true; }
+    if (!(await authorizeChat(user, conversation))) { sendJson(res, 403, { error: CHAT_FORBIDDEN_MESSAGE }); return true; }
+    const servicePath = path.replace(/^\/api\/whatsapp/, "");
+    if (method === "GET") {
+      const upstream = await fetch(`${WHATSAPP_URL}${servicePath}`);
+      if (!upstream.ok) return forwardFailure(upstream);
+      const payload = (await upstream.json()) as any;
+      const owner = chatOwner(conversation, await fetchLeadOwners());
+      sendJson(res, 200, chatMatch[2] ? { ...payload, conversation: { ...payload.conversation, assignedTo: owner } } : { ...payload, assignedTo: owner });
+      return true;
+    }
+    const body = (await parseJsonBody(req)) as Record<string, any>;
+    if (body.assignedTo !== undefined) {
+      // Chats follow the admin's distribution: operators cannot pass them on.
+      if (!isAdmin(user)) { sendJson(res, 403, { error: "Solo un admin puo assegnare le chat." }); return true; }
+      const target = String(body.assignedTo || "").trim();
+      const assignee = target ? (await listUsers()).find((candidate) => candidate.username === target) : null;
+      if (target && !assignee) { sendJson(res, 422, { error: "Utente non trovato: aggiorna l'elenco e riprova." }); return true; }
+      if (assignee?.role === "operatore" && conversation.leadId) await assignLeadOfChat(String(conversation.leadId), assignee.username, user);
+    }
+    const upstream = await fetch(`${WHATSAPP_URL}${servicePath}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!upstream.ok) return forwardFailure(upstream);
+    const updated = (await upstream.json()) as any;
+    sendJson(res, 200, { ...updated, assignedTo: chatOwner(updated, await fetchLeadOwners()) });
+    return true;
+  }
+  const mediaMatch = path.match(/^\/api\/whatsapp\/messages\/([^/]+)\/media$/);
+  if (mediaMatch && method === "GET" && !isAdmin(user)) {
+    const lookup = await fetch(`${WHATSAPP_URL}/messages/${encodeURIComponent(decodeURIComponent(mediaMatch[1]))}/conversation`);
+    if (!lookup.ok) { sendJson(res, 404, { error: "Allegato non disponibile.", code: "media_not_found" }); return true; }
+    const { conversationId } = (await lookup.json()) as { conversationId: string };
+    const conversation = await fetchConversation(conversationId);
+    if (!conversation || !(await authorizeChat(user, conversation))) { sendJson(res, 403, { error: CHAT_FORBIDDEN_MESSAGE }); return true; }
+    return false;
+  }
+  if (path === "/api/whatsapp/automation/state" && method === "GET") {
+    const conversationId = new URLSearchParams(search).get("conversationId");
+    const conversation = conversationId ? await fetchConversation(conversationId) : null;
+    if (conversation && !(await authorizeChat(user, conversation))) { sendJson(res, 403, { error: CHAT_FORBIDDEN_MESSAGE }); return true; }
+    return false;
+  }
+  // Simulated customer actions touch any conversation by phone and no screen calls them.
+  if (path === "/api/whatsapp/customer-actions" && !isAdmin(user)) {
+    sendJson(res, 403, { error: "Azione riservata agli amministratori." });
+    return true;
+  }
+  return false;
+}
+
+/** Replies follow the same rule as chats: the practice's operator, admins, and only admins for unmatched senders. */
+async function handleMailRoute(req: http.IncomingMessage, res: http.ServerResponse, pathname: string, method: string, user: AuthPublicUser) {
+  const path = pathname.replace(/\/+$/, "");
+  const owners = await fetchLeadOwners();
+  const visible = (mail: { leadId?: string | null }) => isAdmin(user) || Boolean(mail.leadId && ownsChat(user, String(owners.get(String(mail.leadId)) || "")));
+  if ((path === "/api/mail/messages" || path === "/api/mail/unread") && method === "GET") {
+    const upstream = await fetch(`${LEAD_URL}/mail/messages`);
+    if (!upstream.ok) { await forwardUpstreamResponse(res, upstream); return; }
+    const data = (await upstream.json()) as { configured: boolean; lastSyncAt: string | null; lastError: string | null; messages: any[] };
+    const messages = data.messages.filter(visible);
+    if (path.endsWith("/unread")) { sendJson(res, 200, { unread: messages.filter((mail) => mail.direction === "inbound" && !mail.readAt).length }); return; }
+    sendJson(res, 200, { ...data, lastError: isAdmin(user) ? data.lastError : null, messages });
+    return;
+  }
+  const mailMatch = path.match(/^\/api\/mail\/messages\/([^/]+)$/);
+  if (mailMatch && method === "PATCH") {
+    const mailId = mailMatch[1];
+    const upstreamList = await fetch(`${LEAD_URL}/mail/messages`);
+    if (!upstreamList.ok) { await forwardUpstreamResponse(res, upstreamList); return; }
+    const mail = ((await upstreamList.json()) as { messages: any[] }).messages.find((row) => row.id === mailId);
+    if (!mail) { sendJson(res, 404, { error: "Email non trovata." }); return; }
+    if (!visible(mail)) { sendJson(res, 403, { error: "Questa email e di un cliente di un altro operatore." }); return; }
+    const body = (await parseJsonBody(req)) as Record<string, any>;
+    if (body.linkLeadId && !isAdmin(user)) { sendJson(res, 403, { error: "Solo un admin puo collegare le email alle pratiche." }); return; }
+    const upstream = await fetch(`${LEAD_URL}/mail/messages/${encodeURIComponent(mailId)}`, {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ read: body.read === true, ...(typeof body.linkLeadId === "string" ? { linkLeadId: body.linkLeadId } : {}), actor: user.username })
+    });
+    await forwardUpstreamResponse(res, upstream);
+    return;
+  }
+  sendJson(res, 404, { error: "Endpoint non trovato." });
 }
 
 export const server = http.createServer(async (req, res) => {
@@ -535,7 +717,7 @@ export const server = http.createServer(async (req, res) => {
         sendJson(res, 401, { error: "Non autorizzato." });
         return;
       }
-      sendJson(res, 200, await buildInbox());
+      sendJson(res, 200, await buildInbox(session.user));
       return;
     }
     if (pathname === "/api/auth/login" && method === "POST") {
@@ -1017,22 +1199,28 @@ export const server = http.createServer(async (req, res) => {
       await forwardUpstreamResponse(res, upstream);
       return;
     }
-    // WhatsApp is a shared inbox by product design: any authenticated operator can read every
-    // conversation (including unassigned ones), claim/release ownership, and send messages on
-    // any conversation -- that is the point of a shared inbox, not an authorization gap. The one
-    // WhatsApp action that is NOT part of normal operator workflow is the template test-send tool
-    // (fires a template outside the composer, meant for verifying template config), which is
-    // admin-only.
+    // The template test-send tool fires a template outside the composer, meant for verifying
+    // template config: admin-only.
     if (pathname === "/api/whatsapp/templates/test-send" && method === "POST" && isWhatsappTemplateTestSendBlocked(session.user.role)) {
       sendJson(res, 403, { error: "Solo admin e super admin possono inviare template di test." });
       return;
     }
+    if (pathname.startsWith("/api/mail/")) return await handleMailRoute(req, res, pathname, method, session.user);
+    if (pathname.startsWith("/api/whatsapp/") && (await handleChatRoute(req, res, pathname, method, url.search, session.user))) return;
     // Outbound chat attachments: Meta downloads the file from the URL we hand it, so that URL must
     // never come from the browser. The client only names a storageKey; the gateway re-checks the
     // operator can access that practice's documents and signs a short-lived download URL itself.
     // The sender name is likewise taken from the session, not trusted from the request body.
     if (pathname === "/api/whatsapp/messages/send" && method === "POST") {
       const body = (await parseJsonBody(req)) as Record<string, any>;
+      // Answering a chat nobody has taken makes it yours; a colleague's chat stays closed.
+      const sendTarget = body.conversationId
+        ? await fetchConversation(String(body.conversationId))
+        : body.to ? ((await (await fetch(`${WHATSAPP_URL}/conversations?phone=${encodeURIComponent(String(body.to))}`)).json()) as any[])[0] : null;
+      if (sendTarget && !(await authorizeChat(session.user, sendTarget, true))) {
+        sendJson(res, 403, { error: CHAT_FORBIDDEN_MESSAGE });
+        return;
+      }
       body.agentName = session.user.username || session.user.name || body.agentName || "";
       if (String(body.mode || "").trim().toLowerCase() === "attachment") {
         const storageKey = String(body.attachment?.storageKey || "").trim();
@@ -1121,7 +1309,7 @@ export const server = http.createServer(async (req, res) => {
         if ([PRACTICE_READY_STATUS, PRACTICE_CLOSED_STATUS].includes(status)) return sendJson(res, 403, { error: "Questa pratica e riservata alla supervisione admin." });
       }
       const input = (await parseJsonBody(req)) as Record<string, any>;
-      const fields = action === "archive" ? ["reason"] : action === "worked" ? ["note"] : action === "email" ? ["subject", "text"] : [];
+      const fields = action === "archive" ? ["reason"] : action === "worked" ? ["note"] : action === "email" ? ["subject", "text", "replyToMailId"] : [];
       const body: Record<string, unknown> = Object.fromEntries(fields.map((key) => [key, typeof input[key] === "string" ? input[key] : ""]));
       body.__actor = { id: session.user.id, username: session.user.username, role: session.user.role };
       const upstream = await fetch(`${LEAD_URL}/leads/${encodeURIComponent(leadId)}/${action}`, {

@@ -22,6 +22,8 @@ type ConversationListProps = {
   onRetry: () => void;
   /** Opens (or creates) the conversation for a typed number; resolves to an error message or "". */
   onStartChat: (phone: string, customerName: string) => Promise<string>;
+  /** Chats without an operator reach only admins: operators get the alert in the header. */
+  showUnassigned?: boolean;
 };
 
 const FILTERS: Array<{ key: InboxFilter; label: string }> = [
@@ -118,7 +120,8 @@ export function ConversationList({
   onSearchChange,
   onSelect,
   onRetry,
-  onStartChat
+  onStartChat,
+  showUnassigned = true
 }: ConversationListProps) {
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newChatPhone, setNewChatPhone] = useState("");
@@ -217,7 +220,7 @@ export function ConversationList({
         ) : null}
       </div>
       <div className="chat-filters" role="tablist" aria-label="Filtra conversazioni">
-        {FILTERS.map((item) => (
+        {FILTERS.filter((item) => showUnassigned || item.key !== "unassigned").map((item) => (
           <button
             key={item.key}
             type="button"

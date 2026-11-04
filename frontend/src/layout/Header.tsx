@@ -1,6 +1,7 @@
 import { GlobalSearch } from "./GlobalSearch";
 import { NotificationsBell } from "./NotificationsBell";
 import { UserMenu } from "./UserMenu";
+import { WhatsappAlert } from "./WhatsappAlert";
 
 export function Header({ title }: { title: string }) {
   return (
@@ -15,6 +16,7 @@ export function Header({ title }: { title: string }) {
       </div>
 
       <div className="topbar-right">
+        <WhatsappAlert />
         <NotificationsBell />
         <span className="topbar-divider" aria-hidden="true" />
         <UserMenu />

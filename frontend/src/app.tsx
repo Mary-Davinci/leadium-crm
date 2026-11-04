@@ -18,6 +18,7 @@ const LegacyLeadBoardRedirect = lazy(() =>
   import("./pages/leadboard-page").then((module) => ({ default: module.LegacyLeadBoardRedirect }))
 );
 const ChatPage = lazy(() => import("./pages/chat-page").then((module) => ({ default: module.ChatPage })));
+const EmailPage = lazy(() => import("./pages/email-page").then((module) => ({ default: module.EmailPage })));
 const AnalyticsPage = lazy(() => import("./pages/analytics-page").then((module) => ({ default: module.AnalyticsPage })));
 const BookingReportPage = lazy(() => import("./pages/booking-report-page").then((module) => ({ default: module.BookingReportPage })));
 const MarketingReportPage = lazy(() => import("./pages/marketing-report-page").then((module) => ({ default: module.MarketingReportPage })));
@@ -108,6 +109,7 @@ export default function App() {
           />
           <Route path="/leadboard" element={<LegacyLeadBoardRedirect />} />
           <Route path="/chat" element={<ChatPage />} />
+          <Route path="/email" element={<EmailPage />} />
           <Route path="/calls" element={<CallsPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route

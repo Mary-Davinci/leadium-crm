@@ -17,11 +17,9 @@ export function isTaskDismissBlocked(role: AuthRole, nextStatus?: string): boole
 }
 
 /**
- * WhatsApp is a shared inbox by product design: reading any conversation,
- * claiming/releasing ownership, and sending on any conversation are all
- * intentionally open to every authenticated operator. The template
- * test-send tool is the exception -- it fires a template outside the normal
- * compose flow purely to verify template configuration, so it is admin-only.
+ * The template test-send tool fires a template outside the normal compose flow
+ * purely to verify template configuration, so it is admin-only. Who may open a
+ * conversation is decided in whatsapp-access.ts.
  */
 export function isWhatsappTemplateTestSendBlocked(role: AuthRole): boolean {
   return !isAdminRole(role);

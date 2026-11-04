@@ -16,6 +16,7 @@ const {
   findConversationByCustomerId,
   markConversationRead,
   updateConversation,
+  claimConversation,
   updateMessageStatusByProviderId,
   getMessageById,
   findMessageByIdempotencyKey,
@@ -467,7 +468,8 @@ async function performTemplateSend({ template, to, conversation, lead, overrides
   const text = renderTemplateBody(template, values);
   let sendResult;
   try {
-    conversation = await createOutboundConversation({ conversation, to, customerName: customerName || to, agentName: agentName || "", text });
+    // An automatic template gives the chat no operator.
+    conversation = await createOutboundConversation({ conversation, to, customerName: customerName || to, agentName: trigger === "automation" ? "" : agentName || "", text });
     sendResult = await sendTemplateViaMeta(to, template, buildTemplateComponents(template, values));
   } catch (error) {
     if (lockId) await releaseTemplateOnce(lockId);
@@ -858,7 +860,8 @@ async function createOutboundConversation({ conversation, to, customerName, agen
     customerName: hydratedConversation.customerName || "",
     leadId: hydratedConversation.leadId || null,
     customerId: hydratedConversation.customerId || null,
-    assignedTo: agentName || hydratedConversation.assignedTo || "",
+    // Whoever replies does not take the chat from its operator (an admin supervising, for example).
+    assignedTo: hydratedConversation.assignedTo || agentName || "",
     incrementUnread: false,
     lastMessagePreview: text,
     source: hydratedConversation.source || "whatsapp"
@@ -879,6 +882,12 @@ const server = http.createServer(async (req, res) => {
     if (method === "GET" && pathname === "/conversations") {
       const customerId = String(url.searchParams.get("customerId") || "").trim();
       const leadId = String(url.searchParams.get("leadId") || "").trim();
+      const phone = String(url.searchParams.get("phone") || "").trim();
+      if (phone) {
+        const match = await findConversationByPhone(phone);
+        sendJson(res, 200, match ? [match] : []);
+        return;
+      }
       let conversations = await listConversations();
       if (customerId) conversations = conversations.filter((c) => String(c.customerId || "") === customerId);
       else if (leadId) conversations = conversations.filter((c) => String(c.leadId || "") === leadId);
@@ -1021,6 +1030,18 @@ const server = http.createServer(async (req, res) => {
     // resolves it through Meta's Media API and streams the bytes back to the CRM -- reachable only
     // through the authenticated gateway (/api/whatsapp/* other than /webhook requires a session),
     // and only for a mediaId already stored on one of our own messages, never an arbitrary id.
+    // Lets the gateway check who may open a message's attachment.
+    const messageChatParams = routeMatch(pathname, "/messages/:messageId/conversation");
+    if (messageChatParams && method === "GET") {
+      const message = await getMessageById(messageChatParams.messageId);
+      if (!message) {
+        sendJson(res, 404, { error: "Messaggio non trovato." });
+        return;
+      }
+      sendJson(res, 200, { conversationId: message.conversationId });
+      return;
+    }
+
     const mediaParams = routeMatch(pathname, "/messages/:messageId/media");
     if (mediaParams && method === "GET") {
       const message = await getMessageById(mediaParams.messageId);
@@ -1086,7 +1107,33 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const claimParams = routeMatch(pathname, "/conversations/:conversationId/claim");
+    if (claimParams && method === "POST") {
+      const body = await parseBody(req);
+      const username = String(body.username || "").trim();
+      if (!username) {
+        sendJson(res, 400, { error: "username obbligatorio." });
+        return;
+      }
+      const result = await claimConversation(claimParams.conversationId, username);
+      if (!result.found) {
+        sendJson(res, 404, { error: "Conversazione non trovata." });
+        return;
+      }
+      sendJson(res, result.claimed ? 200 : 409, result.conversation);
+      return;
+    }
+
     const convPatchParams = routeMatch(pathname, "/conversations/:conversationId");
+    if (convPatchParams && method === "GET") {
+      const conversation = await getConversationById(convPatchParams.conversationId);
+      if (!conversation) {
+        sendJson(res, 404, { error: "Conversazione non trovata." });
+        return;
+      }
+      sendJson(res, 200, conversation);
+      return;
+    }
     if (convPatchParams && method === "PATCH") {
       const body = await parseBody(req);
       const nextStatus = body.status ? String(body.status).trim() : undefined;

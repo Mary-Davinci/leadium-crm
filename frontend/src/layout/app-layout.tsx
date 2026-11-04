@@ -1,7 +1,10 @@
-import { BarChart3, ClipboardList, LayoutDashboard, MessageCircle, Phone, UsersRound, Workflow, FolderKanban, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BarChart3, ClipboardList, LayoutDashboard, Mail, MessageCircle, Phone, UsersRound, Workflow, FolderKanban, type LucideIcon } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { api } from "../lib/api";
 import { getAuthUser } from "../lib/auth";
 import { Header } from "./Header";
+import { ScheduledCallsAlert } from "../features/calls/ScheduledCallsAlert";
 import { ThreeCxProvider } from "../features/calls/threecx-context";
 import "../styles/layout.css";
 
@@ -16,6 +19,7 @@ const MENU: MenuItem[] = [
   { to: "/tasks", label: "Gestione operativa", icon: Workflow },
   { to: "/pratiche", label: "Pratiche", icon: FolderKanban },
   { to: "/chat", label: "Chat", icon: MessageCircle },
+  { to: "/email", label: "Email", icon: Mail },
   { to: "/calls", label: "Chiamate", icon: Phone },
   { to: "/analytics", label: "Report", icon: BarChart3 },
   { to: "/reports/booking-activities", label: "Report Booking", icon: ClipboardList },
@@ -27,6 +31,7 @@ function getTitle(pathname: string) {
   if (pathname.startsWith("/tasks") || pathname.startsWith("/leadboard")) return "Gestione operativa";
   if (pathname.startsWith("/pratiche")) return "Pratiche";
   if (pathname.startsWith("/chat")) return "Chat WhatsApp";
+  if (pathname.startsWith("/email")) return "Email clienti";
   if (pathname.startsWith("/calls")) return "Contatti / 3CX";
   if (pathname.startsWith("/reports/booking-activities")) return "Report Booking";
   if (pathname.startsWith("/analytics")) return "Report";
@@ -36,11 +41,23 @@ function getTitle(pathname: string) {
   return "Dashboard";
 }
 
+function useUnreadMail(pathname: string) {
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    const load = () => api<{ unread: number }>("/api/mail/unread").then((data) => setUnread(Number(data.unread) || 0)).catch(() => undefined);
+    void load();
+    const timer = window.setInterval(load, 60000);
+    return () => window.clearInterval(timer);
+  }, [pathname]);
+  return unread;
+}
+
 export function AppLayout() {
   const { pathname } = useLocation();
   const user = getAuthUser();
   const title = getTitle(pathname);
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const unreadMail = useUnreadMail(pathname);
   const menuItems = MENU.filter((item) =>
     item.to === "/users" || item.to === "/tasks" || item.to === "/reports/booking-activities" ? isAdmin : true
   );
@@ -68,6 +85,7 @@ export function AppLayout() {
               >
                 <Icon className="menu-icon" size={18} strokeWidth={1.9} aria-hidden="true" />
                 <span>{item.label}</span>
+                {item.to === "/email" && unreadMail ? <span className="menu-badge" aria-label={`${unreadMail} email da leggere`}>{unreadMail > 99 ? "99+" : unreadMail}</span> : null}
               </NavLink>
             );
           })}
@@ -86,6 +104,7 @@ export function AppLayout() {
 
       <main className="main">
         <Header title={title} />
+        <ScheduledCallsAlert />
 
         <section className={`content ${pathname.startsWith("/chat") ? "chat-content" : ""}`}>
           <Outlet />

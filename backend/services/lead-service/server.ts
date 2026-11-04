@@ -30,6 +30,8 @@ import { isActiveLeadInvariantSatisfied } from "../common/leadInvariants";
 import { resolveLeadAssociationForPhone, tryHandleCustomerRoutes } from "./customer-routes";
 import { rowsToCsv } from "../common/csv";
 import { MailError, mailConfig, sendCustomerEmail, validateCustomerEmail } from "../common/mailer";
+import { getMail, linkSenderToLead, listMail, mailRecordId, MailRecord, readInboxSync, saveMailIfNew, updateMail } from "../common/mailStore";
+import { imapMailbox, inboxConfig, InboxDeps, syncInbox } from "../common/mailInbox";
 import { BOOKING_ACTIVITY_HEADERS, BookingActivityFilters, buildBookingActivityCsvRows, buildBookingActivityRows, filterBookingActivityRows } from "./booking-report";
 
 // Internal service: reached only through the gateway in the same process. INTERNAL_SERVICE_HOST=127.0.0.1
@@ -311,7 +313,20 @@ async function handleLeadAction(res: http.ServerResponse, leadId: string, action
   if (!config) return sendJson(res, 503, { error: "Invio email non ancora configurato: un amministratore deve impostare la casella di posta." });
   try {
     const message = validateCustomerEmail({ to: lead.email, subject: body.subject, text: body.text });
-    const sent = await sendCustomerEmail(config, message);
+    const answered = body.replyToMailId ? await getMail(String(body.replyToMailId)) : null;
+    if (body.replyToMailId && answered?.leadId !== lead.id) return sendJson(res, 409, { error: "Questa email non appartiene alla pratica." });
+    const sent = await sendCustomerEmail(config, {
+      ...message,
+      ...(answered ? { inReplyTo: answered.messageId, references: [...answered.references, answered.messageId] } : {})
+    });
+    const sentAt = new Date().toISOString();
+    const messageId = sent.messageId || `${lead.id}|${sentAt}`;
+    await saveMailIfNew({
+      id: mailRecordId(messageId), messageId, direction: "outbound", from: config.from.toLowerCase(), fromName: config.fromName, to: message.to,
+      subject: message.subject, text: message.text, receivedAt: sentAt, inReplyTo: answered?.messageId || "", references: answered ? [...answered.references, answered.messageId] : [],
+      leadId: lead.id, attachments: [], readAt: sentAt, readBy: actor.username, sentBy: actor.username
+    });
+    if (answered && !answered.readAt) await updateMail(answered.id, { readAt: sentAt, readBy: actor.username });
     await appendActivities([createActivity({
       leadId: lead.id, type: "email_sent", actor: actor.username,
       text: `Email inviata a ${message.to}: "${message.subject}".`,
@@ -1651,6 +1666,17 @@ async function applyPaymentRequest(res: http.ServerResponse, lead: any, body: an
   return sendJson(res, 200, safeLead(saved));
 }
 
+const inboxDeps: InboxDeps = {
+  findLeadIdByEmail: async (email) => (await findLeadByContact("", email))?.id || null,
+  onReceived: async (record: MailRecord) => {
+    await appendActivities([createActivity({
+      leadId: String(record.leadId), type: "email_received", actor: record.fromName || record.from,
+      text: `Email ricevuta da ${record.from}: "${record.subject || "(senza oggetto)"}".`,
+      meta: { mailId: record.id, from: record.from, subject: record.subject }
+    })]);
+  }
+};
+
 export const server = http.createServer(async (req, res) => {
   try {
     const method = req.method || "GET";
@@ -1675,6 +1701,32 @@ export const server = http.createServer(async (req, res) => {
           )
         );
       }
+    if (method === "GET" && pathname === "/mail/messages") {
+      const [messages, leads, sync] = await Promise.all([listMail(), listLeads(), readInboxSync()]);
+      const leadById = new Map(leads.map((lead: any) => [String(lead.id), lead]));
+      return sendJson(res, 200, {
+        configured: Boolean(inboxConfig()),
+        lastSyncAt: sync.lastSyncAt || null,
+        lastError: sync.lastError || null,
+        messages: messages.map((message) => ({ ...message, leadName: String((leadById.get(String(message.leadId)) as any)?.fullName || "") }))
+      });
+    }
+
+    const mailParams = routeMatch(pathname, "/mail/messages/:mailId");
+    if (mailParams && method === "PATCH") {
+      const body = await parseBody(req);
+      const mail = await getMail(mailParams.mailId);
+      if (!mail) return sendJson(res, 404, { error: "Email non trovata." });
+      if (body.linkLeadId) {
+        const lead = await getLeadById(String(body.linkLeadId));
+        if (!lead) return sendJson(res, 404, { error: "Pratica non trovata." });
+        await linkSenderToLead(mail.from, lead.id);
+        await inboxDeps.onReceived({ ...mail, leadId: lead.id });
+      }
+      if (body.read === true && !mail.readAt) await updateMail(mail.id, { readAt: new Date().toISOString(), readBy: String(body.actor || "") });
+      return sendJson(res, 200, await getMail(mail.id));
+    }
+
     if (method === "GET" && pathname === "/tasks/board") {
       const [tasksRows, leadsRows] = await Promise.all([listTasks({ status: query.status, leadId: query.leadId }), listLeads()]);
       return sendJson(res, 200, {
@@ -2605,8 +2657,14 @@ if (process.env.NODE_ENV !== "test") {
     cleanupLegacyAutomaticTaskDuplicates().catch(() => {});
     ensureSlaTasks().catch(() => {});
     let automationTickRunning = false;
+    let inboxSyncRunning = false;
+    const inbox = inboxConfig();
     setInterval(() => {
       ensureSlaTasks().catch(() => {});
+      if (inbox && !inboxSyncRunning) {
+        inboxSyncRunning = true;
+        syncInbox(imapMailbox(inbox), inbox.address, inboxDeps).catch(() => {}).finally(() => { inboxSyncRunning = false; });
+      }
       if (WHATSAPP_AUTOMATION_ENABLED && !automationTickRunning) {
         automationTickRunning = true;
         fetch(`${WHATSAPP_URL}/internal/automation/tick`, { method: "POST" })

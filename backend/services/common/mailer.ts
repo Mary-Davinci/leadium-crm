@@ -53,7 +53,8 @@ let transportFactory: (config: MailConfig) => Transport = (config) => nodemailer
 /** Tests only: replaces the SMTP transport. */
 export function setMailTransportFactory(factory: typeof transportFactory) { transportFactory = factory; }
 
-export async function sendCustomerEmail(config: MailConfig, message: { to: string; subject: string; text: string }) {
+/** inReplyTo and references keep an answer in the customer's conversation. */
+export async function sendCustomerEmail(config: MailConfig, message: { to: string; subject: string; text: string; inReplyTo?: string; references?: string[] }) {
   try {
     const info = await transportFactory(config).sendMail({
       from: { name: config.fromName, address: config.from },
@@ -61,7 +62,8 @@ export async function sendCustomerEmail(config: MailConfig, message: { to: strin
       ...(config.bcc ? { bcc: config.bcc } : {}),
       replyTo: config.from,
       subject: message.subject,
-      text: message.text
+      text: message.text,
+      ...(message.inReplyTo ? { inReplyTo: message.inReplyTo, references: message.references || [message.inReplyTo] } : {})
     });
     return { messageId: String(info?.messageId || "") };
   } catch {

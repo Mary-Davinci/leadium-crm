@@ -5,10 +5,12 @@ import path from "node:path";
 const BACKEND_ROOT = path.join(__dirname, "..", "..", "..");
 const TEST_DB_FILE = path.join(BACKEND_ROOT, "data", "db.lead-actions.test.json");
 const TEST_CHAT_DB_FILE = path.join(BACKEND_ROOT, "data", "whatsapp.lead-actions.test.json");
+const TEST_MAIL_DB_FILE = path.join(BACKEND_ROOT, "data", "mail.lead-actions.test.json");
 
 process.env.NODE_ENV = "test";
 process.env.JSON_DB_FILE = TEST_DB_FILE;
 process.env.WHATSAPP_DB_FILE = TEST_CHAT_DB_FILE;
+process.env.MAIL_DB_FILE = TEST_MAIL_DB_FILE;
 delete process.env.MONGO_URL;
 delete process.env.MONGODB_URI;
 for (const key of ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM", "MAIL_FROM_NAME", "MAIL_BCC"]) delete process.env[key];
@@ -17,6 +19,7 @@ const leadService = require("./server") as typeof import("./server");
 const leadStore = require("../common/leadStore") as typeof import("../common/leadStore");
 const taskStore = require("../common/taskStore") as typeof import("../common/taskStore");
 const mailer = require("../common/mailer") as typeof import("../common/mailer");
+const { ingestRawMail } = require("../common/mailInbox") as typeof import("../common/mailInbox");
 const { internalIdentityHeaders } = require("../common/internalCapability") as typeof import("../common/internalCapability");
 
 const ADMIN = { id: "u-admin", username: "admin.test", role: "admin" };
@@ -28,7 +31,7 @@ function resetDb() {
 }
 
 function cleanupDb() {
-  for (const file of [TEST_DB_FILE, TEST_CHAT_DB_FILE]) if (fs.existsSync(file)) fs.unlinkSync(file);
+  for (const file of [TEST_DB_FILE, TEST_CHAT_DB_FILE, TEST_MAIL_DB_FILE]) if (fs.existsSync(file)) fs.unlinkSync(file);
 }
 
 async function request(baseUrl: string, method: string, route: string, body?: unknown, trusted = true) {
@@ -159,11 +162,55 @@ async function emailChecks(baseUrl: string) {
   console.log("PASS email: practice address only, subject sanitized, Bcc to the mailbox, traced, SMTP errors and secrets never exposed");
 }
 
+async function replyChecks(baseUrl: string) {
+  resetDb();
+  fs.rmSync(TEST_MAIL_DB_FILE, { force: true });
+  const lead = await seedLead({ fullName: "Luciano Tantucci", phone: "+39 333 4000001", email: "luciano@example.test", assignedTo: "marta" });
+  const other = await seedLead({ fullName: "Altra pratica", phone: "+39 333 4000002", email: "altra@example.test" });
+  const sent: any[] = [];
+  mailer.setMailTransportFactory(() => ({ sendMail: async (message) => { sent.push(message); return { messageId: `<out${sent.length}@test>` }; } }));
+  Object.assign(process.env, { SMTP_HOST: "smtps.example.test", SMTP_PORT: "465", SMTP_USER: "servizioclienti@crocieriamo.com", SMTP_PASSWORD: "secret-value" });
+  try {
+    assert.equal((await request(baseUrl, "POST", `/leads/${lead.id}/email`, { subject: "Preventivo", text: "Buongiorno", __actor: OPERATOR })).status, 200);
+    const own = "servizioclienti@crocieriamo.com";
+    const reply = ["From: Luciano <privato@altro.test>", `To: ${own}`, "Subject: Re: Preventivo", "Message-ID: <r1@test>", "In-Reply-To: <out1@test>", "Date: Wed, 04 Nov 2026 10:00:00 +0100", "", "Accetto il preventivo."].join("\r\n");
+    const deps = { findLeadIdByEmail: async () => null, onReceived: async () => {} };
+    assert.equal((await ingestRawMail(reply, own, deps))?.leadId, lead.id, "the reply follows the mail the CRM sent");
+
+    const list = await request(baseUrl, "GET", "/mail/messages");
+    assert.deepEqual(list.body.messages.map((row: any) => [row.direction, row.leadName]).sort(), [["inbound", "Luciano Tantucci"], ["outbound", "Luciano Tantucci"]]);
+    const inbound = list.body.messages.find((row: any) => row.direction === "inbound");
+
+    assert.equal((await request(baseUrl, "POST", `/leads/${other.id}/email`, { subject: "x", text: "y", replyToMailId: inbound.id, __actor: OPERATOR })).status, 409, "a reply cannot be attached to another practice");
+    assert.equal(sent.length, 1, "nothing sent");
+
+    assert.equal((await request(baseUrl, "POST", `/leads/${lead.id}/email`, { subject: "Re: Preventivo", text: "Grazie", replyToMailId: inbound.id, __actor: OPERATOR })).status, 200);
+    assert.equal(sent[1].to, "luciano@example.test", "always the practice's address");
+    assert.equal(sent[1].inReplyTo, "<r1@test>");
+    assert.deepEqual(sent[1].references, ["<out1@test>", "<r1@test>"], "the customer's mail client keeps the conversation");
+    const after = await request(baseUrl, "GET", "/mail/messages");
+    assert.ok(after.body.messages.find((row: any) => row.id === inbound.id).readAt, "answering reads it");
+    assert.equal(after.body.messages.length, 3);
+
+    const unknown = await ingestRawMail(["From: ignoto@altro.test", `To: ${own}`, "Subject: Info", "Message-ID: <r2@test>", "", "Salve"].join("\r\n"), own, deps);
+    assert.equal(unknown?.leadId, null);
+    const linked = await request(baseUrl, "PATCH", `/mail/messages/${unknown?.id}`, { linkLeadId: lead.id, read: true, actor: "admin.test" });
+    assert.deepEqual([linked.status, linked.body.leadId, Boolean(linked.body.readAt)], [200, lead.id, true]);
+    const timeline = (await leadStore.getTimelineByLeadId(lead.id)) as any[];
+    assert.ok(timeline.some((row: any) => row.type === "email_received" && row.text.includes("ignoto@altro.test")), "the linked email reaches the practice's history");
+    assert.equal((await request(baseUrl, "PATCH", "/mail/messages/nope", { read: true })).status, 404);
+  } finally {
+    for (const key of ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD"]) delete process.env[key];
+  }
+  console.log("PASS email replies: threaded on the CRM mail, answered in the conversation, linked senders reach the history");
+}
+
 async function main() {
   await withServer(async (baseUrl) => {
     await archiveChecks(baseUrl);
     await workedChecks(baseUrl);
     await emailChecks(baseUrl);
+    await replyChecks(baseUrl);
   });
 }
 
