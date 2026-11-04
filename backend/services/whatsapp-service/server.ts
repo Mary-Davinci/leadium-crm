@@ -660,6 +660,13 @@ async function handleInboundWebhook(payload) {
       const contacts = Array.isArray(value.contacts) ? value.contacts : [];
       const messages = Array.isArray(value.messages) ? value.messages : [];
       const statuses = Array.isArray(value.statuses) ? value.statuses : [];
+      // Conversation Routing events (messaging_handovers, standby): no handling, but the trace dates
+      // a change of thread owner; names only, never message content.
+      if (change.field && change.field !== "messages") {
+        // eslint-disable-next-line no-console
+        console.log(`[whatsapp-service] webhook field=${String(change.field).slice(0, 40)} type=${String(value.type || "-").slice(0, 40)} newOwner=${String(value.new_owner_role || "-").slice(0, 40)}`);
+        await recordWhatsappDiagnostic({ lastRoutingEventAt: new Date().toISOString(), lastRoutingEventField: String(change.field).slice(0, 40) });
+      }
 
       for (const status of statuses) {
         if (status && status.id && status.status) {

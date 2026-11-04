@@ -16,6 +16,7 @@ export type MetaErrorCode =
   | "template_missing"
   | "rate_limit"
   | "unsupported"
+  | "thread_not_owned"
   | "provider_error";
 
 const FRIENDLY_MESSAGES: Record<MetaErrorCode, string> = {
@@ -31,6 +32,7 @@ const FRIENDLY_MESSAGES: Record<MetaErrorCode, string> = {
   template_missing: "Questo modello non esiste su WhatsApp Manager con questo nome e lingua (forse e stato eliminato): avvisa un amministratore.",
   rate_limit: "Troppi messaggi in poco tempo. Riprova tra qualche minuto.",
   unsupported: "Tipo di messaggio non supportato da WhatsApp.",
+  thread_not_owned: "Questa conversazione e controllata da un'altra app collegata al numero WhatsApp: riprovare non serve. Puoi inviare un template e avvisa un amministratore.",
   provider_error: "WhatsApp non ha accettato il messaggio. Riprova; se il problema continua avvisa un amministratore."
 };
 
@@ -48,6 +50,8 @@ export function classifyMetaError(httpStatus: number, metaCode?: number | null):
   if (code === 131031 || code === 131037 || code === 131045 || code === 368) return "account";
   if (code === 131052 || code === 131053) return "media";
   if (code === 131051) return "unsupported";
+  // Conversation Routing: only the thread owner sends free text; templates need no ownership.
+  if (code === 131070) return "thread_not_owned";
   if (code === 132001) return "template_missing";
   if (code >= 132000 && code < 133000) return "template";
   if (RATE_LIMIT_CODES.has(code)) return "rate_limit";

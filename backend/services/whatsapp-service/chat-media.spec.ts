@@ -137,6 +137,7 @@ async function main() {
     assert.equal(classifyMetaError(400, 131053), "media");
     assert.equal(classifyMetaError(429, 130429), "rate_limit");
     assert.equal(classifyMetaError(400, 131026), "undeliverable");
+    assert.equal(classifyMetaError(400, 131070), "thread_not_owned", "another app owns the thread: retrying the same text cannot work");
     assert.equal(classifyMetaError(500, null), "provider_error");
     const originalError = console.error;
     console.error = () => undefined;
