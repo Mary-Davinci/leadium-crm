@@ -38,6 +38,7 @@ const leadService = http.createServer(async (req, res) => {
   const body = await readBody(req);
   if (req.method === "GET" && req.url === "/internal/lead-owners") return reply(res, 200, Object.fromEntries(leads.map((lead) => [lead.id, lead.assignedTo || ""])));
   if (req.method === "GET" && req.url === "/leads") return reply(res, 200, leads);
+  if (req.method === "GET" && req.url === "/internal/dashboard-data") return reply(res, 200, { leads, tasks: [], calls: [], quotedLeadIds: [] });
   if (req.method === "GET" && String(req.url).startsWith("/leads/")) return reply(res, 200, { id: "ok" });
   if (req.method === "GET" && req.url?.startsWith("/tasks/board")) return reply(res, 200, { tasks, leads });
   if (req.method === "GET" && req.url?.startsWith("/tasks/")) { const task = tasks.find((row) => req.url?.endsWith(row.id)); return task ? reply(res, 200, task) : reply(res, 404, {}); }
@@ -219,6 +220,14 @@ async function main() {
     assert.equal((await call("GET", "/api/purchases/p2", "marta")).status, 403);
     assert.equal((await call("POST", "/api/leads/bulk-archive", "marta", { leadIds: ["lead-mine"], reason: "x" })).status, 403, "bulk archive is for admins");
     assert.equal((await call("GET", "/api/whatsapp/automation/state?leadId=lead-other", "marta")).status, 403);
+
+    assert.equal((await call("GET", "/api/dashboard/team", "marta")).status, 403, "the team view is for admins");
+    assert.equal((await call("POST", "/api/presence", "marta")).status, 200);
+    const dashboard = await call("GET", "/api/dashboard/team", "admin");
+    assert.equal(dashboard.status, 200);
+    assert.equal(dashboard.body.totals.unassigned, 1);
+    assert.ok(Array.isArray(dashboard.body.operators));
+    console.log("PASS team dashboard: admins only, real route");
     console.log("PASS operators reach only their own practices, on every path; admins keep the whole view");
   } finally {
     for (const server of [gateway.server, leadService, whatsappService]) server.close();

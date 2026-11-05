@@ -42,6 +42,17 @@ function getTitle(pathname: string) {
   return "Dashboard";
 }
 
+/** Tells the admin dashboard this operator has Leadium in front of them. */
+function usePresenceSignal() {
+  useEffect(() => {
+    const signal = () => { if (!document.hidden) void api("/api/presence", { method: "POST" }).catch(() => undefined); };
+    signal();
+    const timer = window.setInterval(signal, 60000);
+    document.addEventListener("visibilitychange", signal);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", signal); };
+  }, []);
+}
+
 function useUnreadMail(pathname: string) {
   const [unread, setUnread] = useState(0);
   useEffect(() => {
@@ -60,6 +71,7 @@ export function AppLayout() {
   const title = getTitle(pathname);
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
   const unreadMail = useUnreadMail(pathname);
+  usePresenceSignal();
   const menuItems = MENU.filter((item) =>
     item.to === "/users" || item.to === "/tasks" || item.to === "/reports/booking-activities" ? isAdmin : true
   );

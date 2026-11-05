@@ -23,6 +23,7 @@ import {
   isDocumentStorageEnabled,
   uploadDocumentBuffer
 } from "./document-storage";
+import { computeTeamDashboard } from "./dashboard-team";
 import { applyLeadImport, previewLeadImport } from "./lead-import";
 import { awaitsOperator, CHAT_FORBIDDEN_MESSAGE, CHAT_TAKEN_MESSAGE, chatOwner, LEAD_FORBIDDEN_MESSAGE, ownsChat } from "./whatsapp-access";
 import { isInternalServicePath, isTaskDismissBlocked, isValidThreeCxWebhookSecret, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
@@ -513,6 +514,7 @@ function mapApiRoute(pathname: string) {
   if (pathname.startsWith("/api/ingest/")) return { base: INGEST_URL, path: pathname.replace(/^\/api\/ingest/, "") };
   if (pathname.startsWith("/api/whatsapp/")) return { base: WHATSAPP_URL, path: pathname.replace(/^\/api\/whatsapp/, "") };
   if (pathname.startsWith("/api/mail/")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
+  if (pathname === "/api/dashboard/team" || pathname === "/api/presence") return { base: LEAD_URL, path: pathname };
   return null;
 }
 
@@ -744,6 +746,30 @@ async function handleOperatorScope(req: http.IncomingMessage, res: http.ServerRe
   }
   if (path.startsWith("/api/customers") || path.startsWith("/api/purchases")) return refuse();
   return false;
+}
+
+// Last signal from each signed-in user's open Leadium page, kept only in memory: a restart simply
+// shows "Non attivo" until the next minute's signal.
+const lastSeenByUser = new Map<string, number>();
+
+async function buildTeamDashboard() {
+  const [dataResponse, chatResponse, users] = await Promise.all([
+    fetch(`${LEAD_URL}/internal/dashboard-data`), fetch(`${WHATSAPP_URL}/conversations`), listUsers()
+  ]);
+  if (!dataResponse.ok || !chatResponse.ok) throw new Error("Impossibile leggere i dati della dashboard.");
+  const data = (await dataResponse.json()) as any;
+  const owners = await fetchLeadOwners();
+  const conversations = ((await chatResponse.json()) as any[]).map((conversation) => ({ ...conversation, assignedTo: chatOwner(conversation, owners) }));
+  const operators = users.filter((user) => user.role === "operatore");
+  // A 3CX problem must not hide the rest of the page: the operators just show as not on a call.
+  const onCall = await Promise.all(operators.filter((user) => user.threeCxDn).map(async (user) => {
+    try {
+      const live = await fetch(`${CALL_URL}/3cx/live?dn=${encodeURIComponent(String(user.threeCxDn))}`, { headers: callControlInternalHeaders() });
+      const state = (await live.json()) as { calls?: unknown[] };
+      return state.calls?.length ? String(user.threeCxDn) : "";
+    } catch { return ""; }
+  }));
+  return computeTeamDashboard({ ...data, conversations, operators, lastSeen: lastSeenByUser, onCallDns: new Set(onCall.filter(Boolean)), now: Date.now() });
 }
 
 /** Replies follow the same rule as chats: the practice's operator, admins, and only admins for unmatched senders. */
@@ -1295,6 +1321,14 @@ export const server = http.createServer(async (req, res) => {
     if (pathname === "/api/whatsapp/templates/test-send" && method === "POST" && isWhatsappTemplateTestSendBlocked(session.user.role)) {
       sendJson(res, 403, { error: "Solo admin e super admin possono inviare template di test." });
       return;
+    }
+    if (pathname === "/api/presence" && method === "POST") {
+      lastSeenByUser.set(String(session.user.username).trim().toLowerCase(), Date.now());
+      return sendJson(res, 200, { ok: true });
+    }
+    if (pathname === "/api/dashboard/team" && method === "GET") {
+      if (!isAdmin(session.user)) return sendJson(res, 403, { error: "Riservato agli amministratori." });
+      return sendJson(res, 200, await buildTeamDashboard());
     }
     if (pathname.startsWith("/api/mail/")) return await handleMailRoute(req, res, pathname, method, session.user);
     if (pathname.startsWith("/api/whatsapp/") && (await handleChatRoute(req, res, pathname, method, url.search, session.user))) return;

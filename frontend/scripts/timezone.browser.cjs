@@ -29,6 +29,7 @@ mailer.setMailTransportFactory(()=>({sendMail:async()=>({messageId:'local-test'}
 const gateway=require(root+'/backend/dist/services/api-gateway/server.js');
 const user={id:'lead-actions-browser-user',username:'lead-actions-browser',name:'Payment Browser',role:'admin'};
 gateway.__setTestSession('lead-actions-browser-session',user);
+gateway.__setTestSession('marta-session',{id:'marta',username:'marta',name:'Marta',role:'operatore'});
 const gatewayUrl=await listen(gateway.server);
 const ids={};
 for(const [key,statuses,amounts]of [['editable',['pending','pending'],[0,0]],['legacy',['verified','received'],[300,900]],['zero',['pending','pending'],[0,0]]]){
@@ -90,15 +91,16 @@ const ready = new Promise((resolve, reject) => {
       // Dashboard deadlines advance without interaction; data refreshes every minute.
       const dueAt = '2026-11-02T09:31:15.000Z';
       const created = await fetch(fixture.gatewayUrl + '/api/tasks', { method: 'POST', headers, body: JSON.stringify({
-        leadId: id, kind: 'manual', title: 'Scadenza orologio ' + zone, priority: 80, dueAt, assignedTo: 'marta'
+        leadId: id, kind: 'call', title: 'Scadenza orologio ' + zone, priority: 80, dueAt, assignedTo: 'marta'
       }) });
       assert.equal(created.status, 201);
       let reads = 0;
       await page.route('**/api/tasks/board', route => { reads++; return route.continue(); });
+      await page.addInitScript(() => { localStorage.setItem('crm.auth.token', 'marta-session'); localStorage.setItem('crm.auth.user', JSON.stringify({ id: 'marta', username: 'marta', name: 'Marta', role: 'operatore' })); });
       await page.goto(fixture.frontUrl + '/dashboard');
-      const taskRow = page.locator('.cd-task').filter({ hasText: 'Scadenza orologio ' + zone });
+      const taskRow = page.locator('.cd-agenda-row').first();
       await taskRow.waitFor();
-      assert.equal(await taskRow.locator('.cd-badge').innerText(), 'Oggi');
+      assert.match(await taskRow.locator('.cd-agenda-state').innerText(), /^Tra \d+ min$/);
       const readsBefore = reads;
       await page.clock.runFor(90000);
       await taskRow.getByText('In ritardo', { exact: true }).waitFor();

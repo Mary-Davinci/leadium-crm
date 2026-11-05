@@ -7,7 +7,7 @@ const SNOOZE_STORAGE_KEY = "leadium.scheduledCalls.snoozed";
 
 // A callback leaves two tasks on the practice (next_action and callback_reminder) with the same
 // time: the first kind listed here is the one kept. Paperwork and quote tasks are not calls.
-const CALL_KINDS = ["callback_reminder", "callback_overdue", "appointment_reminder", "call", "follow_up", "next_action"];
+export const CALL_KINDS = ["callback_reminder", "callback_overdue", "appointment_reminder", "call", "follow_up", "next_action"];
 
 export type ScheduledCallLead = { id: string; fullName?: string; phone?: string };
 export type ScheduledCall = { taskId: string; dueAt: string; leadId: string; customerName: string; phone: string };

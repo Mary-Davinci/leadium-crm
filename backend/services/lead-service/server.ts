@@ -1792,6 +1792,17 @@ export const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, Object.fromEntries((await listLeads({})).map((lead: any) => [String(lead.id), String(lead.assignedTo || "")])));
     }
 
+    // What the admin dashboard counts: raw practices, not merged by contact like the public list.
+    if (method === "GET" && pathname === "/internal/dashboard-data") {
+      const [leads, tasks, calls, quotes] = await Promise.all([listLeads({}), listTasks({ status: "open" }), listCallLogs(1000), listActivitiesByType("quote_sent")]);
+      return sendJson(res, 200, {
+        leads: leads.map((lead: any) => ({ id: lead.id, assignedTo: lead.assignedTo || "", status: lead.status || "", closingOutcome: lead.closingOutcome || "open", closedAt: lead.closedAt || null, nextActionAt: lead.nextActionAt || null })),
+        tasks: tasks.map((task: any) => ({ leadId: task.leadId || "", kind: task.kind, status: task.status, dueAt: task.dueAt || null })),
+        calls: calls.map((call: any) => ({ leadId: call.leadId || "", actor: call.actor || "", startedAt: call.startedAt })),
+        quotedLeadIds: quotes.map((activity: any) => String(activity.leadId))
+      });
+    }
+
     if (method === "GET" && pathname === "/mail/messages") {
       const [messages, leads, sync] = await Promise.all([listMail(), listLeads(), readInboxSync()]);
       const leadById = new Map(leads.map((lead: any) => [String(lead.id), lead]));
