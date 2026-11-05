@@ -62,6 +62,8 @@ export function computeTeamDashboard(input: TeamDashboardInput) {
     };
     rows.push(row);
     identityKeys(operator as any).forEach((identity) => rowByIdentity.set(identity, row));
+    // Calls logged by 3CX carry the extension as their author.
+    if (operator.threeCxDn) rowByIdentity.set(normalize(operator.threeCxDn), row);
   }
   const rowOf = (owner: unknown) => rowByIdentity.get(normalize(owner)) || null;
 

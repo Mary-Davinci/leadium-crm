@@ -81,6 +81,36 @@ async function main() {
     assert.equal(leadService.normalizeThreeCxDisposition(undefined), "completed");
   });
 
+  await runCase("numero sconosciuto: la chiamata in arrivo crea il contatto, senza mai perderla", async () => { await withServer(async (baseUrl) => {
+    const auth = require("../api-gateway/auth-store");
+    const original = auth.listUsers;
+    auth.listUsers = async () => [{ id: "u1", username: "marta", name: "Marta", role: "operatore", threeCxDn: "901" }, { id: "u2", username: "capo", name: "Capo", role: "admin", threeCxDn: "913" }];
+    const stored = async (phone: string) => (await request(baseUrl, "GET", `/leads?search=${encodeURIComponent(phone)}`)).body as any[];
+    try {
+      const startedAt = new Date().toISOString();
+      const missed = await callEvent(baseUrl, { callId: "901001", direction: "inbound", from: "+393401000001", startedAt, endedAt: startedAt, disposition: "no_answer", eventType: "call_control_final" });
+      assert.equal(missed.body.matched, true, "a missed call from a new customer is recorded");
+      const [waiting] = await stored("+393401000001");
+      assert.deepEqual([waiting.assignedTo, waiting.source, waiting.fullName], ["", "3cx_chiamata", "Chiamata da +393401000001"], "it waits for the admin");
+
+      await callEvent(baseUrl, { callId: "901002", direction: "inbound", from: "+393401000002", agent: "901", startedAt, answeredAt: startedAt, endedAt: startedAt, durationSeconds: 60, disposition: "completed", eventType: "call_control_final" });
+      assert.equal((await stored("+393401000002"))[0].assignedTo, "marta", "who answered keeps the customer");
+
+      await callEvent(baseUrl, { callId: "901003", direction: "inbound", from: "+393401000003", agent: "913", startedAt, answeredAt: startedAt, endedAt: startedAt, disposition: "completed", eventType: "call_control_final" });
+      assert.equal((await stored("+393401000003"))[0].assignedTo, "", "an admin picking up does not take the customer from the distribution");
+
+      const again = await callEvent(baseUrl, { callId: "901004", direction: "inbound", from: "+393401000001", startedAt: new Date(Date.now() + 3600_000).toISOString(), disposition: "no_answer", eventType: "call_control_final" });
+      assert.equal(again.body.leadId, waiting.id, "the second call lands on the same contact");
+      assert.equal((await stored("+393401000001")).length, 1);
+
+      assert.equal((await callEvent(baseUrl, { callId: "901005", direction: "outbound", from: "+393401000005", disposition: "completed" })).body.matched, false, "an outgoing call to another number creates nothing");
+      assert.equal((await callEvent(baseUrl, { callId: "901006", from: "+393401000006", disposition: "completed" })).body.matched, false, "without a direction nothing is assumed");
+      assert.equal((await callEvent(baseUrl, { callId: "901007", direction: "inbound", from: "123", disposition: "completed" })).body.matched, false, "a short code is not a customer");
+    } finally {
+      auth.listUsers = original;
+    }
+  }); });
+
   await runCase("no_answer 3CX: stato Non risponde, attivita con tentativo, durata e template suggerito", async () => {
     await withServer(async (baseUrl) => {
       const lead = await createLead(baseUrl);

@@ -32,6 +32,7 @@ import { resolveLeadAssociationForPhone, tryHandleCustomerRoutes } from "./custo
 import { rowsToCsv } from "../common/csv";
 import { MailError, mailConfig, sendCustomerEmail, validateCustomerEmail } from "../common/mailer";
 import { getMail, linkSenderToLead, listMail, mailRecordId, MailRecord, readInboxSync, saveMailIfNew, updateMail } from "../common/mailStore";
+import { listUsers } from "../api-gateway/auth-store";
 import { imapMailbox, importSentMail, inboxConfig, InboxDeps, syncInbox } from "../common/mailInbox";
 import { BOOKING_ACTIVITY_HEADERS, BookingActivityFilters, buildBookingActivityCsvRows, buildBookingActivityRows, filterBookingActivityRows } from "./booking-report";
 
@@ -1585,10 +1586,118 @@ function validIsoOrNull(value: unknown) {
  */
 const THREECX_SAME_CALL_WINDOW_MS = 30 * 60_000;
 
+async function ingestLead(body: any): Promise<{ status: number; payload: any }> {
+  initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS); // validate before customer/lead mutations
+  const source = String(body.source || "ingest").trim();
+  const fullName = String(body.fullName || "").trim();
+  const phone = String(body.phone || "").trim();
+  const email = String(body.email || "").trim();
+  if (!fullName && !phone && !email) return { status: 400, payload: { error: "Payload ingest privo di identificativi utili." } };
+  const existing = await findLeadByContact(phone, email);
+  const actor = source;
+  const now = new Date().toISOString();
+  const sourceFields = extractLeadSourceFields(body, source);
+  if (existing && !isTerminalClosingOutcome(existing)) {
+    if (fullName && !existing.fullName) existing.fullName = fullName;
+    if (phone && !existing.phone) existing.phone = phone;
+    if (email && !existing.email) existing.email = email;
+    applyLeadSourceFields(existing, sourceFields, false);
+    existing.notes = appendNote(existing.notes, body.notes);
+    existing.updatedAt = now;
+    const existingCustomer = await findOrCreateCustomerByContact({ phone: existing.phone, email: existing.email, fullName: existing.fullName });
+    if (existingCustomer) existing.customerId = existingCustomer.id;
+    await saveLead(existing);
+    const metaSync = await syncLeadToMetaCrm(existing, { stage: "initial", eventTime: existing.createdAt || now });
+    await persistMetaSyncIfChanged(existing, metaSync);
+    await appendActivities([
+      createActivity({
+        leadId: existing.id,
+        type: "lead_ingested",
+        text: `Lead aggiornato da sorgente ${source}.`,
+        actor,
+        meta: { source, raw: body.raw || null }
+      })
+    ]);
+    return { status: 200, payload: { mode: "updated", lead: safeLead(existing) } };
+  }
+  const contactCustomer = await findOrCreateCustomerByContact({ phone, email, fullName });
+  const lead = {
+    id: newId("lead"),
+    fullName: fullName || `Lead ${source}`,
+    phone: phone || "",
+    email: email || "",
+    source,
+    budget: body.budget || "",
+    assignedTo: body.assignedTo || "",
+    status: LEAD_STATUSES.TO_CONTACT,
+    notes: body.notes || "",
+    ...sourceFields,
+    assignedAt: body.assignedTo ? now : null,
+    firstContactAt: null,
+    lastContactAt: null,
+    slaDueAt: null,
+    closingOutcome: "open",
+    lossReason: null,
+    lossDetail: null,
+    customerId: contactCustomer?.id || null,
+    practiceReview: null,
+    documents: normalizePracticeDocuments(body.documents),
+    payments: initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS),
+    callAttempts: 0,
+    nextActionAt: null,
+    createdAt: now,
+    updatedAt: now
+  };
+  syncLeadSlaState(lead);
+  const ingestActivities = [
+    createActivity({ leadId: lead.id, type: "lead_created", text: "Lead creato.", actor }),
+    createActivity({
+      leadId: lead.id,
+      type: "lead_ingested",
+      text: `Lead acquisito da sorgente ${source}.`,
+      actor,
+      meta: { source, raw: body.raw || null }
+    })
+  ];
+  if (existing) {
+    ingestActivities.push(
+      createActivity({
+        leadId: lead.id,
+        type: "lead_new_opportunity",
+        text: `Nuova opportunita per un cliente gia noto (lead precedente ${existing.id}, esito "${existing.closingOutcome || "open"}").`,
+        actor,
+        meta: { previousLeadId: existing.id, previousClosingOutcome: existing.closingOutcome || "open" }
+      })
+    );
+  }
+  await createLead(lead, ingestActivities);
+  await syncDocumentChecklistTask(lead);
+  await syncPaymentChecklistTask(lead);
+  const metaSync = await syncLeadToMetaCrm(lead, { stage: "initial", eventTime: lead.createdAt || now });
+  await persistMetaSyncIfChanged(lead, metaSync);
+  return { status: 201, payload: { mode: "created", lead: safeLead(lead) } };
+}
+
+/**
+ * A customer who calls is never lost: a number with no practice becomes one. Whoever answered
+ * keeps it, or nobody else could see it; a missed call waits for the admin in "Da assegnare".
+ * Only for real incoming calls: the operators' outgoing calls to other numbers stay out.
+ */
+async function leadFromUnknownCaller(body: any, phone: string) {
+  if (body.direction !== "inbound" || phone.replace(/\D/g, "").length < 7) return null;
+  let assignedTo = "";
+  if (body.answeredAt && body.agent) {
+    const users = await listUsers().catch(() => []);
+    assignedTo = users.find((user) => user.role === "operatore" && user.threeCxDn === String(body.agent))?.username || "";
+  }
+  const created = await ingestLead({ source: "3cx_chiamata", fullName: `Chiamata da ${phone}`, phone, assignedTo, notes: "Contatto creato da una chiamata in arrivo." });
+  return created.payload?.lead?.id ? getLeadById(created.payload.lead.id) : null;
+}
+
 async function handleCallEvent(body: any) {
   const externalId = body.externalLeadId ? String(body.externalLeadId) : null;
   const incomingNumber = body.from ? String(body.from) : "";
-  const lead = await findLeadByExternalOrPhone(externalId, incomingNumber);
+  const lead = (await findLeadByExternalOrPhone(externalId, incomingNumber)) || (await leadFromUnknownCaller(body, incomingNumber));
   if (!lead) return { ok: true, matched: false };
 
   const eventType = body.eventType || "call_event";
@@ -2061,96 +2170,8 @@ export const server = http.createServer(async (req, res) => {
     }
 
     if (method === "POST" && pathname === "/internal/ingest") {
-      const body = await parseBody(req);
-      initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS); // validate before customer/lead mutations
-      const source = String(body.source || "ingest").trim();
-      const fullName = String(body.fullName || "").trim();
-      const phone = String(body.phone || "").trim();
-      const email = String(body.email || "").trim();
-      if (!fullName && !phone && !email) return sendJson(res, 400, { error: "Payload ingest privo di identificativi utili." });
-      const existing = await findLeadByContact(phone, email);
-      const actor = source;
-      const now = new Date().toISOString();
-      const sourceFields = extractLeadSourceFields(body, source);
-      if (existing && !isTerminalClosingOutcome(existing)) {
-        if (fullName && !existing.fullName) existing.fullName = fullName;
-        if (phone && !existing.phone) existing.phone = phone;
-        if (email && !existing.email) existing.email = email;
-        applyLeadSourceFields(existing, sourceFields, false);
-        existing.notes = appendNote(existing.notes, body.notes);
-        existing.updatedAt = now;
-        const existingCustomer = await findOrCreateCustomerByContact({ phone: existing.phone, email: existing.email, fullName: existing.fullName });
-        if (existingCustomer) existing.customerId = existingCustomer.id;
-        await saveLead(existing);
-        const metaSync = await syncLeadToMetaCrm(existing, { stage: "initial", eventTime: existing.createdAt || now });
-        await persistMetaSyncIfChanged(existing, metaSync);
-        await appendActivities([
-          createActivity({
-            leadId: existing.id,
-            type: "lead_ingested",
-            text: `Lead aggiornato da sorgente ${source}.`,
-            actor,
-            meta: { source, raw: body.raw || null }
-          })
-        ]);
-        return sendJson(res, 200, { mode: "updated", lead: safeLead(existing) });
-      }
-      const contactCustomer = await findOrCreateCustomerByContact({ phone, email, fullName });
-      const lead = {
-        id: newId("lead"),
-        fullName: fullName || `Lead ${source}`,
-        phone: phone || "",
-        email: email || "",
-        source,
-        budget: body.budget || "",
-        assignedTo: body.assignedTo || "",
-        status: LEAD_STATUSES.TO_CONTACT,
-        notes: body.notes || "",
-        ...sourceFields,
-        assignedAt: body.assignedTo ? now : null,
-        firstContactAt: null,
-        lastContactAt: null,
-        slaDueAt: null,
-        closingOutcome: "open",
-        lossReason: null,
-        lossDetail: null,
-        customerId: contactCustomer?.id || null,
-        practiceReview: null,
-        documents: normalizePracticeDocuments(body.documents),
-        payments: initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS),
-        callAttempts: 0,
-        nextActionAt: null,
-        createdAt: now,
-        updatedAt: now
-      };
-      syncLeadSlaState(lead);
-      const ingestActivities = [
-        createActivity({ leadId: lead.id, type: "lead_created", text: "Lead creato.", actor }),
-        createActivity({
-          leadId: lead.id,
-          type: "lead_ingested",
-          text: `Lead acquisito da sorgente ${source}.`,
-          actor,
-          meta: { source, raw: body.raw || null }
-        })
-      ];
-      if (existing) {
-        ingestActivities.push(
-          createActivity({
-            leadId: lead.id,
-            type: "lead_new_opportunity",
-            text: `Nuova opportunita per un cliente gia noto (lead precedente ${existing.id}, esito "${existing.closingOutcome || "open"}").`,
-            actor,
-            meta: { previousLeadId: existing.id, previousClosingOutcome: existing.closingOutcome || "open" }
-          })
-        );
-      }
-      await createLead(lead, ingestActivities);
-      await syncDocumentChecklistTask(lead);
-      await syncPaymentChecklistTask(lead);
-      const metaSync = await syncLeadToMetaCrm(lead, { stage: "initial", eventTime: lead.createdAt || now });
-      await persistMetaSyncIfChanged(lead, metaSync);
-      return sendJson(res, 201, { mode: "created", lead: safeLead(lead) });
+      const result = await ingestLead(await parseBody(req));
+      return sendJson(res, result.status, result.payload);
     }
 
     if (method === "POST" && pathname === "/tasks") {

@@ -76,6 +76,12 @@ console.log("PASS closed practices are the ones of the Chiuse tab");
 }
 
 {
+  const result = computeTeamDashboard({ ...base, calls: [{ leadId: "", actor: "913", startedAt: at(-10) }] });
+  assert.equal(row(result, "marta").done, 1, "3CX logs the extension, which belongs to the operator");
+  console.log("PASS a call logged by extension counts for its operator");
+}
+
+{
   const leads = [{ id: "1", assignedTo: "marta" }, { id: "2", assignedTo: "marta" }, { id: "3", assignedTo: "marta", nextActionAt: at(600) }, { id: "4", assignedTo: "marta", closingOutcome: "lost" }];
   const result = computeTeamDashboard({ ...base, leads, tasks: [{ leadId: "1", kind: "quote_preparation", status: "open" }], quotedLeadIds: ["1", "1", "2", "3", "4"] });
   assert.deepEqual([row(result, "marta").quotes, row(result, "marta").quotesOpen], [3, 1], "closed practices leave, a repeated quote counts once, a next step of any kind counts");

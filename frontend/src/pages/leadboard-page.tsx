@@ -2,7 +2,7 @@ import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useClock } from "../lib/use-clock";
 import { BulkLeadDialog, describeBulkResult } from "../features/practices/components/BulkLeadDialog";
 import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
-import { isStaleLead, isWorkedLead, STALE_MONTHS } from "../features/practices/worked";
+import { isClosedLead, isStaleLead, isWorkedLead, STALE_MONTHS } from "../features/practices/worked";
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { getAuthUser } from "../lib/auth";
@@ -283,7 +283,7 @@ export function LeadBoardPage() {
   const importedUnassignedLeads = useMemo(
     () =>
       [...leads]
-        .filter((lead) => !normalizeKey(lead.assignedTo) && String(lead.source || "").toLowerCase().startsWith("excel_"))
+        .filter((lead) => !normalizeKey(lead.assignedTo) && !isClosedLead(lead))
         .sort(compareLeadsForAssignment),
     [leads]
   );
