@@ -5,6 +5,7 @@ import { api, ApiError } from "../../lib/api";
 import { apiUrl } from "../../lib/api-url";
 import { clearSession, getAuthToken } from "../../lib/auth";
 import { buildPracticeUrl } from "../practices/practice-links";
+import { useIncomingAlert, type IncomingAlertState } from "./incoming-alert";
 import "../../styles/threecx-live.css";
 
 /** Observed phase of the agent leg (from PBX events, never from the API acceptance). */
@@ -52,8 +53,9 @@ type CallContext = {
   calls: LiveCall[];
   message: string;
   registerOutcomeHandler(leadId: string, open: () => void): () => void;
+  incomingAlert: IncomingAlertState;
 };
-const Context = createContext<CallContext>({ dial: async () => false, busy: false, dn: "", calls: [], message: "", registerOutcomeHandler: () => () => {} });
+const Context = createContext<CallContext>({ dial: async () => false, busy: false, dn: "", calls: [], message: "", registerOutcomeHandler: () => () => {}, incomingAlert: { permission: "unsupported", dismissed: true, enable() {}, dismiss() {} } });
 export const useThreeCx = () => useContext(Context);
 
 export const OBSERVATION_WINDOW_MS = 60000;
@@ -149,13 +151,21 @@ export function describeAttempt(attempt: Attempt, now: number): AttemptView {
     : { ...base, tone: "warn", title: "Nessun evento dal centralino", detail: "La richiesta e stata accettata ma 3CX non ha segnalato la chiamata. Controlla il client 3CX o il registro chiamate." };
 }
 
-export async function consumeCallStream(response: Response, receive: (event: string, data: any) => void) {
+/** The server sends a heartbeat every few seconds: this much silence means the link is dead. */
+export const STREAM_IDLE_MS = 30000;
+
+export async function consumeCallStream(response: Response, receive: (event: string, data: any) => void, idleMs = STREAM_IDLE_MS) {
   if (!response.body) throw new Error("Stream non disponibile");
   const reader = response.body.getReader(), decoder = new TextDecoder();
   let buffer = "";
   try {
     while (true) {
-      const part = await reader.read();
+      // After sleep or a network change a read can wait forever while calls arrive unseen.
+      let idle: ReturnType<typeof setTimeout> | undefined;
+      const part = await Promise.race([
+        reader.read(),
+        new Promise<never>((_resolve, reject) => { idle = setTimeout(() => reject(new Error("Stream fermo")), idleMs); })
+      ]).finally(() => clearTimeout(idle));
       if (part.done) break;
       buffer += decoder.decode(part.value, { stream: true });
       if (buffer.length > 1000000) throw new Error("Stream non valido");
@@ -194,6 +204,7 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
   const knownCallIds = useRef(new Set<string>());
   const panelRef = useRef<HTMLElement>(null);
   const attemptCounter = useRef(0);
+  const incomingAlert = useIncomingAlert(calls);
   const hasPanel = Boolean(message || attempt || calls.length > 0 || (dn && !available));
 
   useEffect(() => {
@@ -391,7 +402,7 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
     ? (attempt.stage === "choosing" ? "Scegli il dispositivo 3CX" : describeAttempt(attempt, now).title)
     : otherCalls.length ? `${otherCalls.length} ${otherCalls.length === 1 ? "chiamata" : "chiamate"} 3CX` : "Telefono 3CX";
 
-  return <Context.Provider value={{ dial, busy, dn, calls, message, registerOutcomeHandler }}>
+  return <Context.Provider value={{ dial, busy, dn, calls, message, registerOutcomeHandler, incomingAlert }}>
     {children}
     {hasPanel && <aside ref={panelRef} className={`threecx-live${collapsed ? " is-collapsed" : ""}`} aria-label="Chiamate 3CX">
       {collapsed

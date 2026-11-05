@@ -71,6 +71,15 @@ export function OperatorDashboard({ onSummary }: { onSummary(text: string): void
     </div>
     {error && <div className="cd-error" role="alert">{syncedAt ? "Aggiornamento non riuscito: i dati mostrati sono dell’ultima sincronizzazione. " : "Caricamento non riuscito. "}{error}<button className="cd-link" onClick={() => void load()} disabled={loading}>Riprova</button></div>}
 
+    {threeCx.dn && threeCx.incomingAlert.permission === "default" ? <p className="cd-alert-offer">
+      <span>Attiva gli avvisi per non perdere le chiamate quando lavori su altri programmi.</span>
+      <button type="button" className="cd-pill" onClick={threeCx.incomingAlert.enable}>Attiva</button>
+    </p> : null}
+    {threeCx.dn && threeCx.incomingAlert.permission === "denied" && !threeCx.incomingAlert.dismissed ? <p className="cd-alert-offer">
+      <span>Gli avvisi di chiamata sono bloccati: riattivali dal lucchetto accanto all’indirizzo del sito.</span>
+      <button type="button" className="cd-link" onClick={threeCx.incomingAlert.dismiss}>Chiudi</button>
+    </p> : null}
+
     <section className="cd-next" aria-label="Prossima chiamata">
       {next ? <>
         <div className="cd-next-copy">

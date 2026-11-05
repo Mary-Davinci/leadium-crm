@@ -36,6 +36,13 @@ export type MonitorState = {
 export const emptyMonitorState = (): MonitorState => ({ calls: {}, finals: {} });
 export const legKey = (dn: string, id: number) => `${dn}/${id}`;
 
+const GAP_REASONS: IncompleteReason[] = ["stream_gap", "disconnected", "checkpoint_recovery", "participant_disappeared"];
+
+/** Our link dropped, nothing about the call itself is in doubt. */
+export function observationGapOnly(call: ObservedCall) {
+  return Boolean(call.incompleteReasons?.length) && call.incompleteReasons!.every((reason) => GAP_REASONS.includes(reason));
+}
+
 export function markCallIncomplete(call: ObservedCall, reason: IncompleteReason) {
   call.uncertain = true;
   call.incompleteReasons = [...new Set([...(call.incompleteReasons || []), reason])];
@@ -98,9 +105,11 @@ export function removeParticipant(state: MonitorState, dn: string, id: number, a
 export function finalizeCalls(state: MonitorState, now: number) {
   for (const [id, call] of Object.entries(state.calls)) {
     if (!call.readyAt || call.readyAt > now || !call.endedAt || Object.values(call.legs).some(leg => leg.active)) continue;
-    // Incomplete observations must not turn a lost connection into an invented missed call.
+    // Incomplete observations must not turn a lost connection into an invented missed call. A
+    // conversation already seen answered did happen: only its end time is approximate.
+    const answeredThroughGap = Boolean(call.uncertain && call.answeredAt && observationGapOnly(call));
     const reasons = [
-      ...(call.uncertain ? call.incompleteReasons?.length ? call.incompleteReasons : ["incomplete_observation"] : []),
+      ...(call.uncertain && !answeredThroughGap ? call.incompleteReasons?.length ? call.incompleteReasons : ["incomplete_observation"] : []),
       ...(!call.customer ? ["missing_external_number"] : []),
       ...(!call.direction ? ["missing_direction"] : [])
     ];
@@ -110,7 +119,9 @@ export function finalizeCalls(state: MonitorState, now: number) {
       endedAt: call.endedAt,
       durationSeconds: call.answeredAt ? Math.max(0, Math.round((Date.parse(call.endedAt) - Date.parse(call.answeredAt)) / 1000)) : 0,
       disposition: call.answeredAt ? "completed" : "no_answer", eventType: "call_control_final",
-      note: "3CX Call Control: tempi osservati dal listener; durata dalla prima risposta osservata."
+      note: answeredThroughGap
+        ? "3CX Call Control: collegamento interrotto durante la chiamata, fine e durata approssimate."
+        : "3CX Call Control: tempi osservati dal listener; durata dalla prima risposta osservata."
     } : null;
     state.finals[id] = { event, delivered: event === null, finalizedAt: new Date(now).toISOString(), ...(event ? {} : { incompleteReasons: reasons }) };
     delete state.calls[id];

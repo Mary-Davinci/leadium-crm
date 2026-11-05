@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { emptyMonitorState, finalizeCalls, legKey, markCallIncomplete, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
+import { emptyMonitorState, finalizeCalls, legKey, markCallIncomplete, MonitorState, observationGapOnly, observeParticipant, removeParticipant } from "./threecx-normalizer";
 import { isAgentDn, isMonitoredDn, monitoredDns } from "./threecx-topology";
 import { MonitorStore } from "./threecx-store";
 import type { CallPhase, LiveCall } from "./threecx-controller";
@@ -144,7 +144,8 @@ export class ThreeCxMonitor {
     if (!this.config.enabled || !this.status.connected) return [];
     const calls: LiveCall[] = [];
     for (const call of Object.values(this.state.calls)) {
-      if (call.uncertain || !call.direction) continue;
+      // After a gap the leg is live again: the operator keeps the card and can hang up.
+      if ((call.uncertain && !observationGapOnly(call)) || !call.direction) continue;
       for (const [key, leg] of Object.entries(call.legs)) {
         if (!leg.active || classifyMonitoredDn(leg.dn, this.dnTypes.get(leg.dn) || "Unknown") !== "Agent") continue;
         const participant = this.liveParticipants.get(key);
@@ -435,7 +436,10 @@ export class ThreeCxMonitor {
     while (!closed && !this.abort.signal.aborted) {
       await Promise.race([sleep(this.deps.tickMs || 1000, this.abort.signal), ended]);
       if (closed || this.abort.signal.aborted) break;
-      if (this.now() >= this.expiresAt) { socket.terminate(); break; }
+      // Renew in place: dropping the socket here cost every call in progress its record, every 48 min.
+      if (this.now() >= this.expiresAt) {
+        try { await this.authenticate(); } catch { socket.terminate(); break; }
+      }
       if (this.now() - lastHeartbeat >= 15000) {
         if (!alive) { this.status.lastError = new MonitorStageError("monitor_transport_failed").message; socket.terminate(); break; }
         alive = false; socket.ping(); lastHeartbeat = this.now();

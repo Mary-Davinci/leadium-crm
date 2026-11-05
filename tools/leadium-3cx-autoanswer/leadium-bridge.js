@@ -6,7 +6,9 @@ function send(message) {
 window.addEventListener("message", (event) => {
   if (event.source !== window || event.origin !== window.location.origin) return;
   const data = event.data;
-  if (!data || data.source !== "leadium-3cx-autoanswer" || data.type !== "callback-expected") return;
+  if (!data || data.source !== "leadium-3cx-autoanswer") return;
+  if (data.type === "dial-started") { send({ type: "dial-started" }); return; }
+  if (data.type !== "callback-expected") return;
   if (typeof data.destination !== "string" || !/^\+?\d{6,15}$/.test(data.destination)) return;
   send({ type: "callback-expected", destination: data.destination });
 });

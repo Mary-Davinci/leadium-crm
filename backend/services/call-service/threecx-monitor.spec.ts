@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ThreeCxMonitor, monitorConfig } from "./threecx-monitor";
-import { classifyMonitoredDn, emptyMonitorState, finalizeCalls, MonitorState, observeParticipant, removeParticipant } from "./threecx-normalizer";
+import { classifyMonitoredDn, emptyMonitorState, finalizeCalls, markCallIncomplete, MonitorState, observationGapOnly, observeParticipant, removeParticipant } from "./threecx-normalizer";
 import { monitoredDns } from "./threecx-topology";
 import { createMonitorStore, isRecentFinal, MonitorStore, RECENT_FINAL_MS } from "./threecx-store";
 import { ThreeCxDeviceDiagnostics } from "./threecx-device-diagnostics";
@@ -504,6 +504,44 @@ async function main() {
     removeParticipant(state, "901", 1, at); finalizeCalls(state, Date.parse(at) + 4000);
     assert.equal(state.finals["128"].event, null, "unknown agent type must not be coerced into no_answer");
     assert.ok(state.finals["128"].incompleteReasons.includes("unverified_agent_type"));
+  });
+  await test("our link dropping during a call: a conversation seen answered is recorded, an unanswered one is not guessed", () => {
+    const at = "2026-10-16T10:00:00Z";
+    for (const reason of ["disconnected", "stream_gap", "checkpoint_recovery", "participant_disappeared"] as const) {
+      const answered = emptyMonitorState();
+      observeParticipant(answered, { dn: "901", id: 1, callid: 128, status: "Ringing", party_caller_id: "+393331234567", party_dn_type: "Line" }, at, false, "Wextension");
+      observeParticipant(answered, { dn: "901", id: 1, callid: 128, status: "Connected" }, at, false, "Wextension");
+      assert.ok(answered.calls["128"].answeredAt, "fixture: the conversation was seen");
+      markCallIncomplete(answered.calls["128"], reason);
+      assert.equal(observationGapOnly(answered.calls["128"]), true);
+      removeParticipant(answered, "901", 1, at, true); finalizeCalls(answered, Date.parse(at) + 4000);
+      const event = answered.finals["128"].event;
+      assert.equal(event?.disposition, "completed", reason);
+      assert.match(String(event?.note), /approssimate/);
+
+      const ringing = emptyMonitorState();
+      observeParticipant(ringing, { dn: "901", id: 1, callid: 129, status: "Ringing", party_caller_id: "+393331234567", party_dn_type: "Line" }, at, false, "Wextension");
+      markCallIncomplete(ringing.calls["129"], reason);
+      removeParticipant(ringing, "901", 1, at, true); finalizeCalls(ringing, Date.parse(at) + 4000);
+      assert.equal(ringing.finals["129"].event, null, "never an invented missed call");
+    }
+    const mixed = emptyMonitorState();
+    observeParticipant(mixed, { dn: "901", id: 1, callid: 130, status: "Ringing", party_caller_id: "+393331234567", party_dn_type: "Line" }, at, false, "Wextension");
+    observeParticipant(mixed, { dn: "901", id: 1, callid: 130, status: "Connected" }, at, false, "Wextension");
+    markCallIncomplete(mixed.calls["130"], "disconnected"); markCallIncomplete(mixed.calls["130"], "unknown_start");
+    assert.equal(observationGapOnly(mixed.calls["130"]), false, "a real doubt about the call still withholds it");
+  });
+  await test("the access renewal keeps the socket: a call in progress is not touched", async () => {
+    const f = fixture(); f.monitor.start();
+    try {
+      await until(() => f.monitor.diagnostics().connected, "connected");
+      const tokens = () => f.requests.filter((row) => row.path === "/connect/token").length;
+      const socketsBefore = f.sockets.length, tokensBefore = tokens();
+      f.advance(3 * 3600 * 1000);
+      await until(() => tokens() > tokensBefore, "token renewed");
+      assert.equal(f.sockets.length, socketsBefore, "no reconnection");
+      assert.equal(f.monitor.diagnostics().connected, true);
+    } finally { await f.monitor.stop(); }
   });
   await test("exact tenant type mapping stays DN-scoped; unknown and mismatched types never become agents", () => {
     for (const dn of monitoredDns()) {

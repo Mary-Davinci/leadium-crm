@@ -7,6 +7,13 @@ const call: LiveCall = { callId: "123", agentDn: "901", direction: "inbound", cu
   capabilities: { answer: true, hangup: true, transfer: false, hold: false, resume: false } };
 const render = (item: LiveCall) => renderToStaticMarkup(<MemoryRouter><ThreeCxLiveCard call={item} busy={false} onAction={() => {}} /></MemoryRouter>);
 describe("native 3CX call card", () => {
+  it("a stream gone silent counts as lost, so the page reconnects instead of missing calls", async () => {
+    let cancelled = false;
+    const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+    await expect(consumeCallStream(response, () => {}, 20)).rejects.toThrow("Stream fermo");
+    expect(cancelled).toBe(true);
+  });
+
   it("cancels an invalid SSE response before reconnecting, releasing the server stream", async () => {
     let cancelled = false;
     const response = new Response(new ReadableStream({

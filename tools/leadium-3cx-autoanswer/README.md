@@ -2,7 +2,8 @@
 
 Fa partire la chiamata con un solo clic su **Chiama** in Leadium: quando 3CX fa squillare il
 client web per il richiamo, l'estensione preme Rispondi nella scheda 3CX. Le altre chiamate
-(colleghi, clienti in arrivo) squillano normalmente.
+(colleghi, clienti in arrivo) non vengono risposte: portano la scheda 3CX in primo piano, così si
+vedono anche lavorando in Excel. Si disattiva dal popup con **Chiamate in primo piano**.
 
 Risponde solo se:
 - in Leadium è stato cliccato **Chiama** negli ultimi 25 secondi, e

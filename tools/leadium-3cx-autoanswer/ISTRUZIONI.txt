@@ -4,7 +4,8 @@ LEADIUM - RISPOSTA AUTOMATICA 3CX
 A cosa serve
 ------------
 Clicchi "Chiama" in Leadium e la chiamata parte da sola: non devi piu' rispondere
-nel client 3CX. Le altre chiamate (colleghi, clienti in arrivo) squillano come sempre.
+nel client 3CX. Quando invece arriva una chiamata vera (clienti, colleghi), la scheda 3CX
+compare davanti agli altri programmi, ad esempio Excel: premi Rispondi e parli.
 
 
 PRIMA DI INSTALLARE (una volta sola)

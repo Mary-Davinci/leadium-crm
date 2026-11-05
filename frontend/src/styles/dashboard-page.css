@@ -107,3 +107,5 @@
   .cd-check { grid-template-columns: 40px minmax(0, 1fr); }
   .cd-check .cd-pill { grid-column: 2; justify-self: start; }
 }
+.cd-alert-offer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0; padding: 8px 12px 8px 16px; background: #fff; border: 1px solid #d3e0f3; border-radius: 10px; font-size: 13px; }
+.cruise-dashboard button.cd-pill { padding: 0 16px; }
