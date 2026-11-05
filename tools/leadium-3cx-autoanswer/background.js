@@ -2,6 +2,8 @@
 const WINDOW_MS = 25000;
 const CLAIM_WAIT_MS = 8000;
 const MAX_LOG = 25;
+const ANSWER_TRIES = 5;
+const ANSWER_RETRY_MS = 500;
 const mask = (digits) => (digits ? "…" + digits.slice(-3) : "—");
 
 async function log(text) {
@@ -10,20 +12,72 @@ async function log(text) {
   await chrome.storage.local.set({ events: events.slice(0, MAX_LOG) });
 }
 
-/** A real incoming call: the 3CX tab comes in front of whatever the operator is working on. */
-async function bringForward(tab) {
-  if (!tab) return;
-  try {
-    await chrome.tabs.update(tab.id, { active: true });
-    await chrome.windows.update(tab.windowId, { focused: true, drawAttention: true });
-  } catch (error) {
-    await log("Scheda 3CX non portata in primo piano");
+/**
+ * A real incoming call: the 3CX tab comes in front of whatever the operator is working on, unless
+ * they are looking at Leadium, whose Rispondi works from there. `force` is for an answer that failed.
+ */
+async function bringForward(tabId, force = false) {
+  const { leadiumFocused } = await chrome.storage.session.get("leadiumFocused");
+  if (leadiumFocused && !force) return;
+  if (typeof tabId !== "number") {
+    await log("Chiamata in arrivo, ma la scheda 3CX non risulta aperta: aprila e ricaricala");
+    return;
   }
+  try {
+    const tab = await chrome.tabs.update(tabId, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true, drawAttention: true });
+    await log("Chiamata in arrivo: scheda 3CX portata in primo piano");
+  } catch {
+    await log("Chiamata in arrivo: scheda 3CX non raggiungibile, ricaricala");
+  }
+}
+
+const tabIdOf = (sender) => (sender.tab ? sender.tab.id : undefined);
+
+/** The operator pressed Rispondi in Leadium. 3CX can draw its screen after Leadium: short retries. */
+async function pressAnswer(tabId, digits) {
+  let result;
+  for (let attempt = 0; attempt < ANSWER_TRIES; attempt++) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, ANSWER_RETRY_MS));
+    // Only the frame holding the button replies: no reply means no button yet (or the tab is gone).
+    result = await chrome.tabs.sendMessage(tabId, { type: "press-answer", digits }).catch(() => undefined);
+    if (result) break;
+  }
+  return result || { pressed: false, reason: "no-button" };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   (async () => {
-    if (message.type === "dial-started") {
+    if (message.type === "threecx-tab") {
+      await chrome.storage.session.set({ threecxTabId: tabIdOf(sender) });
+      reply({ ok: true });
+    } else if (message.type === "incoming-call") {
+      // Leadium is told by the PBX itself: this works while the 3CX tab is hidden and draws nothing.
+      const { lastCallId, threecxTabId } = await chrome.storage.session.get(["lastCallId", "threecxTabId"]);
+      const { settings = {} } = await chrome.storage.local.get("settings");
+      if (lastCallId !== message.callId && settings.bringForward !== false) {
+        await chrome.storage.session.set({ lastCallId: message.callId });
+        await bringForward(threecxTabId);
+      }
+      reply({ ok: true });
+    } else if (message.type === "leadium-focus") {
+      await chrome.storage.session.set({ leadiumFocused: message.focused === true });
+      reply({ ok: true });
+    } else if (message.type === "answer-call") {
+      const { threecxTabId } = await chrome.storage.session.get("threecxTabId");
+      if (typeof threecxTabId !== "number") {
+        await log("Rispondi da Leadium: la scheda 3CX non risulta aperta");
+        reply({ ok: false, reason: "no-tab" });
+        return;
+      }
+      const digits = String(message.phone || "").replace(/\D/g, "");
+      const result = await pressAnswer(threecxTabId, digits);
+      await log(`Rispondi da Leadium (${mask(digits)}): ${result.pressed ? "premuto nella scheda 3CX"
+        : result.reason === "other-call" ? "nella scheda 3CX c'è un'altra chiamata, non premo"
+        : "pulsante Rispondi non trovato nella scheda 3CX"}`);
+      if (!result.pressed) await bringForward(threecxTabId, true);
+      reply(result.pressed ? { ok: true } : { ok: false, reason: result.reason });
+    } else if (message.type === "dial-started") {
       await chrome.storage.session.set({ dialingUntil: Date.now() + CLAIM_WAIT_MS });
       reply({ ok: true });
     } else if (message.type === "callback-expected") {
@@ -55,7 +109,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         : decision === "diagnostic" ? (settings.enabled ? "è il richiamo, ma modalità diagnostica: non rispondo" : "è il richiamo, ma estensione disattivata")
         : !valid ? "nessun Chiama recente da Leadium: squilla normalmente"
         : "numero diverso da quello chiamato: squilla normalmente"}`);
-      if (decision === "ignore" && settings.bringForward !== false) await bringForward(sender.tab);
+      if (decision === "ignore" && settings.bringForward !== false) await bringForward(tabIdOf(sender));
       reply({ decision });
     } else if (message.type === "note") {
       await log(String(message.text).slice(0, 200));

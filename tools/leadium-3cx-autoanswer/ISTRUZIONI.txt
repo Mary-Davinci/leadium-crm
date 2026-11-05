@@ -4,8 +4,9 @@ LEADIUM - RISPOSTA AUTOMATICA 3CX
 A cosa serve
 ------------
 Clicchi "Chiama" in Leadium e la chiamata parte da sola: non devi piu' rispondere
-nel client 3CX. Quando invece arriva una chiamata vera (clienti, colleghi), la scheda 3CX
-compare davanti agli altri programmi, ad esempio Excel: premi Rispondi e parli.
+nel client 3CX. Quando invece arriva una chiamata vera (clienti, colleghi), premi Rispondi
+direttamente in Leadium e parli, anche con la scheda 3CX nascosta. Se stai lavorando in un altro
+programma, ad esempio Excel, la scheda 3CX compare davanti: premi Rispondi li'.
 
 
 PRIMA DI INSTALLARE (una volta sola)
@@ -68,6 +69,7 @@ ricarica le schede di Leadium e 3CX.
 
 PRIVACY
 -------
-L'estensione legge solo il comando "Chiama" di Leadium e il riquadro della
-chiamata in arrivo nella scheda 3CX. Non invia dati da nessuna parte; il
+L'estensione legge solo il comando "Chiama" di Leadium, il numero della
+chiamata a cui rispondi da Leadium e il riquadro della chiamata in arrivo
+nella scheda 3CX. Non invia dati da nessuna parte; il
 registro resta nel tuo browser e mostra solo le ultime 3 cifre dei numeri.

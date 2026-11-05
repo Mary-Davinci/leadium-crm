@@ -51,6 +51,12 @@ export function useIncomingAlert(calls: RingingCall[]): IncomingAlertState {
     return () => { window.removeEventListener("focus", update); window.removeEventListener("blur", update); window.removeEventListener("pointerdown", unlock); };
   }, []);
 
+  // The extension brings the 3CX tab forward: the answer button is there, and this signal works
+  // while that tab is hidden. Without the extension nobody listens.
+  useEffect(() => {
+    for (const call of ringing) window.postMessage({ source: "leadium-3cx-autoanswer", type: "incoming-call", callId: call.callId }, window.location.origin);
+  }, [ringingKey]);
+
   useEffect(() => {
     const notifications = open.current;
     const live = new Set(ringing.map((call) => call.callId));

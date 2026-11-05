@@ -69,8 +69,26 @@
     });
   }
 
+  // The operator pressed Rispondi in Leadium. Frames without the button stay silent: another frame
+  // of this tab may hold it. A number on screen must match, so a second caller is never answered;
+  // with no number shown (saved contact) the ringing screen is the call Leadium reported.
+  chrome.runtime.onMessage.addListener((message, sender, reply) => {
+    if (!message || message.type !== "press-answer") return;
+    const button = findAnswerButton();
+    if (!button) return;
+    const wanted = String(message.digits || "").slice(-9);
+    const shown = shownDigits(button);
+    if (wanted.length >= 6 && shown && !shown.includes(wanted)) { reply({ pressed: false, reason: "other-call" }); return; }
+    button.click();
+    reply({ pressed: true });
+  });
+
   // Diagnostic: shows in the log that the extension reached the 3CX page (top frame only).
-  if (window === window.top) send({ type: "note", text: "Collegata alla scheda 3CX (" + location.host + ")" });
+  if (window === window.top) {
+    send({ type: "note", text: "Collegata alla scheda 3CX (" + location.host + ")" });
+    // Remembered so Leadium can ask for this tab when a call rings.
+    send({ type: "threecx-tab" });
+  }
 
   let pending = false;
   observer = new MutationObserver(() => {

@@ -5,6 +5,7 @@ import { api, ApiError } from "../../lib/api";
 import { apiUrl } from "../../lib/api-url";
 import { clearSession, getAuthToken } from "../../lib/auth";
 import { buildPracticeUrl } from "../practices/practice-links";
+import { ANSWER_SETTLE_MS, answerViaExtension, extensionCanAnswer } from "./extension-answer";
 import { useIncomingAlert, type IncomingAlertState } from "./incoming-alert";
 import "../../styles/threecx-live.css";
 
@@ -390,7 +391,17 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
   async function control(call: LiveCall, verb: string, target?: string) {
     if (locked.current) return false;
     locked.current = true; setAction(call.callId); setMessage("");
-    try { await api(`/api/3cx/calls/${encodeURIComponent(call.callId)}/${verb}`, { method: "POST", body: JSON.stringify(target ? { target } : {}) }); return true; }
+    try {
+      if (verb === "answer" && !call.capabilities.answer) {
+        const failure = await answerViaExtension(call.callId, call.customerPhone);
+        if (failure) { setMessage(failure); return false; }
+        // The card stays locked until the PBX reports the answer: a second press would find no call.
+        await new Promise((resolve) => setTimeout(resolve, ANSWER_SETTLE_MS));
+        return true;
+      }
+      await api(`/api/3cx/calls/${encodeURIComponent(call.callId)}/${verb}`, { method: "POST", body: JSON.stringify(target ? { target } : {}) });
+      return true;
+    }
     catch (error) { setMessage(error instanceof Error ? error.message : "3CX momentaneamente non disponibile"); return false; }
     finally { locked.current = false; setAction(""); }
   }
@@ -442,7 +453,7 @@ export function ThreeCxProvider({ children }: { children: ReactNode }) {
             onOutcome={() => attempt.target.leadId && openOutcome(attempt.target.leadId)}
             onDismiss={() => setAttempt(null)}
           />}
-          {otherCalls.map(call => <ThreeCxLiveCard key={call.callId} call={call} transferTargets={transferTargets} busy={action !== "" || busy} onAction={(verb, target) => void control(call, verb, target)} />)}
+          {otherCalls.map(call => <ThreeCxLiveCard key={call.callId} call={call} transferTargets={transferTargets} busy={action !== "" || busy} extensionAnswer={extensionCanAnswer()} onAction={(verb, target) => void control(call, verb, target)} />)}
         </>}
     </aside>}
   </Context.Provider>;
@@ -554,12 +565,13 @@ export function OutboundAttemptCard({ attempt, call, dn, now, transferTargets = 
 
 const STATUS_LABEL = { incoming: "Chiamata in arrivo", outgoing: "Chiamata in uscita", connected: "In chiamata", hold: "In attesa" } as const;
 
-export function ThreeCxLiveCard({ call, busy, onAction, transferTargets = DEFAULT_TRANSFER_TARGETS }: { call: LiveCall; busy: boolean; onAction(verb: string, target?: string): void; transferTargets?: string[] }) {
+export function ThreeCxLiveCard({ call, busy, onAction, transferTargets = DEFAULT_TRANSFER_TARGETS, extensionAnswer = false }: { call: LiveCall; busy: boolean; onAction(verb: string, target?: string): void; transferTargets?: string[]; extensionAnswer?: boolean }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const seconds = Math.max(0, Math.floor((now - Date.parse(call.answeredAt || call.startedAt)) / 1000));
   const duration = formatDuration(seconds);
   const incoming = call.status === "ringing" && call.direction === "inbound";
+  const canAnswer = call.capabilities.answer || extensionAnswer;
   const state = call.status === "ringing" ? (incoming ? "incoming" : "outgoing") : call.status;
   const StateIcon = state === "incoming" ? PhoneIncoming : state === "outgoing" ? PhoneOutgoing : state === "hold" ? Pause : Phone;
   return <section className={`threecx-live-call is-${state}`} aria-label={incoming ? "Chiamata in arrivo" : "Chiamata 3CX attiva"}>
@@ -570,11 +582,11 @@ export function ThreeCxLiveCard({ call, busy, onAction, transferTargets = DEFAUL
     <CallIdentity name={call.customerName || "Numero non associato"} number={call.customerPhone} practiceId={call.practiceId} />
     {incoming
       ? <div className="threecx-round-row">
-        <RoundAction tone="accept" icon={<Phone size={22} />} label="Rispondi" disabled={busy || !call.capabilities.answer} onClick={() => onAction("answer")} />
+        <RoundAction tone="accept" icon={<Phone size={22} />} label="Rispondi" disabled={busy || !canAnswer} onClick={() => onAction("answer")} />
         {call.capabilities.hangup ? <RoundAction tone="reject" icon={<PhoneOff size={22} />} label="Rifiuta" disabled={busy} onClick={() => onAction("hangup")} /> : null}
       </div>
       : call.capabilities.hangup ? <div className="threecx-round-row"><RoundAction tone="reject" icon={<PhoneOff size={22} />} label="Termina" disabled={busy} onClick={() => onAction("hangup")} /></div> : null}
-    {incoming && !call.capabilities.answer && <small className="threecx-live-hint">Rispondi dal dispositivo 3CX</small>}
+    {incoming && !canAnswer && <small className="threecx-live-hint">Rispondi dal dispositivo 3CX</small>}
     {call.capabilities.transfer && <TransferControl targets={transferTargets} exclude={call.agentDn} busy={busy} onTransfer={value => onAction("transfer", value)} />}
   </section>;
 }

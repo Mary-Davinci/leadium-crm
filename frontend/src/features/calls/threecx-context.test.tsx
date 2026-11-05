@@ -32,6 +32,10 @@ describe("native 3CX call card", () => {
     const html = render({ ...call, capabilities: { ...call.capabilities, answer: false } });
     expect(html).toContain("Numero non associato"); expect(html).toContain("Rispondi dal dispositivo 3CX"); expect(html).toMatch(/<button[^>]*is-accept[^>]*disabled=""/); expect(html).not.toContain("Apri pratica");
   });
+  it("a web client without direct_control answers from Leadium through the extension", () => {
+    const html = renderToStaticMarkup(<MemoryRouter><ThreeCxLiveCard call={{ ...call, capabilities: { ...call.capabilities, answer: false } }} busy={false} extensionAnswer onAction={() => {}} /></MemoryRouter>);
+    expect(html).not.toMatch(/<button[^>]*is-accept[^>]*disabled=""/); expect(html).not.toContain("Rispondi dal dispositivo 3CX");
+  });
   it("connected supports terminating and allowlisted transfer; hold is status only", () => {
     const html = render({ ...call, status: "connected", capabilities: { ...call.capabilities, answer: false, transfer: true } });
     expect(html).toContain("In chiamata"); expect(html).toContain("Termina"); expect(html).toContain("Trasferisci");
