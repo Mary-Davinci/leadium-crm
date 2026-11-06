@@ -8,7 +8,6 @@ process.env.THREECX_ENABLED = "false";
 process.env.THREECX_CLIENT_ID = "leadiumcrm";
 process.env.THREECX_BASE_URL = "https://pbx.test";
 process.env.CALL_SERVICE_PORT = "0";
-process.env.THREECX_WEBHOOK_SECRET = "fixture-webhook-secret";
 const dbFile = path.join(os.tmpdir(), "leadium-3cx-gateway-" + process.pid + ".json");
 process.env.JSON_DB_FILE = dbFile;
 process.env.META_CRM_SYNC_ENABLED = "false";
@@ -53,14 +52,6 @@ async function main() {
       assert.equal((await response.json() as any).error, "Non autorizzato.");
     }
     console.log("PASS calls/diagnostics auth: admin/super/operator rules; missing, expired and previous-process sessions rejected");
-    const created = await fetch(leadUrl + "/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fullName: "Fixture 3CX", phone: "+393331234567" }) });
-    const customer = await created.json() as any;
-    const event = { callId: "native-final-1", from: customer.phone, disposition: "answered", agent: "901" };
-    const webhook = async (secret: string) => fetch(base + "/api/3cx/webhook", { method: "POST", headers: { "Content-Type": "application/json", "X-Leadium-3CX-Secret": secret }, body: JSON.stringify(event) });
-    assert.equal((await webhook("wrong")).status, 401);
-    const first = await webhook("fixture-webhook-secret"); assert.equal(first.status, 200); assert.equal((await first.json() as any).matched, true);
-    const duplicate = await webhook("fixture-webhook-secret"); assert.equal((await duplicate.json() as any).duplicate, true);
-    console.log("PASS legacy 3CX webhook: secret guard, forwarding through call-service, native-id retry dedup");
   } finally {
     await service.stopCallService();
     await new Promise<void>(resolve => gateway.server.close(() => resolve()));

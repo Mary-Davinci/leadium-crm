@@ -93,11 +93,6 @@ export const server = http.createServer(async (req, res) => {
       }
       return sendJson(res, 405, { error: "Metodo non consentito." });
     }
-    if (method === "POST" && pathname === "/3cx/webhook") {
-      const payload = await parseBody(req);
-      const result = await forwardEventToLead(payload);
-      return sendJson(res, 200, result);
-    }
     return sendJson(res, 404, { error: "Endpoint non trovato." });
   } catch (error: any) {
     if (pathnameIsControl(req.url)) return sendJson(res, error instanceof CallControlError ? error.status : 503, { error: error instanceof CallControlError ? error.message : "3CX momentaneamente non disponibile", ...(error instanceof CallControlError && error.attemptId ? { attemptId: error.attemptId } : {}) });

@@ -91,6 +91,8 @@ Il campo `pricing { billable, category, pricingModel, type }` e `metaConversatio
 ## 3CX
 Flusso attuale (invariato): clic sul telefono → URI 3CX con `{callbackUrl}` → `/calls/bridge` nel browser → `POST /api/leads/:id/calls` (idempotente su `requestKey`).
 
+> Rimosso il 06/11/2026: `POST /api/3cx/webhook` non esiste piu. Gli eventi arrivano dal monitor Call Control.
+
 Nuovo flusso server-to-server, senza browser: 3CX → `POST /api/3cx/webhook` con l'header `X-Leadium-3CX-Secret: <THREECX_WEBHOOK_SECRET>` → call-service → lead-service `/internal/call-events`. Senza il secret configurato, l'endpoint richiede la sessione come prima.
 
 Payload: `callId` (per l'idempotenza), `from`, `disposition`, `startedAt`, `endedAt`, `durationSeconds`, `callbackAt`, `note`, `agent`, `agentDisposition`, `lossReason`.

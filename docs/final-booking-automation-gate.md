@@ -34,6 +34,8 @@ WHATSAPP_APP_SECRET gia configurato in produzione e verificato tramite webhook f
 
 ## 3CX readiness
 
+> Rimosso il 06/11/2026: `POST /api/3cx/webhook` non esiste piu. Gli eventi arrivano dal monitor Call Control.
+
 Endpoint esatto nel codice: POST /api/3cx/webhook sul gateway pubblico, stesso origin del webhook WhatsApp esistente. URL completo: sostituire /api/whatsapp/webhook con /api/3cx/webhook nell'URL gia configurato. Il dominio pubblico effettivo non e presente nel repository verificato: non viene inventato. Inoltro: call-service /3cx/webhook -> lead-service /internal/call-events.
 
 Header richiesto per accesso server-to-server senza sessione: X-Leadium-3CX-Secret, valore uguale a THREECX_WEBHOOK_SECRET del gateway. Content-Type: application/json. Secret mancante o errato non abilita accesso anonimo; una sessione CRM valida resta una via autorizzata distinta.

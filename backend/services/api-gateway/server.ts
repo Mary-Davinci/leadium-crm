@@ -26,7 +26,7 @@ import {
 import { computeTeamDashboard } from "./dashboard-team";
 import { applyLeadImport, previewLeadImport } from "./lead-import";
 import { awaitsOperator, CHAT_FORBIDDEN_MESSAGE, CHAT_TAKEN_MESSAGE, chatOwner, LEAD_FORBIDDEN_MESSAGE, ownsChat } from "./whatsapp-access";
-import { isInternalServicePath, isTaskDismissBlocked, isValidThreeCxWebhookSecret, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
+import { isInternalServicePath, isTaskDismissBlocked, isWhatsappTemplateTestSendBlocked } from "./authorization-rules";
 import { CHAT_UPLOAD_FORMAT_ERROR, isAllowedChatUploadMime, isChatDocumentKey, validateChatUpload } from "./chat-upload-rules";
 
 const HOST = "0.0.0.0";
@@ -506,7 +506,6 @@ function mapApiRoute(pathname: string) {
   if (pathname.startsWith("/api/tasks")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname.startsWith("/api/customers")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
   if (pathname.startsWith("/api/purchases")) return { base: LEAD_URL, path: pathname.replace(/^\/api/, "") };
-  if (pathname === "/api/3cx/webhook") return { base: CALL_URL, path: "/3cx/webhook" };
   if (pathname === "/api/3cx/diagnostics") return { base: CALL_URL, path: "/3cx/diagnostics" };
   if (pathname === "/api/analytics/kpis") return { base: ANALYTICS_URL, path: "/kpis" };
   if (pathname.startsWith("/api/analytics/export")) return { base: ANALYTICS_URL, path: pathname.replace(/^\/api\/analytics/, "") };
@@ -1250,10 +1249,6 @@ export const server = http.createServer(async (req, res) => {
     }
     // 3CX server-to-server events: allowed without a Leadium session only with the shared secret
     // (THREECX_WEBHOOK_SECRET). Without it configured, the path keeps requiring a session.
-    if (pathname === "/api/3cx/webhook" && method === "POST" && isValidThreeCxWebhookSecret(req.headers["x-leadium-3cx-secret"], process.env.THREECX_WEBHOOK_SECRET)) {
-      await proxyRequest(req, res, route.base, `${route.path}${url.search}`);
-      return;
-    }
     const session = getSessionFromRequest(req);
     if (!session) {
       sendJson(res, 401, { error: "Non autorizzato." });

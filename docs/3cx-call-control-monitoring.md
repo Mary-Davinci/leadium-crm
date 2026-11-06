@@ -2,7 +2,7 @@
 
 This is an event observer, independent of Zoho's CRM integration. It neither selects a CRM
 template nor uses ReportCall, XAPI, call actions, media, chat, routing or configuration APIs.
-The existing `POST /api/3cx/webhook` and browser bridge remain available for compatibility.
+The former `POST /api/3cx/webhook` was removed on 2026-11-06. The browser bridge remains available for compatibility.
 
 ## Configuration and authentication
 
