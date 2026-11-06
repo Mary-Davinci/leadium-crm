@@ -7,6 +7,7 @@ import { LEAD_STATUSES, isValidTransition } from "../common/workflow";
 import {
   appendActivities,
   createLead,
+  findArchivedLeadByContact,
   findLeadByContact,
   findLeadByExternalOrPhone,
   getLeadById,
@@ -261,6 +262,51 @@ async function restoreLead(lead: any, actor: any, now: string) {
     text: `Contatto ripristinato dall'archivio (archiviato il ${new Date(previous.archivedAt).toLocaleDateString("it-IT", { timeZone: "Europe/Rome" })} da ${previous.archivedBy || "-"}).`,
     meta: { previous, restoredById: actor.id }
   })]);
+}
+
+const RETURN_REASONS: Record<string, string> = {
+  call: "ha chiamato",
+  whatsapp: "ha scritto su WhatsApp",
+  email: "ha scritto via email",
+  request: "ha inviato una nuova richiesta",
+  manual: "e stato reinserito da un operatore"
+};
+
+/**
+ * An archived customer who gets back in touch is a live customer again, with the whole history.
+ * Whoever answered keeps the practice, otherwise it waits in "Da assegnare". Only a sale keeps
+ * its outcome: a lost or closed practice has to be workable again.
+ */
+async function returnFromArchive(lead: any, via: string, assignedTo = "") {
+  const now = new Date().toISOString();
+  const previous = { archivedAt: lead.archivedAt, archivedBy: lead.archivedBy || "", archiveReason: lead.archiveReason || "", assignedTo: lead.assignedTo || "", status: lead.status };
+  for (const key of ["archivedAt", "archivedBy", "archivedById", "archiveReason"]) delete lead[key];
+  if (lead.closingOutcome !== "won") {
+    const finalStatus = ([LEAD_STATUSES.NOT_INTERESTED, LEAD_STATUSES.OUT_OF_BUDGET, LEAD_STATUSES.LOST] as string[]).includes(lead.status);
+    if (finalStatus || lead.closedAt || ["lost", "disqualified"].includes(lead.closingOutcome)) {
+      lead.status = LEAD_STATUSES.TO_CONTACT;
+      lead.closingOutcome = "open";
+    }
+    for (const key of ["closedAt", "closedBy", "closedById", "closedNote", "workedAt", "workedBy", "workedNote"]) delete lead[key];
+  }
+  lead.assignedTo = assignedTo;
+  syncLeadAssignmentState(lead, "", now);
+  lead.updatedAt = now;
+  await saveLead(lead);
+  await appendActivities([createActivity({
+    leadId: lead.id, type: "lead_restored", actor: "sistema",
+    text: `Contatto rientrato dall'archivio: il cliente ${RETURN_REASONS[via] || "ha ricontattato"}.`,
+    meta: { previous, via, automatic: true }
+  })]);
+  return lead;
+}
+
+/** Null when nothing is archived for this contact, or an active practice already answers for it. */
+async function contactReturned(phone: string, email: string, via: string, assignedTo = "") {
+  const usablePhone = phone.replace(/\D/g, "").length >= 7 ? phone : "";
+  const lead = await findArchivedLeadByContact(usablePhone, email);
+  if (!lead || (await listLeadsByContact(usablePhone, email, 1)).length) return null;
+  return returnFromArchive(lead, via, assignedTo);
 }
 
 const MAX_BULK_LEADS = 500;
@@ -1593,7 +1639,7 @@ async function ingestLead(body: any): Promise<{ status: number; payload: any }> 
   const phone = String(body.phone || "").trim();
   const email = String(body.email || "").trim();
   if (!fullName && !phone && !email) return { status: 400, payload: { error: "Payload ingest privo di identificativi utili." } };
-  const existing = await findLeadByContact(phone, email);
+  const existing = (await findLeadByContact(phone, email)) || (await contactReturned(phone, email, source === "whatsapp_chat" ? "whatsapp" : "request"));
   const actor = source;
   const now = new Date().toISOString();
   const sourceFields = extractLeadSourceFields(body, source);
@@ -1678,6 +1724,13 @@ async function ingestLead(body: any): Promise<{ status: number; payload: any }> 
   return { status: 201, payload: { mode: "created", lead: safeLead(lead) } };
 }
 
+/** The operator who answered this call; an admin picking up leaves the distribution alone. */
+async function answeringOperator(body: any) {
+  if (!body.answeredAt || !body.agent) return "";
+  const users = await listUsers().catch(() => []);
+  return users.find((user) => user.role === "operatore" && user.threeCxDn === String(body.agent))?.username || "";
+}
+
 /**
  * A customer who calls is never lost: a number with no practice becomes one. Whoever answered
  * keeps it, or nobody else could see it; a missed call waits for the admin in "Da assegnare".
@@ -1685,11 +1738,7 @@ async function ingestLead(body: any): Promise<{ status: number; payload: any }> 
  */
 async function leadFromUnknownCaller(body: any, phone: string) {
   if (body.direction !== "inbound" || phone.replace(/\D/g, "").length < 7) return null;
-  let assignedTo = "";
-  if (body.answeredAt && body.agent) {
-    const users = await listUsers().catch(() => []);
-    assignedTo = users.find((user) => user.role === "operatore" && user.threeCxDn === String(body.agent))?.username || "";
-  }
+  const assignedTo = await answeringOperator(body);
   const created = await ingestLead({ source: "3cx_chiamata", fullName: `Chiamata da ${phone}`, phone, assignedTo, notes: "Contatto creato da una chiamata in arrivo." });
   return created.payload?.lead?.id ? getLeadById(created.payload.lead.id) : null;
 }
@@ -1697,7 +1746,12 @@ async function leadFromUnknownCaller(body: any, phone: string) {
 async function handleCallEvent(body: any) {
   const externalId = body.externalLeadId ? String(body.externalLeadId) : null;
   const incomingNumber = body.from ? String(body.from) : "";
-  const lead = (await findLeadByExternalOrPhone(externalId, incomingNumber)) || (await leadFromUnknownCaller(body, incomingNumber));
+  let lead = await findLeadByExternalOrPhone(externalId, incomingNumber);
+  if (body.direction === "inbound") {
+    if (lead?.archivedAt) lead = await returnFromArchive(lead, "call", await answeringOperator(body));
+    else if (!lead) lead = await contactReturned(incomingNumber, "", "call", await answeringOperator(body));
+  }
+  lead = lead || (await leadFromUnknownCaller(body, incomingNumber));
   if (!lead) return { ok: true, matched: false };
 
   const eventType = body.eventType || "call_event";
@@ -1861,9 +1915,11 @@ async function applyPaymentRequest(res: http.ServerResponse, lead: any, body: an
   return sendJson(res, 200, safeLead(saved));
 }
 
-const inboxDeps: InboxDeps = {
-  findLeadIdByEmail: async (email) => (await findLeadByContact("", email))?.id || null,
+export const inboxDeps: InboxDeps = {
+  findLeadIdByEmail: async (email) => ((await findLeadByContact("", email)) || (await findArchivedLeadByContact("", email)))?.id || null,
   onReceived: async (record: MailRecord) => {
+    const lead = await getLeadById(String(record.leadId));
+    if (lead?.archivedAt) await returnFromArchive(lead, "email");
     await appendActivities([createActivity({
       leadId: String(record.leadId), type: "email_received", actor: record.fromName || record.from,
       text: `Email ricevuta da ${record.from}: "${record.subject || "(senza oggetto)"}".`,
@@ -2024,7 +2080,10 @@ export const server = http.createServer(async (req, res) => {
       if (!body.fullName || !body.phone) return sendJson(res, 400, { error: "fullName e phone sono obbligatori." });
       // Same country-aware matching as the admin phone correction. Several open records for one
       // contact (e.g. phone -> lead A, email -> lead B) are a conflict: never pick one arbitrarily.
-      const contactMatches = await listLeadsByContact(String(body.phone || ""), String(body.email || ""));
+      let contactMatches = await listLeadsByContact(String(body.phone || ""), String(body.email || ""));
+      if (!contactMatches.length && (await contactReturned(String(body.phone || ""), String(body.email || ""), "manual"))) {
+        contactMatches = await listLeadsByContact(String(body.phone || ""), String(body.email || ""));
+      }
       const openMatches = contactMatches.filter((row) => !isTerminalClosingOutcome(row.lead));
       if (openMatches.length > 1) {
         const split = openMatches.some((row) => row.byPhone) && openMatches.some((row) => row.byEmail) && !openMatches.some((row) => row.byPhone && row.byEmail);
@@ -2167,6 +2226,12 @@ export const server = http.createServer(async (req, res) => {
       const phone = String(query.phone || "").trim();
       if (!phone) return sendJson(res, 400, { error: "phone obbligatorio." });
       return sendJson(res, 200, await resolveLeadAssociationForPhone(phone));
+    }
+
+    if (method === "POST" && pathname === "/internal/contact-returned") {
+      const body = await parseBody(req);
+      const lead = await contactReturned(String(body.phone || ""), String(body.email || ""), String(body.via || ""));
+      return sendJson(res, 200, { returned: Boolean(lead), leadId: lead?.id || null });
     }
 
     if (method === "POST" && pathname === "/internal/ingest") {

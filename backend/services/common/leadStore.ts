@@ -220,6 +220,24 @@ export async function listLeadsByContact(phone: string, email: string, limit = 5
   return docs.map(fromLeadDoc).map(tag);
 }
 
+/** The archived contact with this phone or email, most recent first: it is still the same customer. */
+export async function findArchivedLeadByContact(phone: string, email: string) {
+  const keys = phoneMatchKeys(phone);
+  const nEmail = normalizeEmail(email);
+  if (!keys.length && !nEmail) return null;
+  if (!isMongoEnabled()) {
+    const rows = readDb().leads.filter((lead: any) => isArchivedLead(lead)
+      && (keys.includes(normalizePhone(lead.phone)) || (Boolean(nEmail) && normalizeEmail(lead.email) === nEmail)));
+    return rows.sort((a: any, b: any) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0] || null;
+  }
+  const db = await getMongoDb();
+  const or: any[] = [];
+  if (keys.length) or.push({ phoneNormalized: { $in: keys } });
+  if (nEmail) or.push({ emailNormalized: nEmail });
+  const docs = await db.collection("leads").find({ $or: or, archivedAt: { $exists: true } }).sort({ updatedAt: -1 }).limit(1).toArray();
+  return docs.length ? fromLeadDoc(docs[0]) : null;
+}
+
 export async function findLeadByExternalOrPhone(externalId: string | null, incomingNumber: string) {
   if (!isMongoEnabled()) {
     const db = readDb();

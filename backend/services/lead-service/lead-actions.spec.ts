@@ -89,14 +89,16 @@ async function archiveChecks(baseUrl: string) {
   assert.ok((await timelineTypes(lead.id)).includes("lead_archived"), "trace kept in the timeline");
   assert.equal((await request(baseUrl, "POST", `/leads/${lead.id}/worked`, { note: "x", __actor: OPERATOR })).status, 409, "no other action on an archived contact");
 
-  // The same person writes again: a new opportunity, never merged into the archive.
-  const back = await request(baseUrl, "POST", "/leads", { fullName: "Ritorno", phone: "+39 333 1000001", __creator: ADMIN });
-  assert.equal(back.status, 201); assert.notEqual(back.body.id, lead.id);
-
   const restored = await request(baseUrl, "POST", `/leads/${lead.id}/restore`, { __actor: ADMIN });
   assert.equal(restored.status, 200); assert.equal(restored.body.archivedAt, null);
   assert.ok((await leadStore.listLeads()).some((row: any) => row.id === lead.id), "back in the lists after restore");
   assert.ok((await timelineTypes(lead.id)).includes("lead_restored"));
+  // Reinserted by hand: the same contact comes back, never a copy of it.
+  const again = await seedLead({ fullName: "Contatto ritrovato", phone: "+39 333 1000099" });
+  await request(baseUrl, "POST", `/leads/${again.id}/archive`, { reason: "Non risponde", __actor: ADMIN });
+  const back = await request(baseUrl, "POST", "/leads", { fullName: "Ritorno", phone: "+39 333 1000099", __creator: ADMIN });
+  assert.equal(back.body.lead?.id || back.body.id, again.id);
+  assert.equal((await leadStore.getLeadById(again.id)).archivedAt, undefined);
   console.log("PASS archive: admin only with reason, kept in the database, out of lists/lookups/tasks, traced, restorable");
 }
 

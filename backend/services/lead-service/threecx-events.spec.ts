@@ -111,6 +111,74 @@ async function main() {
     }
   }); });
 
+  await runCase("un cliente archiviato che ricontatta rientra da solo, con il suo storico", async () => { await withServer(async (baseUrl) => {
+    const leadStore = require("../common/leadStore");
+    const auth = require("../api-gateway/auth-store");
+    const original = auth.listUsers;
+    auth.listUsers = async () => [{ id: "u1", username: "marta", name: "Marta", role: "operatore", threeCxDn: "901" }];
+    const archived = async (phone: string, extra: Record<string, unknown> = {}) => {
+      const created = await request(baseUrl, "POST", "/internal/ingest", { source: "excel_clienti_2025", fullName: "Cliente " + phone, phone, email: phone.slice(-6) + "@esempio.it" });
+      const lead = await leadStore.getLeadById(created.body.lead.id);
+      Object.assign(lead, { assignedTo: "vecchio.operatore", archivedAt: new Date().toISOString(), archivedBy: "admin.test", archiveReason: "Non risponde", ...extra });
+      await leadStore.saveLead(lead);
+      return lead.id;
+    };
+    const stored = (id: string) => leadStore.getLeadById(id);
+    try {
+      const at = new Date().toISOString();
+
+      const missed = await archived("+393402000001");
+      const call = await callEvent(baseUrl, { callId: "902001", direction: "inbound", from: "+393402000001", startedAt: at, endedAt: at, disposition: "no_answer", eventType: "call_control_final" });
+      assert.equal(call.body.leadId, missed, "the same contact, not a copy");
+      let lead = await stored(missed);
+      assert.equal(lead.archivedAt, undefined);
+      assert.equal(lead.assignedTo, "", "a missed call waits in Da assegnare");
+      assert.equal((await leadStore.listLeadsByContact("+393402000001", "")).length, 1, "no duplicate");
+
+      const answered = await archived("+393402000002", { status: LEAD_STATUSES.LOST, closingOutcome: "lost" });
+      await callEvent(baseUrl, { callId: "902002", direction: "inbound", from: "+393402000002", agent: "901", startedAt: at, answeredAt: at, endedAt: at, durationSeconds: 60, disposition: "completed", eventType: "call_control_final" });
+      lead = await stored(answered);
+      assert.equal(lead.assignedTo, "marta", "who answered keeps it");
+      assert.equal(lead.closingOutcome, "open", "a lost practice can be worked again");
+
+      const sold = await archived("+393402000003", { closingOutcome: "won", status: LEAD_STATUSES.SOLD });
+      await callEvent(baseUrl, { callId: "902003", direction: "inbound", from: "+393402000003", startedAt: at, endedAt: at, disposition: "no_answer", eventType: "call_control_final" });
+      lead = await stored(sold);
+      assert.equal(lead.archivedAt, undefined);
+      assert.equal(lead.closingOutcome, "won", "a sale stays a sale");
+
+      const outgoing = await archived("+393402000004");
+      await callEvent(baseUrl, { callId: "902004", direction: "outbound", from: "+393402000004", startedAt: at, disposition: "completed" });
+      assert.ok((await stored(outgoing)).archivedAt, "our own call is not the customer coming back");
+
+      const chat = await archived("+393402000005");
+      const returned = await request(baseUrl, "POST", "/internal/contact-returned", { phone: "+393402000005", via: "whatsapp" });
+      assert.deepEqual(returned.body, { returned: true, leadId: chat });
+      assert.equal((await request(baseUrl, "POST", "/internal/contact-returned", { phone: "+393402000005", via: "whatsapp" })).body.returned, false, "a retried webhook changes nothing");
+      const trail = (await leadStore.listActivitiesByType("lead_restored")).find((row: any) => row.leadId === chat);
+      assert.ok(trail.text.includes("WhatsApp"), "the history says why it came back");
+      assert.equal(trail.meta.previous.assignedTo, "vecchio.operatore");
+
+      const form = await archived("+393402000006");
+      const request2 = await request(baseUrl, "POST", "/internal/ingest", { source: "meta_lead", fullName: "Cliente", phone: "+393402000006" });
+      assert.equal(request2.body.lead.id, form, "a new request lands on the same contact");
+
+      const mail = await archived("+393402000007");
+      const email = "000007@esempio.it";
+      assert.equal(await leadService.inboxDeps.findLeadIdByEmail(email), mail);
+      await leadService.inboxDeps.onReceived({ id: "m1", leadId: mail, from: email, subject: "Ciao" } as any);
+      assert.equal((await stored(mail)).archivedAt, undefined);
+
+      const kept = await archived("+393402000008");
+      const active = await request(baseUrl, "POST", "/internal/ingest", { source: "manuale", fullName: "Altra scheda", phone: "+393402000009" });
+      await leadStore.saveLead({ ...(await stored(active.body.lead.id)), email: "000008@esempio.it" });
+      assert.ok(active.body.lead.id !== kept);
+      assert.equal((await request(baseUrl, "POST", "/internal/contact-returned", { email: "000008@esempio.it", via: "email" })).body.returned, false, "an active practice already answers for this contact");
+    } finally {
+      auth.listUsers = original;
+    }
+  }); });
+
   await runCase("no_answer 3CX: stato Non risponde, attivita con tentativo, durata e template suggerito", async () => {
     await withServer(async (baseUrl) => {
       const lead = await createLead(baseUrl);

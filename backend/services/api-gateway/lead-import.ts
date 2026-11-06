@@ -1,5 +1,5 @@
 import { createActivity } from "../common/automation";
-import { createLead, findLeadByContact, newId, normalizeEmail, normalizePhone } from "../common/leadStore";
+import { createLead, findArchivedLeadByContact, findLeadByContact, newId, normalizeEmail, normalizePhone } from "../common/leadStore";
 import { findOrCreateCustomerByContact } from "../common/customerStore";
 import { LEAD_STATUSES } from "../common/workflow";
 
@@ -162,7 +162,9 @@ async function prepareImportRows(input: { source?: string; status?: string; lead
     }
     seenContacts.set(normalized.contactKey, normalized.rowNumber);
 
-    const existing = await findLeadByContact(normalized.phone, normalized.email);
+    // An archived contact stays in the archive: importing the same file never makes a copy of it.
+    const active = await findLeadByContact(normalized.phone, normalized.email);
+    const existing = active || (await findArchivedLeadByContact(normalized.phone, normalized.email));
     if (existing) {
       rows.push({
         rowNumber: normalized.rowNumber,
@@ -171,7 +173,7 @@ async function prepareImportRows(input: { source?: string; status?: string; lead
         email: normalized.email,
         notes: normalized.notes,
         status: "duplicate_existing",
-        reason: "Gia presente nel database.",
+        reason: active ? "Gia presente nel database." : "Gia presente in archivio.",
         metadata: normalized.metadata,
         existingLead: {
           id: String(existing.id || ""),

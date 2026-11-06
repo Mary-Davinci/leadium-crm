@@ -565,6 +565,15 @@ async function upsertLeadFromChat({ phone, customerName, text }) {
  * because the customer lookup came back empty (e.g. a legacy lead created before customerId
  * existed); the existing leadId is preserved by the caller regardless.
  */
+/** A customer known to the CRM never reaches the ingest: the archive is checked here. */
+async function notifyContactReturned(phone) {
+  try {
+    await fetch(`${LEAD_URL}/internal/contact-returned`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone, via: "whatsapp" }) });
+  } catch (error) {
+    // The message still reaches the chat: an admin can restore the contact by hand.
+  }
+}
+
 async function resolveConversationIdentity(phone, customerName, text, options = {}) {
   let resolution = { customerId: null, leadId: null, ambiguous: false, candidateLeadIds: [] };
   try {
@@ -693,6 +702,7 @@ async function handleInboundWebhook(payload) {
         const text = extractInboundText(message);
         const attachment = extractInboundAttachment(message);
         const createdAt = message.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : new Date().toISOString();
+        await notifyContactReturned(from);
         const identity = await resolveConversationIdentity(from, customerName, text);
 
         const conversation = await createOrUpdateConversation({
