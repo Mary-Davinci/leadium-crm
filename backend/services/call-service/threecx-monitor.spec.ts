@@ -810,6 +810,51 @@ async function main() {
       f.monitor.noteMakecall("not-a-callid");
     } finally { await f.monitor.stop(); }
   });
+  await test("a token the PBX stopped accepting is replaced: the link comes back on its own, and the log says why it failed", async () => {
+    let cached = "", issued = 0;
+    const presented: string[] = [];
+    const oauth = {
+      get: async () => { if (!cached) cached = "token-" + ++issued; return { token: cached, expiresAt: Date.now() + 3600_000 }; },
+      clear: () => { cached = ""; }
+    };
+    const accepted = (token: string) => token !== "token-1" && token !== "token-2";
+    const config = monitorConfig({ THREECX_ENABLED: "true", THREECX_BASE_URL: "https://pbx.test:5001", THREECX_CLIENT_ID: "leadiumcrm", THREECX_API_KEY: SECRET });
+    const errors: Array<string | null> = [];
+    const monitor = new ThreeCxMonitor(config, {
+      store: new MemoryStore(), oauth, retryMs: 1, tickMs: 2, timeoutMs: 100, deliver: async () => {},
+      fetch: (async (url: any) => new Response(JSON.stringify({ dn: new URL(String(url)).pathname.split("/").pop(), type: "Extension", participants: [] }))) as typeof fetch,
+      socket: (_url, token) => {
+        presented.push(token);
+        const socket = new FakeSocket();
+        // The order of the real library: the refusal first, the close after it.
+        setImmediate(() => { if (accepted(token)) socket.emit("open"); else { socket.emit("error", new Error("Unexpected server response: 401")); errors.push(monitor.diagnostics().lastError); } });
+        return socket as any;
+      }
+    });
+    monitor.start();
+    try {
+      await until(() => monitor.diagnostics().connected, "reconnected with a new token");
+      assert.deepEqual(presented, ["token-1", "token-2", "token-3"], "every failed attempt asked for a new token");
+      assert.ok(String(errors[0]).endsWith("[websocket_connect_failed]: HTTP 401"), String(errors[0]));
+    } finally { await monitor.stop(); }
+  });
+  await test("the reason of a failed socket reaches the status, provider text never does", async () => {
+    const reason = async (error: unknown) => {
+      const config = monitorConfig({ THREECX_ENABLED: "true", THREECX_BASE_URL: "https://pbx.test:5001", THREECX_CLIENT_ID: "leadiumcrm", THREECX_API_KEY: SECRET });
+      const monitor = new ThreeCxMonitor(config, {
+        store: new MemoryStore(), oauth: { get: async () => ({ token: TOKEN, expiresAt: Date.now() + 3600_000 }) }, retryMs: 1000, tickMs: 2, timeoutMs: 100, deliver: async () => {},
+        socket: () => { const socket = new FakeSocket(); setImmediate(() => socket.emit("error", error)); return socket as any; }
+      });
+      monitor.start();
+      try { await until(() => Boolean(monitor.diagnostics().lastError), "failure reported"); return String(monitor.diagnostics().lastError); }
+      finally { await monitor.stop(); }
+    };
+    assert.match(await reason(Object.assign(new Error("connect failed"), { code: "ECONNRESET" })), /: ECONNRESET$/);
+    assert.match(await reason(new Error("Unexpected server response: 503")), /: HTTP 503$/);
+    const leaked = await reason(Object.assign(new Error(SECRET + TOKEN), { code: SECRET }));
+    assert.ok(!leaked.includes(SECRET) && !leaked.includes(TOKEN));
+    assert.ok(leaked.endsWith("[websocket_connect_failed]"), leaked);
+  });
   console.log("All " + count + " Call Control monitoring checks passed.");
 }
 main().catch(error => { console.error(String(error.stack).split(SECRET).join("[redacted]").split(TOKEN).join("[redacted]")); process.exit(1); });

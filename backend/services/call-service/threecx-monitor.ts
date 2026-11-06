@@ -31,7 +31,7 @@ type Dependencies = {
   fetch?: typeof fetch;
   socket?: (url: string, token: string) => Socket;
   now?: () => number;
-  oauth?: { get(): Promise<{ token: string; expiresAt: number }> };
+  oauth?: { get(): Promise<{ token: string; expiresAt: number }>; clear?(): void };
   retryMs?: number; tickMs?: number; timeoutMs?: number;
 };
 // Only locally constructed messages can reach diagnostics; never a provider response body.
@@ -65,6 +65,14 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => 
   const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
   const timer = setTimeout(done, ms); signal.addEventListener("abort", done, { once: true });
 });
+
+/** Why a socket failed, for the log: an HTTP status or a system code, never provider text. */
+function socketFailureDetail(error: unknown) {
+  const { message, code } = (error || {}) as { message?: unknown; code?: unknown };
+  const status = /^Unexpected server response: (\d{3})$/.exec(String(message))?.[1];
+  if (status) return "HTTP " + status;
+  return /^[A-Z][A-Z0-9_]{2,40}$/.test(String(code)) ? String(code) : undefined;
+}
 
 /** This transport has no API for PBX actions. Its only POST is OAuth authentication. */
 export class ThreeCxMonitor {
@@ -415,14 +423,15 @@ export class ThreeCxMonitor {
     }));
     this.socket = socket;
     let closed = false, alive = true;
-    const ended = new Promise<void>(resolve => { socket.once("close", () => { closed = true; resolve(); }); });
-    let opened = false;
-    socket.on("error", () => { this.status.lastError = new MonitorStageError(opened ? "monitor_transport_failed" : "websocket_connect_failed").message; socket.terminate(); });
+    let closeDetail: string | undefined;
+    const ended = new Promise<void>(resolve => { socket.once("close", (code?: number) => { closed = true; if (Number.isInteger(code)) closeDetail = "close " + code; resolve(); }); });
+    let opened = false, failure: string | undefined;
+    socket.on("error", error => { failure = socketFailureDetail(error); this.status.lastError = new MonitorStageError(opened ? "monitor_transport_failed" : "websocket_connect_failed", failure).message; socket.terminate(); });
     socket.on("pong", () => { alive = true; });
     await atStage("websocket_connect_failed", () => new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { socket.terminate(); reject(new Error("3CX connect timeout")); }, this.deps.timeoutMs || 10000);
+      const timer = setTimeout(() => { socket.terminate(); reject(new MonitorStageError("websocket_connect_failed", "timeout")); }, this.deps.timeoutMs || 10000);
       socket.once("open", () => { clearTimeout(timer); resolve(); });
-      socket.once("close", () => { clearTimeout(timer); reject(new Error("3CX socket closed")); });
+      socket.once("close", () => { clearTimeout(timer); reject(new MonitorStageError("websocket_connect_failed", failure)); });
     }));
     opened = true;
     if (this.abort.signal.aborted) { socket.terminate(); return; }
@@ -457,7 +466,7 @@ export class ThreeCxMonitor {
       });
     }
     socket.terminate(); await this.queue;
-    if (closed && !this.abort.signal.aborted && !this.status.lastError) this.status.lastError = new MonitorStageError("monitor_transport_failed").message;
+    if (closed && !this.abort.signal.aborted && !this.status.lastError) this.status.lastError = new MonitorStageError("monitor_transport_failed", closeDetail).message;
     this.status.connected = false;
     // Calls continuing through a stream outage have incomplete observation, never guess a miss.
     for (const call of Object.values(this.state.calls)) markCallIncomplete(call, "disconnected");
@@ -492,6 +501,9 @@ export class ThreeCxMonitor {
           this.lease = false;
         }
       }
+      // The next attempt asks for a new token. A cached one the PBX stopped accepting would otherwise
+      // be presented again until it expires, up to 48 minutes with the link down.
+      if (!heldElsewhere) this.deps.oauth?.clear?.();
       if (this.now() - connectedAt > 60000) failures = 0;
       if (!this.abort.signal.aborted) this.logLink("disconnected" + (this.status.lastError ? ": " + this.status.lastError : ""));
       // Lease still held by the previous instance (a deploy): it is released on its shutdown, so poll
