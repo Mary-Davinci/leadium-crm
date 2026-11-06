@@ -179,6 +179,18 @@ async function main() {
     }
   }); });
 
+  await runCase("telefono: un cognome non e un numero, il rumore dei file si toglie", async () => {
+    const { isPhoneLike, whatsappRecipient } = require("../common/phoneIdentity");
+    assert.equal(whatsappRecipient("D'AMATO"), null, "a surname is never sent");
+    assert.equal(whatsappRecipient(""), null);
+    assert.equal(whatsappRecipient("123"), null);
+    assert.equal(whatsappRecipient("3895382595"), "3895382595", "a national number already delivers: left alone");
+    assert.equal(whatsappRecipient("+39 338 121 6940"), "+393381216940");
+    assert.equal(whatsappRecipient("p:+393381216940"), "+393381216940");
+    assert.equal(whatsappRecipient("00393381216940"), "+393381216940");
+    assert.equal(isPhoneLike("393381216940123456"), false, "too long");
+  });
+
   await runCase("no_answer 3CX: stato Non risponde, attivita con tentativo, durata e template suggerito", async () => {
     await withServer(async (baseUrl) => {
       const lead = await createLead(baseUrl);

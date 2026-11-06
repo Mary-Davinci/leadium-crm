@@ -34,6 +34,7 @@ import { rowsToCsv } from "../common/csv";
 import { MailError, mailConfig, sendCustomerEmail, validateCustomerEmail } from "../common/mailer";
 import { getMail, linkSenderToLead, listMail, mailRecordId, MailRecord, readInboxSync, saveMailIfNew, updateMail } from "../common/mailStore";
 import { listUsers } from "../api-gateway/auth-store";
+import { isPhoneLike } from "../common/phoneIdentity";
 import { imapMailbox, importSentMail, inboxConfig, InboxDeps, syncInbox } from "../common/mailInbox";
 import { BOOKING_ACTIVITY_HEADERS, BookingActivityFilters, buildBookingActivityCsvRows, buildBookingActivityRows, filterBookingActivityRows } from "./booking-report";
 
@@ -2078,6 +2079,7 @@ export const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       initializePaymentPlan(body.payments, DEFAULT_PAYMENT_ITEMS); // validate before customer/lead mutations
       if (!body.fullName || !body.phone) return sendJson(res, 400, { error: "fullName e phone sono obbligatori." });
+      if (!isPhoneLike(body.phone)) return sendJson(res, 400, { error: "Il telefono non e un numero valido." });
       // Same country-aware matching as the admin phone correction. Several open records for one
       // contact (e.g. phone -> lead A, email -> lead B) are a conflict: never pick one arbitrarily.
       let contactMatches = await listLeadsByContact(String(body.phone || ""), String(body.email || ""));

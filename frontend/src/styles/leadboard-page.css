@@ -590,3 +590,4 @@
   .ops-bulk-assign { flex: 1 1 100%; }
   .ops-bulk-assign select { flex: 1 1 auto; max-width: none; min-width: 0; }
 }
+.ops-row-cell.contacts .ops-bad-phone { color: #953434; font-weight: 600; }

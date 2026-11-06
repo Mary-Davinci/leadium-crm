@@ -47,6 +47,25 @@ export function phoneMatchKeys(value: unknown): string[] {
   return [...keys];
 }
 
+/** A value that can be a phone at all: a surname in the field is not one. */
+export function isPhoneLike(value: unknown) {
+  const digits = phoneDigits(value).length;
+  return digits >= 8 && digits <= 15;
+}
+
+/**
+ * What Meta receives. Spreadsheet noise ("p:+39 333...") goes away. A national number stays as it
+ * is: without a "+" Meta applies the country of the business number, and that already delivers.
+ * Null when the value cannot be a phone.
+ */
+export function whatsappRecipient(value: unknown) {
+  if (!isPhoneLike(value)) return null;
+  const raw = String(value).trim();
+  const digits = phoneDigits(raw);
+  if (raw.includes("+")) return "+" + digits;
+  return digits.startsWith("00") ? "+" + digits.slice(2) : digits;
+}
+
 export function phonesMatch(a: unknown, b: unknown) {
   const keys = new Set(phoneMatchKeys(a));
   return phoneMatchKeys(b).some(key => keys.has(key));

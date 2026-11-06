@@ -1,3 +1,4 @@
+import { INVALID_PHONE_MESSAGE, isUsablePhone } from "../lib/phone";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useClock } from "../lib/use-clock";
 import { romeDateTimeInput, romeInputToIso, romeDayStamp } from "../lib/business-time";
@@ -448,6 +449,10 @@ export function PratichePage() {
     const phone = newLeadDraft.phone.trim();
     if (!fullName || !phone) {
       setNewLeadError("Nome completo e telefono sono obbligatori.");
+      return;
+    }
+    if (!isUsablePhone(phone)) {
+      setNewLeadError(INVALID_PHONE_MESSAGE);
       return;
     }
     setNewLeadSubmitting(true);
@@ -1357,11 +1362,12 @@ export function PratichePage() {
               <label>
                 <span>Telefono</span>
                 <input
-                  type="text"
+                  type="tel"
                   value={newLeadDraft.phone}
                   onChange={(event) => setNewLeadDraft((draft) => ({ ...draft, phone: event.target.value }))}
                   placeholder="+39 ..."
                 />
+                {/[A-Za-zÀ-ÿ]{2}/.test(newLeadDraft.phone) ? <small className="pd-inline-error" role="alert">{INVALID_PHONE_MESSAGE}</small> : null}
               </label>
               <label>
                 <span>Email (facoltativa)</span>

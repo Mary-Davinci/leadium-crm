@@ -1,4 +1,5 @@
 import { createActivity } from "../common/automation";
+import { isPhoneLike } from "../common/phoneIdentity";
 import { createLead, findArchivedLeadByContact, findLeadByContact, newId, normalizeEmail, normalizePhone } from "../common/leadStore";
 import { findOrCreateCustomerByContact } from "../common/customerStore";
 import { LEAD_STATUSES } from "../common/workflow";
@@ -108,6 +109,8 @@ function normalizeCandidate(input: LeadImportCandidateInput, index: number): Lea
   const rowNumber = Number(input.rowNumber || index + 1);
   const contactKey = buildContactKey(phone, email);
   if (!fullName || !contactKey) return null;
+  // Shifted columns put a surname here: without an email, such a row has no contact at all.
+  if (phone && !isPhoneLike(phone)) return null;
 
   return {
     rowNumber,

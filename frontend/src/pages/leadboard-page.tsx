@@ -1,3 +1,4 @@
+import { isUsablePhone } from "../lib/phone";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useClock } from "../lib/use-clock";
 import { BulkLeadDialog, describeBulkResult } from "../features/practices/components/BulkLeadDialog";
@@ -324,9 +325,9 @@ export function LeadBoardPage() {
       return [normalizeKey(view), normalizeKey(operator?.label)].includes(normalizeKey(lead.assignedTo));
     });
     const filtered = source.filter((lead) => {
-      if (dataFilter === "missing-phone" && lead.phone) return false;
+      if (dataFilter === "missing-phone" && isUsablePhone(lead.phone)) return false;
       if (dataFilter === "missing-email" && lead.email) return false;
-      if (dataFilter === "complete" && (!lead.phone || !lead.email)) return false;
+      if (dataFilter === "complete" && (!isUsablePhone(lead.phone) || !lead.email)) return false;
       if (view === "dated" && datedFilter !== "all" && datedKind(lead) !== datedFilter) return false;
       if (view === "dated" && datedFile && describeSource(lead.source).file !== datedFile) return false;
       if (!query) return true;
@@ -520,7 +521,7 @@ export function LeadBoardPage() {
                 <select value={dataFilter} onChange={(event) => setDataFilter(event.target.value as DataFilter)} aria-label="Filtro completezza dati">
                   <option value="all">Tutte</option>
                   <option value="complete">Complete</option>
-                  <option value="missing-phone">Senza telefono</option>
+                  <option value="missing-phone">Senza telefono valido</option>
                   <option value="missing-email">Senza email</option>
                 </select>
               </label>
@@ -605,7 +606,7 @@ export function LeadBoardPage() {
                   </div>
 
                   <div className="ops-row-cell contacts">
-                    <span>{lead.phone || "Telefono mancante"}</span>
+                    <span className={isUsablePhone(lead.phone) ? "" : "ops-bad-phone"}>{!lead.phone ? "Telefono mancante" : isUsablePhone(lead.phone) ? lead.phone : `Telefono non valido: ${lead.phone}`}</span>
                     <small>{lead.email || "Email mancante"}</small>
                   </div>
 

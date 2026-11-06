@@ -1,3 +1,4 @@
+import { isUsablePhone } from "../lib/phone";
 import { useClock } from "../lib/use-clock";
 import { romeDateTimeInput, romeInputToIso, romeDayStamp, romeCalendarDate } from "../lib/business-time";
 import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
@@ -2295,6 +2296,9 @@ export function PraticaDetailPage() {
                 </button>
               </div>
               {contactNotice ? <p className="pd-phone-notice" role="status">{contactNotice}</p> : null}
+              {detail.lead.phone && !isUsablePhone(detail.lead.phone)
+                ? <p className="pd-phone-notice" role="alert">Il telefono di questa scheda non è un numero: chiamate e WhatsApp non partono. Correggilo con Modifica dati.</p>
+                : null}
               <p className="pd-hero-meta">
                 {detail.lead.assignedTo ? <>Assegnata a <strong>{detail.lead.assignedTo}</strong></> : "Non assegnata"}
                 {detail.lead.customerId ? (

@@ -26,6 +26,7 @@ const {
   recordWhatsappDiagnostic,
   getWhatsappDiagnostics
 } = require("../common/chatStore");
+const { whatsappRecipient } = require("../common/phoneIdentity");
 const {
   checkTemplateSend,
   buildTemplateComponents,
@@ -450,6 +451,8 @@ async function createLeadTimelineActivity(leadId, type, text, actor, meta = {}) 
  * variables, retry idempotency, audit fields and the lead timeline entry.
  */
 async function performTemplateSend({ template, to, conversation, lead, overrides = {}, trigger, agentName, idempotencyKey, customerName }) {
+  // Before anything is written: a refused send must not leave an empty chat behind.
+  if (!whatsappRecipient(to)) return { status: 400, body: { error: INVALID_PHONE_ERROR, code: "invalid_phone" } };
   if (idempotencyKey) {
     const existing = await findMessageByIdempotencyKey(idempotencyKey);
     if (existing) return { status: 200, body: { ok: true, duplicate: true, conversationId: existing.conversationId, message: existing } };
@@ -744,6 +747,8 @@ async function handleInboundWebhook(payload) {
   return { messageCount, statusCount };
 }
 
+const INVALID_PHONE_ERROR = "Il telefono di questo contatto non e un numero valido: correggilo nella scheda prima di inviare.";
+
 async function sendViaMeta(to, text) {
   if (!WA_ACCESS_TOKEN || !WA_PHONE_NUMBER_ID) {
     return { simulated: true, providerMessageId: `sim_${Date.now()}` };
@@ -758,7 +763,7 @@ async function sendViaMeta(to, text) {
     },
     body: JSON.stringify({
       messaging_product: "whatsapp",
-      to,
+      to: whatsappRecipient(to),
       type: "text",
       text: { body: text }
     })
@@ -789,7 +794,7 @@ async function sendTemplateViaMeta(to, template, components = []) {
     },
     body: JSON.stringify({
       messaging_product: "whatsapp",
-      to,
+      to: whatsappRecipient(to),
       type: "template",
       template: {
         name: templateName,
@@ -831,7 +836,7 @@ async function sendAttachmentViaMeta(to, attachment) {
     },
     body: JSON.stringify({
       messaging_product: "whatsapp",
-      to,
+      to: whatsappRecipient(to),
       type: mediaType,
       [mediaType]: {
         link: attachment.url,
@@ -1207,6 +1212,10 @@ const server = http.createServer(async (req, res) => {
       const to = String(body.to || (conversation ? conversation.phone : "")).trim();
       if (!to) {
         sendJson(res, 400, { error: "Numero destinatario mancante (to)." });
+        return;
+      }
+      if (!whatsappRecipient(to)) {
+        sendJson(res, 400, { error: INVALID_PHONE_ERROR, code: "invalid_phone" });
         return;
       }
       // Meta restricts every freeform message type -- not just text -- to the 24h customer

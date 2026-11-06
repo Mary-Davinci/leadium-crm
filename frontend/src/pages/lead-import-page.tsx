@@ -1,3 +1,4 @@
+import { isUsablePhone } from "../lib/phone";
 import { useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { getAuthUser } from "../lib/auth";
@@ -146,6 +147,11 @@ function buildImportCandidates(
         email,
         reason: "Nome o contatto mancante."
       });
+      return;
+    }
+
+    if (phone && !isUsablePhone(phone)) {
+      invalidRows.push({ rowNumber, fullName, phone, email, reason: "Il telefono non e un numero: controlla le colonne del file." });
       return;
     }
 
