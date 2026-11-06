@@ -59,8 +59,12 @@
   function check() {
     const button = findAnswerButton();
     if (button === current) return;
+    const wasRinging = current !== null;
     current = button; // reset to null when the screen goes away, so a reused button counts again
-    if (!button) return;
+    if (!button) {
+      if (wasRinging) send({ type: "ring-ended" });
+      return;
+    }
     const digits = shownDigits(button);
     send({ type: "claim", shownDigits: digits }).then((result) => {
       if (!result || result.decision !== "answer" || !button.isConnected) return;

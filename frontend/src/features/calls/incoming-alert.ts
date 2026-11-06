@@ -51,10 +51,20 @@ export function useIncomingAlert(calls: RingingCall[]): IncomingAlertState {
     return () => { window.removeEventListener("focus", update); window.removeEventListener("blur", update); window.removeEventListener("pointerdown", unlock); };
   }, []);
 
-  // The extension brings the 3CX tab forward: the answer button is there, and this signal works
-  // while that tab is hidden. Without the extension nobody listens.
+  // The extension shows the call over any program, with a working Rispondi, even while the 3CX tab
+  // is hidden. Without the extension nobody listens.
+  const announced = useRef(new Set<string>());
   useEffect(() => {
-    for (const call of ringing) window.postMessage({ source: "leadium-3cx-autoanswer", type: "incoming-call", callId: call.callId }, window.location.origin);
+    const live = new Set(ringing.map((call) => call.callId));
+    for (const call of ringing) {
+      announced.current.add(call.callId);
+      window.postMessage({ source: "leadium-3cx-autoanswer", type: "incoming-call", callId: call.callId, name: call.customerName || "", phone: call.customerPhone || "" }, window.location.origin);
+    }
+    for (const callId of announced.current) {
+      if (live.has(callId)) continue;
+      announced.current.delete(callId);
+      if (!live.size) window.postMessage({ source: "leadium-3cx-autoanswer", type: "call-ended" }, window.location.origin);
+    }
   }, [ringingKey]);
 
   useEffect(() => {
@@ -67,7 +77,9 @@ export function useIncomingAlert(calls: RingingCall[]): IncomingAlertState {
     }
     if (!away || !ringing.length) return;
 
-    if (permission === "granted") {
+    // From 0.5.0 the extension's notification can answer: this one only brings Leadium forward.
+    // Older versions show nothing of their own, so for them this one stays.
+    if (permission === "granted" && !document.documentElement.hasAttribute("data-leadium-3cx-ring")) {
       for (const call of ringing) {
         if (notifications.has(call.callId)) continue;
         const notification = new Notification("Chiamata in arrivo", { body: alertBody(call), tag: `leadium-call-${call.callId}`, requireInteraction: true });

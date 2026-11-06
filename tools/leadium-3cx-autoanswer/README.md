@@ -2,8 +2,11 @@
 
 Fa partire la chiamata con un solo clic su **Chiama** in Leadium: quando 3CX fa squillare il
 client web per il richiamo, l'estensione preme Rispondi nella scheda 3CX. Le altre chiamate
-(colleghi, clienti in arrivo) non vengono risposte: portano la scheda 3CX in primo piano, così si
-vedono anche lavorando in Excel. Si disattiva dal popup con **Chiamate in primo piano**.
+(colleghi, clienti in arrivo) non vengono risposte. Se l'operatore è altrove compaiono una
+finestrella e una notifica di sistema con **Rispondi** e **Apri 3CX**, anche sopra altri programmi;
+Rispondi preme Answer nella scheda 3CX nascosta e porta l'operatore lì, da dove può chiudere.
+Si chiudono da sole quando smette di squillare. La finestrella si disattiva dal popup con
+**Finestra di chiamata**, la notifica resta.
 
 **Rispondi in Leadium.** Il client web 3CX (l'unico disponibile su Mac) non accetta comandi dal
 centralino: 3CX segnala `direct_control: false` e l'API non può rispondere al suo posto. Con
@@ -21,7 +24,7 @@ Non è un'integrazione supportata da 3CX: preme il pulsante `button[data-qa="ans
 web (osservato a ottobre 2026). Se un aggiornamento di 3CX lo cambia, l'estensione smette di
 rispondere da sola e la chiamata squilla come prima.
 
-Per portare davanti la scheda 3CX bastano due segnali indipendenti: Leadium, che sa dal centralino
+Per annunciare la chiamata bastano due segnali indipendenti: Leadium, che sa dal centralino
 che sta squillando (serve la pagina Leadium aperta), e il riquadro della chiamata nella scheda 3CX.
 
 ## Requisiti

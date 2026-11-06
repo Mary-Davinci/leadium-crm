@@ -5,6 +5,8 @@ function send(message) {
 }
 // Tells Leadium that its Rispondi can work through this extension.
 document.documentElement.setAttribute("data-leadium-3cx-answer", "1");
+// Tells Leadium that this version shows ringing calls itself (from 0.5.0).
+document.documentElement.setAttribute("data-leadium-3cx-ring", "1");
 
 /** Asks the extension to press Answer in the 3CX tab and hands the outcome back to the page. */
 async function answerCall(requestId, phone) {
@@ -19,9 +21,11 @@ window.addEventListener("message", (event) => {
   if (!data || data.source !== "leadium-3cx-autoanswer") return;
   if (data.type === "dial-started") { send({ type: "dial-started" }); return; }
   if (data.type === "incoming-call") {
-    if (typeof data.callId === "string" && /^\d{1,20}$/.test(data.callId)) send({ type: "incoming-call", callId: data.callId });
+    if (typeof data.callId !== "string" || !/^\d{1,20}$/.test(data.callId)) return;
+    send({ type: "incoming-call", callId: data.callId, name: String(data.name || "").slice(0, 80), phone: String(data.phone || "").slice(0, 24) });
     return;
   }
+  if (data.type === "call-ended") { send({ type: "ring-ended" }); return; }
   if (data.type === "answer-call") {
     if (typeof data.requestId === "string" && typeof data.phone === "string") void answerCall(data.requestId.slice(0, 80), data.phone.replace(/\D/g, "").slice(0, 15));
     return;

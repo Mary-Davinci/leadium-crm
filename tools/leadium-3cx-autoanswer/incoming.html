@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <title>Chiamata in arrivo</title>
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; padding: 16px; font: 14px/1.4 "Segoe UI", system-ui, sans-serif; background: #20314b; color: #ffffff; display: grid; gap: 12px; }
+    small { color: #c9d6e8; font-size: 12px; }
+    strong { display: block; font-size: 18px; line-height: 1.25; overflow-wrap: anywhere; }
+    .phone { font-size: 14px; color: #c9d6e8; }
+    .actions { display: flex; gap: 8px; }
+    button { flex: 1; min-height: 44px; border: 0; border-radius: 999px; font: inherit; font-weight: 700; cursor: pointer; }
+    #answer { background: #1f8a57; color: #ffffff; }
+    #open { background: transparent; color: #ffffff; border: 1px solid #7f93ad; font-weight: 600; }
+    button:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+    button:disabled { opacity: .6; cursor: default; }
+  </style>
+</head>
+<body>
+  <small>Chiamata in arrivo</small>
+  <div>
+    <strong id="name">Numero sconosciuto</strong>
+    <span class="phone" id="phone"></span>
+  </div>
+  <div class="actions">
+    <button type="button" id="answer">Rispondi</button>
+    <button type="button" id="open">Apri 3CX</button>
+  </div>
+  <script src="incoming.js"></script>
+</body>
+</html>

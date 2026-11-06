@@ -34,6 +34,89 @@ async function bringForward(tabId, force = false) {
 
 const tabIdOf = (sender) => (sender.tab ? sender.tab.id : undefined);
 
+const RING_NOTIFICATION = "leadium-call";
+let ringQueue = Promise.resolve();
+// Leadium and the 3CX tab report the same call a moment apart: one at a time, or it shows twice.
+const oneAtATime = (work) => (ringQueue = ringQueue.then(work, work));
+
+async function showRinging(ringing, opensWindow) {
+  const title = ringing.name || ringing.phone || "Numero sconosciuto";
+  try {
+    await chrome.notifications.create(RING_NOTIFICATION, {
+      type: "basic", iconUrl: "icon.png", title: "Chiamata in arrivo", message: title,
+      contextMessage: ringing.name ? ringing.phone || "" : "", priority: 2, requireInteraction: true,
+      buttons: [{ title: "Rispondi" }, { title: "Apri 3CX" }]
+    });
+  } catch {
+    await log("Notifica non mostrata: controlla le notifiche di Chrome nel sistema");
+  }
+  if (!opensWindow) return;
+  try {
+    const opened = await chrome.windows.create({ url: "incoming.html", type: "popup", width: 340, height: 230, focused: true });
+    await chrome.storage.session.set({ ringing: { ...ringing, windowId: opened.id } });
+  } catch {
+    await log("Finestra della chiamata non aperta");
+  }
+}
+
+/** A real incoming call, while the operator is away from Leadium, whose Rispondi works from there. */
+function announceCall(call) {
+  return oneAtATime(async () => {
+    const { ringing, lastCallId, leadiumFocused } = await chrome.storage.session.get(["ringing", "lastCallId", "leadiumFocused"]);
+    if (leadiumFocused) return;
+    if (call.callId && call.callId === lastCallId) return;
+    if (call.callId) await chrome.storage.session.set({ lastCallId: call.callId });
+    if (ringing && (!ringing.callId || !call.callId || ringing.callId === call.callId)) {
+      // The same call seen by the other source: it may bring the name, never a second window.
+      const merged = { ...ringing, callId: ringing.callId || call.callId, name: ringing.name || call.name, phone: ringing.phone || call.phone };
+      await chrome.storage.session.set({ ringing: merged });
+      if (merged.name !== ringing.name) await showRinging(merged, false);
+      return;
+    }
+    const { settings = {} } = await chrome.storage.local.get("settings");
+    const next = { callId: call.callId || "", name: call.name || "", phone: call.phone || "", windowId: ringing ? ringing.windowId : undefined };
+    await chrome.storage.session.set({ ringing: next });
+    await log(`Chiamata in arrivo (${mask(next.phone)}): finestra e notifica`);
+    await showRinging(next, settings.bringForward !== false && next.windowId === undefined);
+  });
+}
+
+/** The ringing is over, whoever stopped it. */
+function endRinging() {
+  return oneAtATime(async () => {
+    const { ringing } = await chrome.storage.session.get("ringing");
+    if (!ringing) return;
+    await chrome.storage.session.remove("ringing");
+    await chrome.notifications.clear(RING_NOTIFICATION).catch(() => undefined);
+    if (typeof ringing.windowId === "number") await chrome.windows.remove(ringing.windowId).catch(() => undefined);
+  });
+}
+
+/** Rispondi outside Leadium: the operator ends up on 3CX, where the call can be closed. */
+async function answerRinging() {
+  const { ringing, threecxTabId } = await chrome.storage.session.get(["ringing", "threecxTabId"]);
+  const digits = String((ringing && ringing.phone) || "").replace(/\D/g, "");
+  if (typeof threecxTabId !== "number") {
+    await log("Rispondi: la scheda 3CX non risulta aperta");
+    return;
+  }
+  const result = await pressAnswer(threecxTabId, digits);
+  await log(`Rispondi dalla finestra (${mask(digits)}): ${result.pressed ? "premuto nella scheda 3CX" : "non riuscito, apro la scheda 3CX"}`);
+  await endRinging();
+  await bringForward(threecxTabId, true);
+}
+
+async function open3cx() {
+  const { threecxTabId } = await chrome.storage.session.get("threecxTabId");
+  await bringForward(threecxTabId, true);
+}
+
+chrome.notifications.onButtonClicked.addListener((id, button) => {
+  if (id !== RING_NOTIFICATION) return;
+  void (button === 0 ? answerRinging() : open3cx());
+});
+chrome.notifications.onClicked.addListener((id) => { if (id === RING_NOTIFICATION) void open3cx(); });
+
 /** The operator pressed Rispondi in Leadium. 3CX can draw its screen after Leadium: short retries. */
 async function pressAnswer(tabId, digits) {
   let result;
@@ -53,12 +136,16 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       reply({ ok: true });
     } else if (message.type === "incoming-call") {
       // Leadium is told by the PBX itself: this works while the 3CX tab is hidden and draws nothing.
-      const { lastCallId, threecxTabId } = await chrome.storage.session.get(["lastCallId", "threecxTabId"]);
-      const { settings = {} } = await chrome.storage.local.get("settings");
-      if (lastCallId !== message.callId && settings.bringForward !== false) {
-        await chrome.storage.session.set({ lastCallId: message.callId });
-        await bringForward(threecxTabId);
-      }
+      await announceCall({ callId: message.callId, name: message.name, phone: message.phone });
+      reply({ ok: true });
+    } else if (message.type === "ring-ended") {
+      await endRinging();
+      reply({ ok: true });
+    } else if (message.type === "ring-answer") {
+      await answerRinging();
+      reply({ ok: true });
+    } else if (message.type === "ring-open-3cx") {
+      await open3cx();
       reply({ ok: true });
     } else if (message.type === "leadium-focus") {
       await chrome.storage.session.set({ leadiumFocused: message.focused === true });
@@ -109,7 +196,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         : decision === "diagnostic" ? (settings.enabled ? "è il richiamo, ma modalità diagnostica: non rispondo" : "è il richiamo, ma estensione disattivata")
         : !valid ? "nessun Chiama recente da Leadium: squilla normalmente"
         : "numero diverso da quello chiamato: squilla normalmente"}`);
-      if (decision === "ignore" && settings.bringForward !== false) await bringForward(tabIdOf(sender));
+      if (decision === "ignore") await announceCall({ phone: shown.split(" ")[0] || "" });
       reply({ decision });
     } else if (message.type === "note") {
       await log(String(message.text).slice(0, 200));

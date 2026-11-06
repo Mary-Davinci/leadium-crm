@@ -4,9 +4,21 @@ LEADIUM - RISPOSTA AUTOMATICA 3CX
 A cosa serve
 ------------
 Clicchi "Chiama" in Leadium e la chiamata parte da sola: non devi piu' rispondere
-nel client 3CX. Quando invece arriva una chiamata vera (clienti, colleghi), premi Rispondi
-direttamente in Leadium e parli, anche con la scheda 3CX nascosta. Se stai lavorando in un altro
-programma, ad esempio Excel, la scheda 3CX compare davanti: premi Rispondi li'.
+nel client 3CX. Quando invece arriva una chiamata vera (clienti, colleghi):
+- se sei su Leadium, premi Rispondi direttamente in Leadium;
+- se sei altrove, ad esempio su Excel, compaiono una finestrella e una notifica del computer,
+  entrambe con Rispondi. Premilo: la chiamata parte e si apre la scheda 3CX, da cui puoi chiudere.
+
+Chrome deve restare aperto, con la scheda 3CX e, meglio ancora, anche quella di Leadium.
+
+
+NOTIFICHE E RISPARMIO MEMORIA (una volta sola)
+----------------------------------------------
+- Windows: Impostazioni > Sistema > Notifiche: attiva Google Chrome e tieni disattivato
+  "Non disturbare".
+- Mac: Impostazioni di Sistema > Notifiche > Google Chrome: consenti, stile "Avvisi".
+- Chrome: Impostazioni > Prestazioni > Risparmio memoria: aggiungi my3cx.it e
+  leadium-crm.vercel.app ai siti sempre attivi, altrimenti una scheda ferma non segnala la chiamata.
 
 
 PRIMA DI INSTALLARE (una volta sola)

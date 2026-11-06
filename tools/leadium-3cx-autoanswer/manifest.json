@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Leadium – Risposta automatica 3CX",
-  "version": "0.4.0",
-  "description": "Risponde nel client web 3CX al richiamo chiesto da Leadium e, su comando dell'operatore, alle chiamate in arrivo. Lavorando altrove porta la scheda 3CX in primo piano.",
-  "permissions": ["storage"],
+  "version": "0.5.0",
+  "description": "Risponde nel client web 3CX al richiamo chiesto da Leadium. Le chiamate in arrivo si vedono e si prendono da qualsiasi programma, con una finestrella e una notifica.",
+  "permissions": ["storage", "notifications"],
+  "icons": { "128": "icon.png" },
   "background": { "service_worker": "background.js" },
   "action": { "default_popup": "popup.html", "default_title": "Leadium – Risposta automatica 3CX" },
   "content_scripts": [
