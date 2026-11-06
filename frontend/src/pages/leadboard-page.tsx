@@ -2,7 +2,8 @@ import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useClock } from "../lib/use-clock";
 import { BulkLeadDialog, describeBulkResult } from "../features/practices/components/BulkLeadDialog";
 import { LeadActionDialog, type LeadAction } from "../features/practices/components/LeadActionDialog";
-import { isClosedLead, isStaleLead, isWorkedLead, STALE_MONTHS } from "../features/practices/worked";
+import { DATED_MONTHS, datedKind, describeSource, isDatedLead, lastActivityAt, loadedFiles, monthsAgoLabel, type DatedKind } from "../features/practices/dated";
+import { isClosedLead, isWorkedLead } from "../features/practices/worked";
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { getAuthUser } from "../lib/auth";
@@ -35,6 +36,10 @@ type Lead = {
   closingOutcome?: "open" | "won" | "lost" | "disqualified";
   createdAt?: string;
   updatedAt?: string;
+  notes?: string;
+  lastContactAt?: string | null;
+  nextActionAt?: string;
+  callAttempts?: number;
 };
 
 type TaskBoardPayload = {
@@ -53,7 +58,18 @@ type OperatorOption = {
   leadCount: number;
 };
 
-type DataFilter = "all" | "complete" | "missing-phone" | "missing-email" | "stale";
+type DataFilter = "all" | "complete" | "missing-phone" | "missing-email";
+type DatedFilter = "all" | DatedKind;
+
+const PAGE_SIZE = 50;
+// The server takes at most this many in one bulk operation.
+const MAX_SELECTION = 500;
+const DATED_KINDS: Array<{ key: DatedFilter; label: string; hint: string }> = [
+  { key: "all", label: "Tutti i datati", hint: "" },
+  { key: "no-answer", label: "Non rispondono", hint: "2 o più tentativi a vuoto" },
+  { key: "never-contacted", label: "Mai contattati", hint: "Caricati e mai lavorati" },
+  { key: "worked", label: "Lavorati e fermi", hint: "Contattati, poi più niente" }
+];
 type SortMode = "newest" | "name" | "lightest-load";
 
 function normalizeLead(input: Lead): Lead {
@@ -117,10 +133,11 @@ function compareLeadsForAssignment(a: Lead, b: Lead) {
 }
 
 function formatImportDate(value?: string) {
-  if (!value) return "Data import non disponibile";
+  if (!value) return "data non disponibile";
   return new Date(value).toLocaleString("it-IT", { timeZone: "Europe/Rome",
     day: "2-digit",
     month: "2-digit",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit"
   });
@@ -155,6 +172,10 @@ export function LeadBoardPage() {
   const [error, setError] = useState("");
 
   const [view, setView] = useState("inbox");
+  const [datedMonths, setDatedMonths] = useState<number>(DATED_MONTHS[0]);
+  const [datedFilter, setDatedFilter] = useState<DatedFilter>("all");
+  const [datedFile, setDatedFile] = useState("");
+  const [page, setPage] = useState(0);
   const [archivedLeads, setArchivedLeads] = useState<Lead[]>([]);
   const [leadAction, setLeadAction] = useState<{ lead: Lead; action: LeadAction } | null>(null);
   const [notice, setNotice] = useState("");
@@ -219,9 +240,9 @@ export function LeadBoardPage() {
   }
   useEffect(() => {
     setSelectedLeadIds([]);
-    if (!canView || view !== "archived") return;
+    if (!canView) return;
     let cancelled = false;
-    setLoading(true);
+    if (view === "archived") setLoading(true);
     api<Lead[]>("/api/leads?archived=only").then((rows) => { if (!cancelled) setArchivedLeads(rows.map(normalizeLead)); })
       .catch((e) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -288,9 +309,17 @@ export function LeadBoardPage() {
     [leads]
   );
 
+  const datedLeads = useMemo(() => leads.filter((lead) => isDatedLead(lead, Date.now(), datedMonths)), [leads, datedMonths, clockTick]);
+  const datedCounts = useMemo(() => {
+    const counts: Record<DatedFilter, number> = { all: datedLeads.length, "no-answer": 0, "never-contacted": 0, worked: 0 };
+    datedLeads.forEach((lead) => { counts[datedKind(lead)] += 1; });
+    return counts;
+  }, [datedLeads]);
+  const datedFiles = useMemo(() => loadedFiles(datedLeads), [datedLeads]);
+
   const filteredLeads = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const source = view === "inbox" ? importedUnassignedLeads : view === "archived" ? archivedLeads : view === "all" ? leads : leads.filter((lead) => {
+    const source = view === "inbox" ? importedUnassignedLeads : view === "archived" ? archivedLeads : view === "all" ? leads : view === "dated" ? datedLeads : leads.filter((lead) => {
       const operator = operatorChoices.find((item) => item.username === view);
       return [normalizeKey(view), normalizeKey(operator?.label)].includes(normalizeKey(lead.assignedTo));
     });
@@ -298,7 +327,8 @@ export function LeadBoardPage() {
       if (dataFilter === "missing-phone" && lead.phone) return false;
       if (dataFilter === "missing-email" && lead.email) return false;
       if (dataFilter === "complete" && (!lead.phone || !lead.email)) return false;
-      if (dataFilter === "stale" && !isStaleLead(lead, Date.now())) return false;
+      if (view === "dated" && datedFilter !== "all" && datedKind(lead) !== datedFilter) return false;
+      if (view === "dated" && datedFile && describeSource(lead.source).file !== datedFile) return false;
       if (!query) return true;
       return `${lead.fullName} ${lead.phone} ${lead.email || ""} ${lead.source || ""} ${lead.status}`.toLowerCase().includes(query);
     });
@@ -318,8 +348,16 @@ export function LeadBoardPage() {
       });
     }
 
+    // Datati: the oldest first, they are the first to clear out.
+    if (view === "dated") return filtered.sort((a, b) => lastActivityAt(a) - lastActivityAt(b));
+
     return filtered.sort(compareLeadsForAssignment);
-  }, [assignmentDrafts, dataFilter, defaultOperatorUsername, importedUnassignedLeads, operatorChoices, search, sortMode, view, archivedLeads, leads]);
+  }, [assignmentDrafts, dataFilter, datedFile, datedFilter, datedLeads, defaultOperatorUsername, importedUnassignedLeads, operatorChoices, search, sortMode, view, archivedLeads, leads]);
+
+  useEffect(() => { setPage(0); }, [view, search, dataFilter, sortMode, datedMonths, datedFilter, datedFile]);
+  const lastPage = Math.max(0, Math.ceil(filteredLeads.length / PAGE_SIZE) - 1);
+  const currentPage = Math.min(page, lastPage);
+  const pageLeads = filteredLeads.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
 
   const summary = useMemo(
     () => ({
@@ -336,7 +374,7 @@ export function LeadBoardPage() {
     [defaultOperatorUsername, operatorChoices]
   );
   const selectedLeadSet = useMemo(() => new Set(selectedLeadIds), [selectedLeadIds]);
-  const allVisibleSelected = Boolean(filteredLeads.length) && filteredLeads.every((lead) => selectedLeadSet.has(lead.id));
+  const allVisibleSelected = Boolean(pageLeads.length) && pageLeads.every((lead) => selectedLeadSet.has(lead.id));
   // Only selected leads still visible in the queue are assigned, so the button counts those.
   const batchTargetIds = filteredLeads.filter((lead) => selectedLeadSet.has(lead.id)).map((lead) => lead.id);
 
@@ -351,12 +389,16 @@ export function LeadBoardPage() {
   function toggleVisibleSelection() {
     setSelectedLeadIds((current) => {
       if (allVisibleSelected) {
-        return current.filter((id) => !filteredLeads.some((lead) => lead.id === id));
+        return current.filter((id) => !pageLeads.some((lead) => lead.id === id));
       }
       const next = new Set(current);
-      filteredLeads.forEach((lead) => next.add(lead.id));
+      pageLeads.forEach((lead) => next.add(lead.id));
       return Array.from(next);
     });
+  }
+
+  function selectWholeList() {
+    setSelectedLeadIds(filteredLeads.slice(0, MAX_SELECTION).map((lead) => lead.id));
   }
 
   function applyAssignmentLocally(leadIds: string[], assignedTo: string) {
@@ -398,6 +440,7 @@ export function LeadBoardPage() {
   }
 
   if (!canView) return <Navigate to="/dashboard" replace />;
+  const isFixedView = ["inbox", "all", "dated", "archived"].includes(view);
 
   return (
     <div className="ops-control">
@@ -429,17 +472,23 @@ export function LeadBoardPage() {
         }} />}
       {notice && <div className="ops-alert neutral" role="status">{notice}</div>}
       <nav className="ops-management-tabs" aria-label="Elenchi gestione">
-        <button type="button" aria-pressed={view === "inbox"} onClick={() => setView("inbox")}>Da assegnare</button>
-        <button type="button" aria-pressed={view === "all"} onClick={() => setView("all")}>Tutte le lead</button>
-        <button type="button" aria-pressed={view === "archived"} onClick={() => setView("archived")}>Archiviate</button>
-        {!["inbox", "all", "archived"].includes(view) && <strong>Lead di {operatorChoices.find((operator) => operator.username === view)?.label}</strong>}
+        <button type="button" aria-pressed={view === "inbox"} onClick={() => setView("inbox")}>Da assegnare<span aria-hidden="true"> · {importedUnassignedLeads.length}</span></button>
+        <button type="button" aria-pressed={view === "all"} onClick={() => setView("all")}>Tutte le lead<span aria-hidden="true"> · {leads.length}</span></button>
+        <button type="button" aria-pressed={view === "dated"} onClick={() => setView("dated")}>Contatti datati<span aria-hidden="true"> · {datedLeads.length}</span></button>
+        <button type="button" aria-pressed={view === "archived"} onClick={() => setView("archived")}>Archiviate<span aria-hidden="true"> · {archivedLeads.length}</span></button>
+        {!isFixedView && <strong>Lead di {operatorChoices.find((operator) => operator.username === view)?.label}</strong>}
       </nav>
       {error ? <div className="ops-alert">{error}</div> : null}
       {loading ? <div className="ops-alert neutral">Caricamento coda lead...</div> : null}
 
-      <div className="ops-layout">
+      <div className={`ops-layout ${view === "dated" ? "full" : ""}`}>
         <section className="ops-panel ops-inbox-panel">
-          <div className="ops-toolbar">
+          {view === "dated" && <div className="ops-dated-intro">
+            <h2>Contatti datati</h2>
+            <p>Nessun contatto da oltre {datedMonths} mesi e nessuna vendita. Archiviare non cancella nulla: dati e storico restano, e se il cliente ricontatta rientra da solo.</p>
+          </div>}
+
+          <div className={`ops-toolbar ${view === "dated" ? "dated" : ""}`}>
             <label className="ops-field search">
               <span>Cerca</span>
               <input
@@ -451,52 +500,92 @@ export function LeadBoardPage() {
               />
             </label>
 
-            <label className="ops-field">
-              <span>Dati</span>
-              <select value={dataFilter} onChange={(event) => setDataFilter(event.target.value as DataFilter)} aria-label="Filtro completezza dati">
-                <option value="all">Tutte</option>
-                <option value="complete">Complete</option>
-                <option value="missing-phone">Senza telefono</option>
-                <option value="missing-email">Senza email</option>
-                <option value="stale">Ferme da oltre {STALE_MONTHS} mesi</option>
-              </select>
-            </label>
+            {view === "dated" ? <>
+              <label className="ops-field">
+                <span>Fermi da</span>
+                <select value={datedMonths} onChange={(event) => setDatedMonths(Number(event.target.value))} aria-label="Fermi da">
+                  {DATED_MONTHS.map((months) => <option key={months} value={months}>Oltre {months} mesi</option>)}
+                </select>
+              </label>
+              <label className="ops-field">
+                <span>File di caricamento</span>
+                <select value={datedFile} onChange={(event) => setDatedFile(event.target.value)} aria-label="File di caricamento">
+                  <option value="">Tutti i file</option>
+                  {datedFiles.map((item) => <option key={item.source} value={item.source}>{item.label} · {formatDay(item.loadedAt)} · {item.count}</option>)}
+                </select>
+              </label>
+            </> : <>
+              <label className="ops-field">
+                <span>Dati</span>
+                <select value={dataFilter} onChange={(event) => setDataFilter(event.target.value as DataFilter)} aria-label="Filtro completezza dati">
+                  <option value="all">Tutte</option>
+                  <option value="complete">Complete</option>
+                  <option value="missing-phone">Senza telefono</option>
+                  <option value="missing-email">Senza email</option>
+                </select>
+              </label>
 
-            <label className="ops-field">
-              <span>Ordina</span>
-              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} aria-label="Ordina lead">
-                <option value="newest">Piu recenti</option>
-                <option value="name">Nome cliente</option>
-                <option value="lightest-load">Operatore suggerito</option>
-              </select>
-            </label>
+              <label className="ops-field">
+                <span>Ordina</span>
+                <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} aria-label="Ordina lead">
+                  <option value="newest">Più recenti</option>
+                  <option value="name">Nome cliente</option>
+                  <option value="lightest-load">Operatore suggerito</option>
+                </select>
+              </label>
+            </>}
           </div>
 
-          <div className="ops-list-head">
-            <div className="ops-list-summary">
-              <strong>{view === "inbox" ? "Coda da assegnare" : view === "archived" ? "Contatti archiviati" : view === "all" ? "Tutte le lead" : "Lead assegnate all’operatore"}</strong>
-              <span>{summary.visibleLeads} visibili</span>
-            </div>
-            <label className="ops-select-all">
-              <input type="checkbox" checked={allVisibleSelected} onChange={toggleVisibleSelection} />
-              <span>Seleziona tutti</span>
-            </label>
-          </div>
+          {view === "dated" && <div className="ops-dated-kinds">
+            {DATED_KINDS.map((kind) => <button key={kind.key} type="button" aria-pressed={datedFilter === kind.key} onClick={() => setDatedFilter(kind.key)}>
+              <strong>{datedCounts[kind.key]}</strong>
+              <span>{kind.label}</span>
+              {kind.hint ? <small>{kind.hint}</small> : null}
+            </button>)}
+          </div>}
 
-          <div className="ops-grid-head" aria-hidden="true">
-            <span />
-            <span>Lead</span>
+          {batchTargetIds.length > 0 && <div className="ops-bulk-bar" role="group" aria-label="Azioni sui contatti selezionati">
+            <strong>{batchTargetIds.length} {batchTargetIds.length === 1 ? "selezionata" : "selezionate"}</strong>
+            {batchTargetIds.length < Math.min(filteredLeads.length, MAX_SELECTION) && <button type="button" className="ops-bulk-link" onClick={selectWholeList}>
+              {filteredLeads.length > MAX_SELECTION ? `Seleziona le prime ${MAX_SELECTION}` : `Seleziona tutte le ${filteredLeads.length}`}
+            </button>}
+            <span className="ops-bulk-spacer" />
+            {view !== "archived" && <>
+              <label className="ops-bulk-assign">
+                <span>Assegna a</span>
+                <select value={defaultOperatorUsername} onChange={(event) => setDefaultOperatorUsername(event.target.value)} aria-label="Operatore predefinito">
+                  <option value="">Seleziona operatore</option>
+                  {operatorChoices.map((operator) => <option key={operator.username} value={operator.username}>{operator.label} - {formatOperatorLoad(operator)}</option>)}
+                </select>
+              </label>
+              <button type="button" className="ops-bulk-btn" onClick={handleAssignVisibleBatch} disabled={!selectedDefaultOperator || batchAssigning}>
+                {batchAssigning ? "Assegno..." : `Assegna ${batchTargetIds.length} lead`}
+              </button>
+            </>}
+            <button type="button" className={`ops-bulk-btn ${view === "dated" || view === "archived" ? "" : "ghost"}`} onClick={() => setBulkAction(view === "archived" ? "restore" : "archive")} disabled={batchAssigning}>
+              {view === "archived" ? `Ripristina ${batchTargetIds.length} lead` : `Archivia ${batchTargetIds.length} lead`}
+            </button>
+          </div>}
+
+          <div className={`ops-grid-head ${view === "dated" ? "dated" : ""}`}>
+            <span><input type="checkbox" checked={allVisibleSelected} onChange={toggleVisibleSelection} aria-label="Seleziona tutti" /></span>
+            <span>Cliente</span>
             <span>Contatti</span>
-            <span>Origine</span>
-            <span>Operatore e azioni</span>
+            {view === "dated" ? <>
+              <span>Ultimo contatto</span>
+              <span>Tentativi</span>
+              <span>Stato</span>
+            </> : <span>Origine</span>}
+            <span>{view === "archived" ? "Archiviazione" : "Operatore"}</span>
+            <span />
           </div>
 
           <div className="ops-grid-body" role="list" aria-label="Elenco lead">
-            {filteredLeads.map((lead) => {
-              const currentDraft = getLeadAssigneeDraft(lead.id);
-              const suggestedOperator = operatorChoices.find((operator) => operator.username === currentDraft) || null;
+            {pageLeads.map((lead) => {
+              const origin = describeSource(lead.source);
+              const last = lastActivityAt(lead);
               return (
-                <article key={lead.id} className={`ops-row ${selectedLeadSet.has(lead.id) ? "selected" : ""}`} role="listitem">
+                <article key={lead.id} className={`ops-row ${view === "dated" ? "dated" : ""} ${selectedLeadSet.has(lead.id) ? "selected" : ""}`} role="listitem">
                   <div className="ops-row-cell checkbox">
                     <input
                       type="checkbox"
@@ -507,32 +596,45 @@ export function LeadBoardPage() {
                   </div>
 
                   <div className="ops-row-cell lead">
-                    <button type="button" className="ops-refresh-btn" onClick={() => navigate(`/pratiche/${lead.id}`)}>{lead.fullName}</button>
-                    <small>Importata {formatImportDate(lead.createdAt || lead.updatedAt)}</small>
+                    <button type="button" className="ops-lead-name" onClick={() => navigate(`/pratiche/${lead.id}`)}>{lead.fullName}</button>
+                    {view === "dated"
+                      ? <small title={[origin.channel, origin.detail].filter(Boolean).join(" · ")}>
+                        {[lead.createdAt ? `Caricato il ${formatDay(Date.parse(lead.createdAt))}` : "", origin.detail || origin.channel].filter(Boolean).join(" · ")}
+                      </small>
+                      : <small>Arrivata il {formatImportDate(lead.createdAt || lead.updatedAt)}</small>}
                   </div>
 
                   <div className="ops-row-cell contacts">
                     <span>{lead.phone || "Telefono mancante"}</span>
-                    <small>{lead.email || "Email non disponibile"}</small>
+                    <small>{lead.email || "Email mancante"}</small>
                   </div>
 
-                  <div className="ops-row-cell source">
-                    <span className="ops-inline-badge source">{lead.source || "import"}</span>
-                  </div>
+                  {view === "dated" ? <>
+                    <div className="ops-row-cell contacts">
+                      <span>{lead.lastContactAt ? monthsAgoLabel(last, Date.now()) : "Mai contattato"}</span>
+                      <small>{lead.lastContactAt ? formatDay(last) : `Dal ${formatDay(last)}`}</small>
+                    </div>
+                    <div className="ops-row-cell ops-cell-text"><small className="ops-cell-label">Tentativi </small>{lead.callAttempts || 0}</div>
+                    <div className="ops-row-cell"><span className={`ops-status ${statusTone(lead.status)}`}>{lead.status || "Senza stato"}</span></div>
+                  </> : <div className="ops-row-cell contacts">
+                    <span>{origin.channel}</span>
+                    <small>{origin.detail || "\u00a0"}</small>
+                  </div>}
 
                   <div className="ops-row-cell assignee">
-                    <strong>{lead.assignedTo || suggestedOperator?.label || "Nessun operatore"}</strong>
-                    <small>
-                      {suggestedOperator
-                        ? formatOperatorLoad(suggestedOperator)
-                        : "Assegna dal pannello"}
-                    </small>
-                    {view === "archived" ? <>
-                      <small>{lead.archivedBy} · {formatImportDate(lead.archivedAt || undefined)} · {lead.archiveReason}</small>
-                      <button type="button" className="ops-refresh-btn" onClick={() => setLeadAction({ lead, action: "restore" })}>Ripristina</button>
-                    </> : <button type="button" className="ops-refresh-btn" disabled={batchAssigning} onClick={() => setLeadAction({ lead, action: "archive" })}>Archivia</button>}
+                    {view === "archived"
+                      ? <>
+                        <span>{lead.archiveReason || "Motivo non indicato"}</span>
+                        <small>{lead.archivedBy} · {formatImportDate(lead.archivedAt || undefined)}</small>
+                      </>
+                      : <span className={lead.assignedTo ? "" : "muted"}>{operatorChoices.find((operator) => operator.key === normalizeKey(lead.assignedTo))?.label || lead.assignedTo || "Da assegnare"}</span>}
                   </div>
 
+                  <div className="ops-row-cell action">
+                    {view === "archived"
+                      ? <button type="button" className="ops-row-btn" onClick={() => setLeadAction({ lead, action: "restore" })}>Ripristina</button>
+                      : <button type="button" className="ops-row-btn" disabled={batchAssigning} onClick={() => setLeadAction({ lead, action: "archive" })}>Archivia</button>}
+                  </div>
                 </article>
               );
             })}
@@ -546,56 +648,17 @@ export function LeadBoardPage() {
               </div>
             ) : null}
           </div>
+
+          {filteredLeads.length > 0 && <div className="ops-list-foot">
+            <span>Mostrate {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, filteredLeads.length)} di {filteredLeads.length}</span>
+            {lastPage > 0 && <div>
+              <button type="button" className="ops-refresh-btn" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Precedenti</button>
+              <button type="button" className="ops-refresh-btn" disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)}>Successive</button>
+            </div>}
+          </div>}
         </section>
 
-        <aside className="ops-panel ops-side-panel">
-          <div className="ops-side-block">
-            <div className="ops-side-head">
-              <strong>Assegnazione bulk</strong>
-              <span>{batchTargetIds.length} selezionate</span>
-            </div>
-
-            <label className="ops-field">
-              <span>Operatore</span>
-              <select
-                value={defaultOperatorUsername}
-                onChange={(event) => setDefaultOperatorUsername(event.target.value)}
-                aria-label="Operatore predefinito"
-              >
-                <option value="">Seleziona operatore</option>
-                {operatorChoices.map((operator) => (
-                  <option key={operator.username} value={operator.username}>
-                    {operator.label} - {formatOperatorLoad(operator)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <button
-              type="button"
-              className="ops-assign-btn secondary"
-              onClick={handleAssignVisibleBatch}
-              disabled={view === "archived" || !selectedDefaultOperator || !batchTargetIds.length || batchAssigning}
-            >
-              {batchAssigning ? "Assegno..." : `Assegna ${batchTargetIds.length} lead`}
-            </button>
-
-            <button
-              type="button"
-              className="ops-assign-btn secondary"
-              onClick={() => setBulkAction(view === "archived" ? "restore" : "archive")}
-              disabled={!batchTargetIds.length || batchAssigning}
-            >
-              {view === "archived" ? `Ripristina ${batchTargetIds.length} lead` : `Archivia ${batchTargetIds.length} lead`}
-            </button>
-
-            <p className="ops-side-note">
-              {selectedDefaultOperator
-                ? `Destinazione corrente: ${selectedDefaultOperator.label}`
-                : "Seleziona prima l'operatore destinatario."}
-            </p>
-          </div>
-
+        {view !== "dated" && <aside className="ops-panel ops-side-panel">
           <div className="ops-side-block">
             <div className="ops-side-head">
               <strong>Carico operatori</strong>
@@ -619,10 +682,22 @@ export function LeadBoardPage() {
               ))}
             </div>
           </div>
-        </aside>
+        </aside>}
       </div>
     </div>
   );
+}
+
+function formatDay(at: number) {
+  if (!at) return "data non disponibile";
+  return new Date(at).toLocaleDateString("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function statusTone(status: string) {
+  const value = normalizeKey(status);
+  if (value === "non risponde") return "wait";
+  if (value === "da contattare") return "info";
+  return "";
 }
 
 function formatOperatorLoad(operator: OperatorOption) {
