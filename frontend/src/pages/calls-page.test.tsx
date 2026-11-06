@@ -61,12 +61,11 @@ function session(role: string) {
 }
 
 describe("CallsPage permissions and API session", () => {
-  for (const role of ["admin", "super_admin"]) it(`${role}: diagnostics visible and legacy tool collapsed`, () => {
+  for (const role of ["admin", "super_admin"]) it(`${role}: diagnostics visible and no legacy tool`, () => {
     session(role);
     const html = render();
     expect(html).toContain("Stato 3CX");
-    expect(html).toContain("Strumento tecnico/admin: test webhook 3CX legacy");
-    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("test webhook");
     expect(html).not.toContain("<textarea");
   });
   for (const role of ["operatore", null]) it(`${role || "no session"}: admin diagnostics and test tool absent`, () => {
@@ -80,14 +79,14 @@ describe("CallsPage permissions and API session", () => {
     session("admin");
     const fetchMock = vi.fn().mockImplementation(async () => new Response("{}", { headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    for (const url of ["/api/calls?limit=250", "/api/3cx/diagnostics"]) await api(url);
+    for (const url of ["/api/calls?limit=1000", "/api/3cx/diagnostics"]) await api(url);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [, options] of fetchMock.mock.calls) expect(options.headers.Authorization).toBe("Bearer fixture-token");
   });
   it("cached admin identity does not keep a rejected token valid; 401 clears both credentials", async () => {
     session("admin");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "Non autorizzato." }), { status: 401, headers: { "Content-Type": "application/json" } })));
-    await expect(api("/api/calls?limit=250")).rejects.toThrow("Non autorizzato.");
+    await expect(api("/api/calls?limit=1000")).rejects.toThrow("Non autorizzato.");
     expect(storage.has("crm.auth.token")).toBe(false);
     expect(storage.has("crm.auth.user")).toBe(false);
   });

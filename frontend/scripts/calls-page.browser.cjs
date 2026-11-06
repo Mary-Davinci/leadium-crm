@@ -103,10 +103,7 @@ async function checkGeometry(page) {
         await panel.getByText('Nessun DN osservato', { exact: true }).waitFor();
         await panel.getByText('Device non ancora osservati', { exact: true }).waitFor();
         assert.ok(diagnosticsRequests.every(request => request.headers().authorization === 'Bearer calls-browser-' + role));
-        await page.getByRole('button', { name: 'Strumento tecnico/admin: test webhook 3CX legacy' }).click();
-        await page.locator('#calls-legacy-webhook textarea').waitFor();
-        await page.getByRole('button', { name: 'Nascondi test tecnico' }).click();
-        assert.equal(await page.locator('#calls-legacy-webhook').count(), 0);
+        assert.equal(await page.getByRole('button', { name: /test webhook/ }).count(), 0);
         // A diagnostic outage must not masquerade as an empty call register or logout.
         await page.route('**/api/3cx/diagnostics', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Stato temporaneamente non disponibile"}' }));
         await panel.getByRole('button', { name: 'Aggiorna stato' }).click();
@@ -117,7 +114,7 @@ async function checkGeometry(page) {
         assert.equal(diagnosticsRequests.length, 0);
       }
       await checkGeometry(page); assert.deepEqual(errors, []);
-      console.log('PASS Calls UI ' + role + ' ' + width + 'px: register, diagnostics permissions, legacy collapsed, usable controls');
+      console.log('PASS Calls UI ' + role + ' ' + width + 'px: register, diagnostics permissions, no legacy tool, usable controls');
       await page.close();
     }
     const page = await browser.newPage();

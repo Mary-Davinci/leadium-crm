@@ -550,13 +550,14 @@
 .ops-bulk-btn:disabled { opacity: .55; cursor: default; }
 .ops-grid-head, .ops-row { grid-template-columns: 28px minmax(0, 1.5fr) minmax(0, 1.4fr) minmax(0, 1fr) 130px 92px; gap: 10px; }
 .ops-grid-head.dated, .ops-row.dated { grid-template-columns: 28px minmax(0, 1.6fr) minmax(0, 1.3fr) 130px 72px 160px 110px 92px; }
-.ops-grid-head { padding: 8px 10px; border-bottom: 1px solid #dbe4f0; color: #566d8a; font-size: 12px; font-weight: 700; text-transform: none; }
+.ops-grid-head { padding: 6px 10px; border-bottom: 1px solid #dbe4f0; color: #566d8a; font-size: 12px; font-weight: 700; text-transform: none; }
 .ops-grid-head span:last-child { justify-self: auto; }
-.ops-row { min-height: 54px; padding: 6px 10px; border-bottom-color: #eef2f7; }
+.ops-row { min-height: 44px; padding: 3px 10px; border-bottom-color: #eef2f7; }
 .ops-row.selected { background: #f3f7fd; }
 .ops-lead-name { display: block; max-width: 100%; border: 0; background: none; padding: 0; color: #20314b; font: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ops-lead-name:hover { color: #225fb6; }
 .ops-row-cell.lead small, .ops-row-cell.contacts small, .ops-row-cell.assignee small { color: #566d8a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-row-cell.lead, .ops-row-cell.contacts, .ops-row-cell.assignee { gap: 0; }
 .ops-row-cell.assignee { justify-self: start; justify-items: start; text-align: left; font-size: 13px; }
 .ops-row-cell.assignee .muted { color: #566d8a; }
 .ops-cell-text { font-size: 13px; }
@@ -564,7 +565,7 @@
 .ops-status { display: inline-block; max-width: 100%; border-radius: 999px; background: #eef2f7; color: #44586f; padding: 3px 9px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .ops-status.wait { background: #fff4dc; color: #7a5200; }
 .ops-status.info { background: #e8f0fb; color: #1b4c93; }
-.ops-row-btn { min-height: 36px; border: 1px solid #d4ddea; border-radius: 999px; background: #ffffff; color: #29415f; padding: 0 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.ops-row-btn { min-height: 32px; border: 1px solid #d4ddea; border-radius: 999px; background: #ffffff; color: #29415f; padding: 0 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .ops-row-btn:hover:not(:disabled) { border-color: #225fb6; color: #225fb6; }
 .ops-list-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-top: 12px; color: #566d8a; font-size: 13px; }
 .ops-list-foot div { display: flex; gap: 6px; }
@@ -580,7 +581,8 @@
   .ops-grid-head { display: flex; gap: 8px; padding: 8px 2px; }
   .ops-grid-head > :not(:first-child) { display: none; }
   .ops-grid-head > :first-child::after { content: "Seleziona pagina"; margin-left: 8px; }
-  .ops-row, .ops-row.dated { grid-template-columns: 24px minmax(0, 1fr); gap: 4px 10px; padding: 10px 2px; }
+  .ops-row, .ops-row.dated { grid-template-columns: 24px minmax(0, 1fr); gap: 4px 10px; padding: 8px 2px; }
+  .ops-row-btn { min-height: 36px; }
   .ops-row > .ops-row-cell:not(.checkbox), .ops-row.dated > :nth-child(5), .ops-row.dated > :nth-child(7) { display: grid; grid-column: 2; }
   .ops-row-cell.checkbox { grid-row: span 8; }
   .ops-cell-label { display: inline; color: #566d8a; font-size: 12px; }
